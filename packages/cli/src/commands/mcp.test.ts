@@ -1,0 +1,70 @@
+import { beforeEach, describe, expect, test } from 'bun:test';
+import { createMockEalClient, type MockEalClient } from '@eal/client-mock';
+import { EAL_TOOLS } from './mcp.ts';
+
+function tool(name: string) {
+  const found = EAL_TOOLS.find((t) => t.name === name);
+  if (!found) throw new Error(`no such tool: ${name}`);
+  return found;
+}
+
+describe('eal mcp tools', () => {
+  let client: MockEalClient;
+
+  beforeEach(() => {
+    client = createMockEalClient();
+    client.setCurrentUser({ userId: 1, displayName: 'alex' });
+  });
+
+  test('the tool set is non-destructive — there is no delete tool', () => {
+    const names = EAL_TOOLS.map((t) => t.name).sort();
+    expect(names).toEqual([
+      'complete_task',
+      'create_task',
+      'get_task',
+      'list_tasks',
+      'reopen_task',
+      'update_task',
+    ]);
+    expect(names.some((n) => n.includes('delete') || n.includes('remove'))).toBe(false);
+  });
+
+  test('create_task creates a task and reports it', async () => {
+    const result = await tool('create_task').run(client, { title: 'Buy milk', notes: 'oat' });
+    expect(result).toContain('Created');
+    expect(result).toContain('Buy milk');
+    expect(client.peekTasks().map((t) => t.title)).toEqual(['Buy milk']);
+  });
+
+  test('create_task without a title is a clear error', async () => {
+    await expect(tool('create_task').run(client, {})).rejects.toThrow(/title is required/);
+  });
+
+  test('list_tasks renders matching tasks and a friendly empty message', async () => {
+    expect(await tool('list_tasks').run(client, {})).toBe('No tasks match.');
+    await client.createTask({ title: 'Walk Leo to school' });
+    const listed = await tool('list_tasks').run(client, {});
+    expect(listed).toContain('Walk Leo to school');
+    expect(listed).toContain('[open]');
+  });
+
+  test('complete_task then reopen_task flips status both ways', async () => {
+    const created = await client.createTask({ title: 'Call plumber' });
+    expect(await tool('complete_task').run(client, { id: created.id })).toContain('Completed');
+    expect(client.peekTasks()[0]?.status).toBe('done');
+    expect(await tool('reopen_task').run(client, { id: created.id })).toContain('Reopened');
+    expect(client.peekTasks()[0]?.status).toBe('open');
+  });
+
+  test('update_task changes the title', async () => {
+    const created = await client.createTask({ title: 'old' });
+    const result = await tool('update_task').run(client, { id: created.id, title: 'new' });
+    expect(result).toContain('new');
+    expect(client.peekTasks()[0]?.title).toBe('new');
+  });
+
+  test('numeric-id tools reject a missing id', async () => {
+    await expect(tool('complete_task').run(client, {})).rejects.toThrow(/id must be a number/);
+    await expect(tool('get_task').run(client, { id: 'seven' })).rejects.toThrow(/id must be a number/);
+  });
+});

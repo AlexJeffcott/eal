@@ -1,0 +1,28 @@
+{
+  "name": "eal",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "scripts": {
+    "devctl": "bun packages/devctl/index.ts"
+  },
+  "devDependencies": {
+    "@eal/shared": "workspace:*",
+    "@stryker-mutator/core": "^9.6.1",
+    "@types/bun": "1.3.13",
+    "fast-check": "^4.8.0",
+    "puppeteer": "^25.0.4",
+    "typescript": "6.0.3"
+  },
+  "catalog": {
+    "typescript": "6.0.3",
+    "@types/bun": "1.3.13"
+  },
+  "dependencies": {
+    "@fairfox/polly": "0.73.1"
+  }
+}

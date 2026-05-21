@@ -1,0 +1,10 @@
+{
+  "name": "@eal/devctl",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "start": "bun index.ts"
+  }
+}

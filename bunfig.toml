@@ -1,0 +1,18 @@
+# Bun runtime configuration
+# https://bun.sh/docs/runtime/bunfig
+
+[test]
+# Bun's built-in coverage gate is bypassed (threshold 0) because it has no way
+# to exempt individual files. `scripts/enforce-coverage.ts` reads the coverage
+# table and applies per-file rules from `scripts/coverage.config.ts` instead —
+# default 80% with explicit, audited allowlist entries.
+coverageThreshold = 0
+
+[install]
+cache = "node_modules/.cache/bun"
+registry = "https://registry.npmjs.org"
+lockfile = true
+
+[loader]
+".sql" = "text"
+".css" = "css"

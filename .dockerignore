@@ -1,0 +1,15 @@
+node_modules
+**/node_modules
+dist
+**/dist
+data
+packages/api/certs
+**/certs
+scripts/artifacts
+specs/tla/generated
+docs/site
+.git
+.env
+.env.local
+*.swp
+**/.DS_Store

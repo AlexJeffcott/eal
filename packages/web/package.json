@@ -1,0 +1,18 @@
+{
+  "name": "@eal/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/main.tsx",
+  "dependencies": {
+    "@eal/client": "workspace:*",
+    "@fairfox/polly": "0.73.1",
+    "@simplewebauthn/browser": "11.0.0",
+    "fuse.js": "7.3.0",
+    "preact": "10.29.1"
+  },
+  "devDependencies": {
+    "@eal/client-mock": "workspace:*",
+    "@eal/shared": "workspace:*"
+  }
+}

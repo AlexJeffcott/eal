@@ -1,0 +1,94 @@
+/*
+ * Shell layout — the always-overlay app frame.
+ *
+ * The content region is the only persistent column; the nav and the assistant
+ * are Modal overlays (a left drawer, a right sheet) reachable from a sticky top
+ * bar at every screen width, 350px included. These classes override the polly
+ * Modal surface, which centres by default — unlayered, so they win over the
+ * `@layer polly-components` Modal rules without `!important`.
+ */
+
+.shell-topbar {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 10;
+}
+
+/*
+ * Open animation — a small slide from the anchored edge so the overlays don't
+ * snap in, plus a gentle backdrop fade. Open-only: the polly Modal unmounts on
+ * close, so there is no exit frame to animate. Durations use the polly motion
+ * tokens, which polly zeroes under `prefers-reduced-motion` — so this
+ * self-disables there. The backdrop fades over `--polly-motion-base` (200ms),
+ * slower than the 120ms panel slide, so the dim clearly reads as a fade rather
+ * than a snap.
+ */
+@keyframes shell-slide-from-start {
+  from {
+    transform: translateX(-100%);
+  }
+}
+@keyframes shell-slide-from-end {
+  from {
+    transform: translateX(100%);
+  }
+}
+@keyframes shell-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+[data-polly-modal-backdrop] {
+  animation: shell-fade-in var(--polly-motion-base) ease-out;
+}
+
+/* Nav drawer — pinned to the inline-start edge, full height. At 350px the
+ * 85vw cap keeps a sliver of backdrop visible so the overlay reads as one. */
+.shell-drawer {
+  justify-self: start;
+  align-self: stretch;
+  inline-size: min(20rem, 85vw);
+  max-inline-size: 85vw;
+  block-size: 100%;
+  max-block-size: 100%;
+  animation: shell-slide-from-start var(--polly-motion-fast) ease-out;
+}
+
+/* Assistant sheet — pinned to the inline-end edge, full height. At 350px the
+ * 100vw cap lets it take the whole screen, like a messaging app. `overflow:
+ * hidden` hands scrolling to the transcript inside. */
+.shell-sheet {
+  justify-self: end;
+  align-self: stretch;
+  inline-size: min(32rem, 100vw);
+  max-inline-size: 100vw;
+  block-size: 100%;
+  max-block-size: 100%;
+  overflow: hidden;
+  animation: shell-slide-from-end var(--polly-motion-fast) ease-out;
+}
+
+/*
+ * The few visual rules with no polly primitive to express them. Muted/sized
+ * text → <Text>, wrapping rows → <Cluster>, inline code → <Code>; what's left
+ * here is a pre-wrap span and a cursor hint on a data-action element.
+ */
+.eal-prewrap {
+  white-space: pre-wrap;
+}
+.eal-clickable {
+  cursor: pointer;
+}
+
+/* The "live updates offline" callout recolours its border to the danger tone. */
+.shell-callout-danger {
+  --polly-border: var(--polly-status-danger-text);
+}
+
+/* The assistant transcript scrolls within the sheet; the sheet itself doesn't. */
+.shell-chat-transcript {
+  overflow-y: auto;
+  min-block-size: 0;
+  padding: 0 var(--polly-space-lg);
+}

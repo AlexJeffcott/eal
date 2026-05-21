@@ -1,0 +1,17 @@
+# Production Litestream config — replicates the SQLite DB to S3-compatible
+# object storage. Fly's Tigris is the natural fit, but the config is plain S3
+# so any compatible store works; you pick by what you point the env vars at.
+#
+# Every value is `${VAR}` — Litestream substitutes from the environment, so
+# this file carries no secrets and no provider lock-in. fly.toml and Fly's
+# secret store supply the values. See docs/deploy.md for the full list.
+dbs:
+  - path: ${DATABASE_PATH}
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_BUCKET}
+        path: ${LITESTREAM_PATH}
+        endpoint: ${LITESTREAM_ENDPOINT}
+        region: ${LITESTREAM_REGION}
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}

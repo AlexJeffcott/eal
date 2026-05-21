@@ -1,0 +1,38 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "packageManager": "npm",
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "SKIP_TLS=1 bun test --path-ignore-patterns='**/e2e-tests/**' --path-ignore-patterns='**/tests/browser/**'"
+  },
+  "coverageAnalysis": "off",
+  "checkers": [],
+  "reporters": ["clear-text", "progress"],
+  "mutate": [
+    "packages/api/src/auth/policy.ts",
+    "packages/api/src/auth/datetime.ts",
+    "packages/api/src/auth/hash.ts",
+    "packages/api/src/auth/sessions.ts",
+    "packages/api/src/auth/principals.ts",
+    "packages/api/src/auth/challenges.ts",
+    "packages/api/src/auth/webauthn.ts",
+    "packages/api/src/db/client.ts",
+    "packages/api/src/db/schema.ts",
+    "packages/api/src/db/repos/users.ts",
+    "packages/api/src/db/repos/credentials.ts",
+    "packages/api/src/db/repos/sessions.ts"
+  ],
+  "thresholds": {
+    "high": 90,
+    "low": 70,
+    "break": 70
+  },
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.git/**",
+    "**/.stryker-tmp/**"
+  ],
+  "timeoutMS": 30000,
+  "concurrency": 2
+}

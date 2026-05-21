@@ -1,0 +1,22 @@
+{
+  "name": "@eal/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "eal": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun src/index.ts"
+  },
+  "dependencies": {
+    "@eal/client": "workspace:*",
+    "@eal/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eal/client-mock": "workspace:*"
+  }
+}

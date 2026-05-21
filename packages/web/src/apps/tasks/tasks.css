@@ -1,0 +1,18 @@
+/*
+ * Tasks app styles — the few visual rules with no polly primitive. Form
+ * controls are ActionInput/ActionSelect, muted text is <Text>, wrapping rows
+ * are <Cluster>; what's left is row spacing and the task-title decoration.
+ */
+
+/* The inline detail editor sits just below its task row. */
+.tasks-detail {
+  margin-block-start: var(--polly-space-sm);
+}
+
+/* A task title — long unbroken titles wrap rather than overflow at 350px. */
+.tasks-title {
+  overflow-wrap: anywhere;
+}
+.tasks-title--done {
+  text-decoration: line-through;
+}

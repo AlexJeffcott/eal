@@ -1,0 +1,39 @@
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+**/.DS_Store
+
+# Local TLS certs (mkcert / openssl generated)
+packages/api/certs/
+**/certs/
+
+# Multi-process test artefacts
+scripts/artifacts/
+
+# Polly verify / visualize output
+specs/tla/generated/
+docs/architecture.dsl
+docs/site/
+
+# Bun
+.bun/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Stryker mutation testing
+.stryker-tmp/
+
+# Env
+.env
+.env.local
+
+# Local SQLite database + Litestream replica
+data/

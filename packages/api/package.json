@@ -1,0 +1,16 @@
+{
+  "name": "@eal/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/server.ts",
+  "scripts": {
+    "start": "bun src/server.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "11.0.0",
+    "@simplewebauthn/types": "11.0.0",
+    "elysia": "1.4.28"
+  }
+}

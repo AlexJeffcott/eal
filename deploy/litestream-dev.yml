@@ -1,0 +1,11 @@
+# Local-mirror Litestream config — replicates to a directory under ./data
+# instead of S3. Used by `devctl dev --litestream` and the restore test.
+#
+# This is what makes the local setup a true mirror of production: the entrypoint
+# (deploy/entrypoint.sh) runs the identical restore-then-replicate sequence;
+# only the replica TYPE differs — a local file tree here, S3 in production.
+dbs:
+  - path: ${DATABASE_PATH}
+    replicas:
+      - type: file
+        path: ${LITESTREAM_DEV_REPLICA_PATH}
