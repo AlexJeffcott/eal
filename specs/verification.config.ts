@@ -46,6 +46,10 @@ export default defineVerification({
       type: 'enum',
       values: ['undecided', 'public', 'appOwned', 'principalRequired', 'handled', 'rejected'],
     },
+    'pairing.state': {
+      type: 'enum',
+      values: ['nonexistent', 'pending', 'consumed', 'expired'],
+    },
   },
   messages: {
     maxInFlight: 1,
