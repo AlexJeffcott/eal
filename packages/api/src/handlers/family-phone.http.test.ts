@@ -1,0 +1,107 @@
+import { beforeEach, describe, expect, test } from 'bun:test';
+import { createDb, type DatabaseClient } from '../db/client.ts';
+import { applySchema } from '../db/schema.ts';
+import { createUsersRepo } from '../db/repos/users.ts';
+import { createTestApp } from '../test-helpers/create-test-app.ts';
+import type { Principal } from '../auth/principals.ts';
+
+interface DeviceRow {
+  id: number;
+  user_id: number;
+  label: string;
+  kind: 'handset' | 'pwa' | 'agent';
+  created_at: string;
+}
+
+interface DevicesResponse {
+  devices: DeviceRow[];
+}
+
+function isDeviceRow(value: unknown): value is DeviceRow {
+  if (typeof value !== 'object' || value === null) return false;
+  if (!('id' in value && 'user_id' in value && 'label' in value && 'kind' in value && 'created_at' in value)) {
+    return false;
+  }
+  return (
+    typeof value.id === 'number' &&
+    typeof value.user_id === 'number' &&
+    typeof value.label === 'string' &&
+    (value.kind === 'handset' || value.kind === 'pwa' || value.kind === 'agent') &&
+    typeof value.created_at === 'string'
+  );
+}
+
+function isDevicesResponse(body: unknown): body is DevicesResponse {
+  if (typeof body !== 'object' || body === null || !('devices' in body)) return false;
+  if (!Array.isArray(body.devices)) return false;
+  return body.devices.every(isDeviceRow);
+}
+
+async function fetchJson(
+  app: Awaited<ReturnType<typeof createTestApp>>,
+  method: string,
+  path: string,
+): Promise<{ status: number; body: unknown }> {
+  const res = await app.handle(new Request(`https://localhost:3000${path}`, { method }));
+  const text = await res.text();
+  let body: unknown = text;
+  try {
+    body = text.length === 0 ? null : JSON.parse(text);
+  } catch {
+    /* keep text */
+  }
+  return { status: res.status, body };
+}
+
+describe('family-phone http wire contract', () => {
+  let db: DatabaseClient;
+  let alex: Principal;
+
+  beforeEach(() => {
+    db = createDb(':memory:');
+    applySchema(db);
+    const u = createUsersRepo(db).insert({ displayName: 'alex' });
+    alex = { userId: u.id, displayName: u.display_name };
+  });
+
+  test('GET /api/family-phone/devices: returns the caller\'s devices only', async () => {
+    const elisa = createUsersRepo(db).insert({ displayName: 'elisa' });
+    db.prepare(
+      "INSERT INTO family_phone_devices (user_id, label, kind) VALUES (?, ?, ?)",
+    ).run(alex.userId, "Alex's handset", 'handset');
+    db.prepare(
+      "INSERT INTO family_phone_devices (user_id, label, kind) VALUES (?, ?, ?)",
+    ).run(alex.userId, "Alex's laptop PWA", 'pwa');
+    db.prepare(
+      "INSERT INTO family_phone_devices (user_id, label, kind) VALUES (?, ?, ?)",
+    ).run(elisa.id, "Elisa's handset", 'handset');
+
+    const app = await createTestApp(db, { principalOverride: alex });
+    const res = await fetchJson(app, 'GET', '/api/family-phone/devices');
+
+    expect(res.status).toBe(200);
+    expect(isDevicesResponse(res.body)).toBe(true);
+    if (!isDevicesResponse(res.body)) throw new Error('unreachable');
+    expect(res.body.devices.length).toBe(2);
+    expect(res.body.devices.map((d) => d.label).sort()).toEqual([
+      "Alex's handset",
+      "Alex's laptop PWA",
+    ]);
+  });
+
+  test('GET /api/family-phone/devices: 401 when unauthenticated', async () => {
+    const app = await createTestApp(db, { principalOverride: null });
+    const res = await fetchJson(app, 'GET', '/api/family-phone/devices');
+    expect(res.status).toBe(401);
+  });
+
+  test('family_phone_devices.kind rejects values outside the enum', () => {
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO family_phone_devices (user_id, label, kind) VALUES (?, ?, ?)",
+        )
+        .run(alex.userId, 'bad', 'tablet'),
+    ).toThrow();
+  });
+});
