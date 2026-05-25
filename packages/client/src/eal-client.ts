@@ -25,6 +25,13 @@ import type {
   ChatBrowserEvent,
   Message,
 } from './chat-types.ts';
+import type {
+  FamilyPhoneDevice,
+  FamilyPhonePairCompleteInput,
+  FamilyPhonePairCompleteResult,
+  FamilyPhonePairStartInput,
+  FamilyPhonePairStartResult,
+} from './family-phone-types.ts';
 
 const TOKEN_STORAGE_KEY = 'eal-token';
 
@@ -184,6 +191,16 @@ export interface EalClient {
   cloneTask(id: number): Promise<CloneTaskResult>;
   /** Fires for task:created, task:updated, task:deleted, task:tree-cloned. */
   subscribeTaskEvents(handler: (event: TaskEvent) => void): () => void;
+
+  // ── Family-phone ─────────────────────────────────────────────────────────
+  /** The signed-in user's family-phone devices. */
+  listFamilyPhoneDevices(): Promise<FamilyPhoneDevice[]>;
+  /** Trusted-device side of the pair flow — mints a short code to read aloud. */
+  startFamilyPhonePair(input: FamilyPhonePairStartInput): Promise<FamilyPhonePairStartResult>;
+  /** New-device side — submits the spoken code and its freshly-generated public key. */
+  completeFamilyPhonePair(
+    input: FamilyPhonePairCompleteInput,
+  ): Promise<FamilyPhonePairCompleteResult>;
 
   // ── Chat (browser side) ──────────────────────────────────────────────────
   /** Load the signed-in user's current assistant conversation, oldest first. */
@@ -590,6 +607,51 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
     subscribeTaskEvents(handler: (event: TaskEvent) => void): () => void {
       taskEventSubscribers.add(handler);
       return () => taskEventSubscribers.delete(handler);
+    },
+
+    async listFamilyPhoneDevices(): Promise<FamilyPhoneDevice[]> {
+      interface WireRow {
+        id: number;
+        user_id: number;
+        label: string;
+        kind: 'handset' | 'pwa' | 'agent';
+        created_at: string;
+        paired_at: string | null;
+      }
+      const { devices } = await getJsonOrThrow<{ devices: WireRow[] }>(
+        '/api/family-phone/devices',
+      );
+      return devices.map((d) => ({
+        id: d.id,
+        label: d.label,
+        kind: d.kind,
+        createdAt: d.created_at,
+        pairedAt: d.paired_at,
+      }));
+    },
+
+    async startFamilyPhonePair(
+      input: FamilyPhonePairStartInput,
+    ): Promise<FamilyPhonePairStartResult> {
+      const wire = await postJson<{ user_code: string; expires_at: string }>(
+        '/api/family-phone/pair/start',
+        { label: input.label, kind: input.kind },
+      );
+      return { userCode: wire.user_code, expiresAt: wire.expires_at };
+    },
+
+    async completeFamilyPhonePair(
+      input: FamilyPhonePairCompleteInput,
+    ): Promise<FamilyPhonePairCompleteResult> {
+      const wire = await postJson<{ device_id: number }>(
+        '/api/family-phone/pair/complete',
+        {
+          user_code: input.userCode,
+          public_key: input.publicKey,
+          alg: input.alg,
+        },
+      );
+      return { deviceId: wire.device_id };
     },
   };
 }

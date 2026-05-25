@@ -1,6 +1,7 @@
 import type { FunctionComponent } from 'preact';
 import { TasksPanel } from './tasks/tasks-panel.tsx';
 import { ShowcasePanel } from './showcase/showcase-panel.tsx';
+import { FamilyPhonePanel } from './family-phone/family-phone-panel.tsx';
 
 /**
  * A web app — a feature mounted into the shell at its own path. The shell
@@ -44,6 +45,14 @@ export const WEB_APPS: readonly WebApp[] = [
     description: 'Every polly UI component and its configuration options — a reference catalogue.',
     access: 'public',
     root: ShowcasePanel,
+  },
+  {
+    id: 'family-phone',
+    path: '/family-phone',
+    label: 'Family phone',
+    description: 'Pair handsets and PWAs into the household comms system; place voice calls.',
+    access: 'authed',
+    root: FamilyPhonePanel,
   },
 ];
 

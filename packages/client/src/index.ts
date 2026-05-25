@@ -23,3 +23,11 @@ export type {
   ChatSendFrame,
   Message,
 } from './chat-types.ts';
+export type {
+  FamilyPhoneDevice,
+  FamilyPhoneDeviceKind,
+  FamilyPhonePairCompleteInput,
+  FamilyPhonePairCompleteResult,
+  FamilyPhonePairStartInput,
+  FamilyPhonePairStartResult,
+} from './family-phone-types.ts';

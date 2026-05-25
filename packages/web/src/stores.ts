@@ -5,6 +5,11 @@ import {
   resetTasksStores,
   type TasksStores,
 } from './apps/tasks/stores.ts';
+import {
+  createFamilyPhoneStores,
+  resetFamilyPhoneStores,
+  type FamilyPhoneStores,
+} from './apps/family-phone/stores.ts';
 
 /**
  * The composed store bundle handed to every action handler — the shell's
@@ -12,7 +17,7 @@ import {
  * at the composition root, because it spans the shell and the apps; the signals
  * themselves are owned by `shell/stores.ts` and each app's `stores.ts`.
  */
-export interface AppStores extends ShellStores, TasksStores {
+export interface AppStores extends ShellStores, TasksStores, FamilyPhoneStores {
   client: EalClient;
 }
 
@@ -21,6 +26,7 @@ export function createStores(client: EalClient): AppStores {
     client,
     ...createShellStores(),
     ...createTasksStores(),
+    ...createFamilyPhoneStores(),
   };
 }
 
@@ -28,4 +34,5 @@ export function createStores(client: EalClient): AppStores {
 export function resetStoresForTest(): void {
   resetShellStores();
   resetTasksStores();
+  resetFamilyPhoneStores();
 }

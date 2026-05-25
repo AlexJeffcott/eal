@@ -26,6 +26,7 @@ import '@fairfox/polly/ui/components.css';
 import './shell/shell.css';
 import './apps/tasks/tasks.css';
 import './apps/showcase/showcase.css';
+import './apps/family-phone/family-phone.css';
 
 /**
  * Apply a server-canonical task event to the local store. Used for both:
@@ -137,6 +138,11 @@ async function seedSessionData(stores: AppStores): Promise<void> {
     stores.$householdUsers.value = await stores.client.listUsers();
   } catch {
     stores.$householdUsers.value = [];
+  }
+  try {
+    stores.$familyPhoneDevices.value = await stores.client.listFamilyPhoneDevices();
+  } catch (err) {
+    stores.$familyPhoneError.value = err instanceof Error ? err.message : String(err);
   }
 }
 

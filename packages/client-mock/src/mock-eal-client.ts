@@ -241,6 +241,25 @@ export function createMockEalClient(): MockEalClient {
       return { ok: true };
     },
 
+    async listFamilyPhoneDevices() {
+      requireSignedIn();
+      return [];
+    },
+
+    async startFamilyPhonePair(input) {
+      requireSignedIn();
+      if (input.label.trim().length === 0) throw new Error('label is required');
+      return {
+        userCode: 'TST-001',
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      };
+    },
+
+    async completeFamilyPhonePair(input) {
+      if (input.publicKey.length === 0) throw new Error('public_key is required');
+      return { deviceId: 1 };
+    },
+
     async createTask(input): Promise<Task> {
       consumeTaskError();
       const user = requireSignedIn();
