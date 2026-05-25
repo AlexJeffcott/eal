@@ -1,13 +1,14 @@
 import { defineVerification } from '@fairfox/polly/verify';
 
 /**
- * Polly verify spec — four state machines modelled, each in its own shadow
+ * Polly verify spec — five state machines modelled, each in its own shadow
  * module under `packages/api/src/specs/`:
  *
  *   auth-machine.ts          → `auth.phase`           anonymous ↔ authenticating ↔ authenticated
  *   ws-machine.ts            → `ws.state`             idle → connecting → connected | error → idle
  *   sessions-machine.ts      → `sessions.outstanding` bounded counter 0..2
  *   tasks-status-machine.ts  → `taskStatus.status`    open → done → open; either → deleted → open
+ *   auth-gate-machine.ts     → `authGate.state`       undecided → {public, appOwned, principalRequired} → {handled, rejected}
  *
  * Each shadow module declares its `$sharedState` and annotates every
  * transition with `requires`/`ensures`. TLC explores only the transitions
@@ -24,6 +25,9 @@ import { defineVerification } from '@fairfox/polly/verify';
  *   - revokeAllSessions deterministically zeros the counter
  *   - complete is only valid from open; reopen is only valid from done
  *   - restore always lands in open (predictable resurrection)
+ *   - the auth gate's `handled` state is reachable only after a classification
+ *     (public, appOwned, or principalRequired+principalPresent) — no request
+ *     passes through without one of the three checks
  *
  * Not modelled (deliberate): cross-machine coupling like "WS connect requires
  * auth.phase=authenticated". The runtime enforces it; the model treats the
@@ -38,6 +42,10 @@ export default defineVerification({
     'ws.state': { type: 'enum', values: ['idle', 'connecting', 'connected', 'error'] },
     'sessions.outstanding': { type: 'number', min: 0, max: 2 },
     'taskStatus.status': { type: 'enum', values: ['open', 'done', 'deleted'] },
+    'authGate.state': {
+      type: 'enum',
+      values: ['undecided', 'public', 'appOwned', 'principalRequired', 'handled', 'rejected'],
+    },
   },
   messages: {
     maxInFlight: 1,

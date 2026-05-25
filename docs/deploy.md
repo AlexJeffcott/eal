@@ -64,6 +64,24 @@ bun devctl dev --litestream            # run the prod entrypoint against a local
 bun scripts/e2e-litestream-restore.ts  # prove restore-on-cold-start end-to-end
 ```
 
+## Push-time gates
+
+The `pre-push` hook (installed by `bun devctl install-hooks`) runs the full
+sweep before every push:
+
+```
+[pre-push] devctl check        # tsc + lint scripts
+[pre-push] devctl test all     # unit, browser, e2e, multi
+[pre-push] devctl verify       # polly TLC model-checking (requires Docker)
+```
+
+`devctl verify` needs Docker Desktop running — TLC is invoked through a
+container under the hood. If Docker is not running the push fails with a
+clear message; start Docker and retry. The verify step covers the shadow
+state machines under `packages/api/src/specs/` (auth, ws, sessions,
+task-status, auth-gate); a spec failure is the first signal that a refactor
+broke the invariants the model encodes.
+
 ## Bumping Litestream
 
 The Litestream version in `deploy/Dockerfile` **must match** the version used

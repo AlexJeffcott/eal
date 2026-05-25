@@ -1,16 +1,74 @@
 import type { AnyElysia } from 'elysia';
 import type { DatabaseClient } from '../db/client.ts';
-import type { GetPrincipalFn } from '../auth/principals.ts';
+import type { GetPrincipalFn, Principal } from '../auth/principals.ts';
 import type { TaskEvent } from '../handlers/tasks.http.ts';
 
 /**
+ * The minimum WebSocket surface apps need. Matches Elysia's per-callback ws
+ * object: `id` is a stable string key (object identity is lost between
+ * callbacks because Elysia wraps the raw socket each time), `send` accepts
+ * text or binary frames.
+ */
+export interface WsLike {
+  readonly id: string;
+  send: (data: string | Uint8Array) => unknown;
+}
+
+/**
+ * Connection-registry services exposed to apps so they can address peers,
+ * subscribe to topics, and broadcast without reinventing the wheel. The
+ * implementation is owned by server-factory (which holds the maps); apps
+ * consume this interface via `ApiAppContext.ws`.
+ */
+export interface WsService {
+  /** Send a JSON-serialised payload to a specific connection by wsId. */
+  sendTo(wsId: string, payload: unknown): void;
+  /** Send a binary frame to a specific connection by wsId. */
+  sendBinaryTo(wsId: string, frame: Uint8Array): void;
+  /** Attach this connection to a topic for fan-out broadcasts. */
+  subscribe(ws: WsLike, topic: string): void;
+  /** Detach this connection from a topic. */
+  unsubscribe(ws: WsLike, topic: string): void;
+  /** Send a JSON-serialised payload to every connection on a topic. */
+  broadcast(topic: string, payload: unknown): void;
+  /** Iterate every currently-connected authenticated principal. */
+  connectedPrincipals(): Iterable<{ wsId: string; principal: Principal }>;
+}
+
+/**
+ * What an app's WebSocket handler is built against. A subset of `ApiAppContext`
+ * scoped to what makes sense in the WS hot path — no broadcastTask, no
+ * getPrincipal (the principal is resolved by core's auth handshake and passed
+ * to every callback explicitly).
+ */
+export interface WsAppContext {
+  db: DatabaseClient;
+  ws: WsService;
+}
+
+/**
+ * Per-app WebSocket message handler. Returned by `ApiApp.ws.handler` once,
+ * at server start. Server-factory dispatches incoming text messages whose
+ * `type` field begins with the app's `prefix:` to `onMessage`, and binary
+ * frames whose leading byte equals the app's `binaryTag` to `onBinary`.
+ */
+export interface WsMessageHandler {
+  onMessage(ws: WsLike, msg: unknown, principal: Principal): void;
+  onBinary?(ws: WsLike, frame: Uint8Array, principal: Principal): void;
+  /** Optional cleanup when a connection holding this app's state closes. */
+  onClose?(ws: WsLike): void;
+}
+
+/**
  * What an API app's routes are built against. Supplied by server-factory,
- * which owns the db handle, the principal resolver, and the WS broadcaster.
+ * which owns the db handle, the principal resolver, the WS broadcaster for
+ * the legacy task topic, and the WsService for peer addressing.
  */
 export interface ApiAppContext {
   db: DatabaseClient;
   getPrincipal: GetPrincipalFn;
   broadcastTask: (event: TaskEvent) => void;
+  ws: WsService;
 }
 
 /**
@@ -23,4 +81,25 @@ export interface ApiApp {
   /** This app's own tables/indexes, appended after the global schema. */
   schema: string;
   routes: (ctx: ApiAppContext) => AnyElysia;
+  /**
+   * Optional opt-out from the global user-principal gate. When this predicate
+   * returns true for an incoming (method, pathname), server-factory skips the
+   * default 401 carve-out and trusts the app's own handler to enforce
+   * authentication. Claim the narrowest possible prefix; the app's own tests
+   * are responsible for proving unauthenticated requests receive a 401 from
+   * its handler.
+   */
+  ownsAuthFor?: (method: string, pathname: string) => boolean;
+  /**
+   * Optional WebSocket message handler. The app claims text messages whose
+   * `type` field begins with `<prefix>:` and (if `binaryTag` is set) binary
+   * frames whose leading byte equals the tag. Connection lifecycle, auth, and
+   * generic subscribe/unsubscribe stay in core. Binary tags `0x00`–`0x0F` are
+   * reserved for core; apps pick from `0x10`–`0xFF`.
+   */
+  ws?: {
+    prefix: string;
+    binaryTag?: number;
+    handler: (ctx: WsAppContext) => WsMessageHandler;
+  };
 }

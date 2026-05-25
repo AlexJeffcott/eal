@@ -3,6 +3,7 @@ import type { DatabaseClient } from '../db/client.ts';
 import { getPrincipal, type GetPrincipalFn, type Principal } from '../auth/principals.ts';
 import { createAppInternal } from '../server-factory.ts';
 import type { RpConfig } from '../auth/webauthn.ts';
+import type { ApiApp } from '../apps/types.ts';
 
 /**
  * Fixed RP for the test tier. Production derives the RP origin from the
@@ -30,6 +31,12 @@ interface CreateTestAppOptions {
    * test specifically needs to serve `/public/*` HTML.
    */
   skipSpaBuild?: boolean;
+  /**
+   * Override the installed apps. Defaults to the production `API_APPS`. Pass
+   * a custom array to exercise the apps surface (ownsAuthFor, route
+   * composition) in isolation from the production registry.
+   */
+  apps?: readonly ApiApp[];
 }
 
 function resolveGetPrincipal(
@@ -66,5 +73,6 @@ export function createTestApp(db: DatabaseClient, options: CreateTestAppOptions 
   return createAppInternal(db, resolveGetPrincipal(db, options.principalOverride), {
     rp: TEST_RP,
     ...(noopSpa ? { spa: noopSpa } : {}),
+    ...(options.apps ? { apps: options.apps } : {}),
   });
 }

@@ -10,7 +10,14 @@ import type { TaskEvent } from './handlers/tasks.http.ts';
 import { messagesHttpRoutes } from './handlers/messages.http.ts';
 import { usersHttpRoutes } from './handlers/users.http.ts';
 import { API_APPS } from './apps/registry.ts';
-import type { ApiAppContext } from './apps/types.ts';
+import type {
+  ApiApp,
+  ApiAppContext,
+  WsAppContext,
+  WsLike,
+  WsMessageHandler,
+  WsService,
+} from './apps/types.ts';
 import {
   getClaudeSessionCore,
   listRecentConversationCore,
@@ -41,11 +48,6 @@ function defaultRp(): RpConfig {
     throw new Error(`EAL_API: EAL_ORIGIN="${origin}" is not a valid URL.`);
   }
   return { rpID, rpName: 'eal', origin };
-}
-
-interface WsLike {
-  send: (data: string) => unknown;
-  readonly id: string;
 }
 
 type ServerEvent = TaskEvent;
@@ -82,6 +84,13 @@ export interface AppInternalOptions {
    * exposes `/public/*` paths via the rest of the auth/handlers tree.
    */
   spa?: Elysia;
+  /**
+   * Optional override of the installed app registry. Production uses
+   * `API_APPS` from `apps/registry.ts`; tests pass a custom array to exercise
+   * the apps surface (ownsAuthFor, route composition, WS dispatch) in
+   * isolation.
+   */
+  apps?: readonly ApiApp[];
 }
 
 /**
@@ -166,6 +175,9 @@ export async function createAppInternal(
         }
       }
     }
+    for (const handler of appWsHandlers.values()) {
+      handler.onClose?.(ws);
+    }
   }
 
   const auth = authHttpRoutes({ db, rp });
@@ -174,13 +186,80 @@ export async function createAppInternal(
 
   // App routes are composed from the registry; global concerns (auth, users,
   // the chat relay) are mounted directly — they are not apps.
-  const apiCtx: ApiAppContext = { db, getPrincipal: getPrincipalFn, broadcastTask };
+  const apps = options.apps ?? API_APPS;
+
+  // The WsService exposes the connection-registry to apps without leaking
+  // the underlying Maps. Implementation reuses the same maps used internally.
+  const wsService: WsService = {
+    sendTo(wsId, payload) {
+      const target = connections.get(wsId);
+      if (target) target.send(JSON.stringify(payload));
+    },
+    sendBinaryTo(wsId, frame) {
+      const target = connections.get(wsId);
+      if (target) target.send(frame);
+    },
+    subscribe(ws, topic) {
+      subscribe(ws, topic);
+    },
+    unsubscribe(ws, topic) {
+      unsubscribe(ws, topic);
+    },
+    broadcast(topic, payload) {
+      const targets = subscribers.get(topic);
+      if (!targets) return;
+      const message = JSON.stringify(payload);
+      for (const ws of targets.values()) ws.send(message);
+    },
+    *connectedPrincipals() {
+      for (const [wsId, principal] of wsPrincipals) {
+        yield { wsId, principal };
+      }
+    },
+  };
+
+  // Per-app WS handlers, instantiated once at boot. The prefix and binaryTag
+  // maps drive runtime dispatch in the message callback below. Duplicate
+  // claims fail fast at boot rather than dropping messages silently.
+  const appWsHandlers = new Map<string, WsMessageHandler>();
+  const prefixToApp = new Map<string, string>();
+  const binaryTagToApp = new Map<number, string>();
+  for (const app of apps) {
+    if (!app.ws) continue;
+    if (prefixToApp.has(app.ws.prefix)) {
+      throw new Error(
+        `server-factory: WS prefix '${app.ws.prefix}' claimed by both ` +
+          `'${prefixToApp.get(app.ws.prefix)}' and '${app.id}'`,
+      );
+    }
+    if (app.ws.binaryTag !== undefined) {
+      if (app.ws.binaryTag < 0x10 || app.ws.binaryTag > 0xff) {
+        throw new Error(
+          `server-factory: app '${app.id}' binaryTag ${app.ws.binaryTag} ` +
+            `outside the app range 0x10-0xFF (0x00-0x0F reserved for core)`,
+        );
+      }
+      if (binaryTagToApp.has(app.ws.binaryTag)) {
+        throw new Error(
+          `server-factory: WS binary tag 0x${app.ws.binaryTag.toString(16)} ` +
+            `claimed by both '${binaryTagToApp.get(app.ws.binaryTag)}' and '${app.id}'`,
+        );
+      }
+      binaryTagToApp.set(app.ws.binaryTag, app.id);
+    }
+    prefixToApp.set(app.ws.prefix, app.id);
+    const wsCtx: WsAppContext = { db, ws: wsService };
+    appWsHandlers.set(app.id, app.ws.handler(wsCtx));
+  }
+
+  const apiCtx: ApiAppContext = { db, getPrincipal: getPrincipalFn, broadcastTask, ws: wsService };
   let builder: AnyElysia = new Elysia()
     .decorate('db', db)
     .use(authMiddleware(getPrincipalFn))
     .onBeforeHandle(({ request, set }) => {
       const url = new URL(request.url);
       if (isPublicPath(request.method, url.pathname)) return;
+      if (apps.some((app) => app.ownsAuthFor?.(request.method, url.pathname))) return;
       const principal = getPrincipalFn(request);
       if (!principal) {
         set.status = 401;
@@ -193,7 +272,7 @@ export async function createAppInternal(
     .use(auth.authed)
     .use(messages)
     .use(users);
-  for (const app of API_APPS) {
+  for (const app of apps) {
     builder = builder.use(app.routes(apiCtx));
   }
 
@@ -204,6 +283,22 @@ export async function createAppInternal(
         handleClose(ws);
       },
       message(ws: WsLike, raw: unknown) {
+        // Binary frames are dispatched by their leading byte. Auth is required
+        // (no binary frames in the pre-auth state) and the tag must match a
+        // registered app; anything else is dropped silently to avoid leaking
+        // framing details to attackers.
+        const binary = toBinary(raw);
+        if (binary !== null) {
+          const principal = wsPrincipals.get(ws.id);
+          if (!principal || binary.length === 0) return;
+          const leadingByte = binary[0];
+          if (leadingByte === undefined) return;
+          const appId = binaryTagToApp.get(leadingByte);
+          if (!appId) return;
+          appWsHandlers.get(appId)?.onBinary?.(ws, binary, principal);
+          return;
+        }
+
         let msg: ClientMessage;
         try {
           const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
@@ -212,6 +307,10 @@ export async function createAppInternal(
           ws.send(JSON.stringify({ type: 'error', message: 'invalid JSON' }));
           return;
         }
+        // Captured before the switch narrows `msg` to `never` on the
+        // exhaustive built-in paths — used by the per-app dispatch below to
+        // route unknown message types to the app that claims their prefix.
+        const msgType: string = msg.type;
 
         // First-message auth handshake. Until a principal is bound, only
         // { type: 'auth', token } is accepted; everything else is rejected.
@@ -323,9 +422,42 @@ export async function createAppInternal(
             sendTo(pending.browserWsId, { type: 'chat:error', message: msg.message });
             return;
           }
+          default: {
+            // Per-app prefix dispatch keyed by the type's prefix
+            // (e.g. 'call:invite' → app with prefix 'call'). If no app
+            // claims it, surface an explicit error rather than dropping.
+            const colon = msgType.indexOf(':');
+            if (colon > 0) {
+              const prefix = msgType.slice(0, colon);
+              const appId = prefixToApp.get(prefix);
+              if (appId) {
+                appWsHandlers.get(appId)?.onMessage(ws, msg, principal);
+                return;
+              }
+            }
+            ws.send(JSON.stringify({
+              type: 'error',
+              code: 'unknown-message-type',
+              message: `no handler for message type '${msgType}'`,
+            }));
+            return;
+          }
         }
       },
     });
+}
+
+/**
+ * Coerce an Elysia/Bun WS payload to a Uint8Array when it's a binary frame,
+ * or null when it's text/JSON. Bun delivers binary as Uint8Array (Buffer
+ * extends it); other runtimes may use ArrayBuffer directly. Strings are not
+ * binary even if they happen to look like one.
+ */
+export function toBinary(raw: unknown): Uint8Array | null {
+  if (typeof raw === 'string') return null;
+  if (raw instanceof Uint8Array) return raw;
+  if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
+  return null;
 }
 
 export type App = Awaited<ReturnType<typeof createAppInternal>>;

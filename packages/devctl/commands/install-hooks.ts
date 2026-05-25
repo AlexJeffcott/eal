@@ -16,14 +16,18 @@ bun devctl test unit
 `;
 
 const PRE_PUSH = `#!/usr/bin/env bash
-# eal pre-push hook — full sweep (~30s)
+# eal pre-push hook — full sweep (~30s + verify)
 # Installed by: bun devctl install-hooks
+# Requires Docker for the verify step (TLC model-checking). Start Docker
+# Desktop before pushing.
 set -e
 cd "$(git rev-parse --show-toplevel)"
 echo "[pre-push] devctl check"
 bun devctl check
 echo "[pre-push] devctl test all"
 bun devctl test all
+echo "[pre-push] devctl verify"
+bun devctl verify
 `;
 
 function writeHook(name: string, content: string): void {
