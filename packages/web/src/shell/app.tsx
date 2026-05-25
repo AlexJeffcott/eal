@@ -28,6 +28,9 @@ export function App() {
   // a dead link the user can recover from. This ternary is the slot where
   // future shell-level pages (an error page, say) would also plug in.
   const onCliPair = route === CLI_PAIR_PATH;
+  // A `public` app is a pure client-side route with no API/DB — it renders for
+  // anyone, signed in or not, alongside cli-pair as the second sign-in carve-out.
+  const onPublicApp = activeApp?.access === 'public';
   const Body = onCliPair
     ? CliPair
     : (activeApp?.root ?? (route === '/' ? Landing : NotFound));
@@ -94,7 +97,7 @@ export function App() {
           </Surface>
         ) : null}
 
-        {user || onCliPair ? (
+        {user || onCliPair || onPublicApp ? (
           // Keyed by route so navigating away re-mounts the boundary and
           // clears a caught error — a crashed app never outlives its page.
           <ErrorBoundary key={route} fallback={<AppErrorFallback />}>

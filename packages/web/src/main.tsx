@@ -15,6 +15,7 @@ import {
   $cliPairLabel,
 } from './shell/stores.ts';
 import { $tasksById } from './apps/tasks/stores.ts';
+import { bindShowcaseForm } from './apps/showcase/stores.ts';
 import { ACTION_REGISTRY } from './actions/registry.ts';
 import { installTaskUrlSync } from './apps/tasks/url-sync.ts';
 import { installRouter } from './shell/router.ts';
@@ -24,6 +25,7 @@ import '@fairfox/polly/ui/styles.css';
 import '@fairfox/polly/ui/components.css';
 import './shell/shell.css';
 import './apps/tasks/tasks.css';
+import './apps/showcase/showcase.css';
 
 /**
  * Apply a server-canonical task event to the local store. Used for both:
@@ -163,6 +165,10 @@ async function bootstrap(): Promise<void> {
 
   const client = createEalClient(window.location.origin);
   const stores = createStores(client);
+
+  // The showcase app's <ActionForm> needs its form bound to the live stores
+  // before a submit can run; the form itself is module-scoped and has none.
+  bindShowcaseForm(stores);
 
   installEventDelegation((dispatch) => {
     const handler = ACTION_REGISTRY[dispatch.action];

@@ -23,6 +23,6 @@
     "@types/bun": "1.3.13"
   },
   "dependencies": {
-    "@fairfox/polly": "0.73.1"
+    "@fairfox/polly": "0.76.0"
   }
 }

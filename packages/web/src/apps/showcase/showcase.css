@@ -1,0 +1,95 @@
+/*
+ * Showcase app styles — the catalogue scaffolding that has no polly primitive:
+ * the heading scale, the specimen stage, and the anchor-offset for the sticky
+ * shell top bar. Component arrangement itself goes through <Layout>, <Cluster>,
+ * and <Surface>; everything here is token-driven.
+ */
+
+/* Headings — polly has no heading primitive, so the scale is set here from
+ * typography tokens rather than left to the user-agent default. */
+.showcase-title {
+  margin: 0;
+  font-size: var(--polly-text-3xl);
+  font-weight: var(--polly-weight-bold);
+  line-height: var(--polly-line-height-heading);
+}
+.showcase-section-title {
+  margin: 0;
+  font-size: var(--polly-text-xl);
+  font-weight: var(--polly-weight-bold);
+  line-height: var(--polly-line-height-heading);
+}
+
+/* Anchor jumps from the in-page nav must clear the sticky shell top bar, or
+ * the section heading lands hidden beneath it. */
+.showcase-section {
+  scroll-margin-block-start: 4.5rem;
+}
+
+/* A specimen must be free to shrink below its content so a wide component
+ * wraps inside the grid cell instead of forcing horizontal overflow at 350px. */
+.showcase-specimen {
+  min-inline-size: 0;
+}
+/* Specimens that need the full row — layouts, cards, forms. */
+.showcase-specimen--wide {
+  grid-column: 1 / -1;
+}
+
+/* The stage holds the live component(s). A wrapping flex row keeps small
+ * specimens (buttons, badges) tidy; wide specimens hand layout to the single
+ * block-level component they contain. `min-inline-size: 0` lets the stage
+ * shrink below its content's min-content width — without it a grid item keeps
+ * `min-width: auto`, so an intrinsically wide child (the Tabs nav) pushes the
+ * cell past the 350px floor instead of scrolling within its own bounds. */
+.showcase-stage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--polly-space-sm);
+  align-items: center;
+  min-block-size: 2.5rem;
+  min-inline-size: 0;
+}
+.showcase-specimen--wide .showcase-stage {
+  display: block;
+}
+
+/* The caption under each specimen — the prop combination on show. */
+.showcase-code {
+  font-family: var(--polly-font-mono);
+  overflow-wrap: anywhere;
+}
+
+/* The Dropdown specimen dresses the primitive's bare trigger button so it
+ * reads as a real consumer would render it. Polly's <Dropdown> sets nothing
+ * but `display: inline-block` on the trigger by design — Select/ActionSelect
+ * supply their own chrome and caret. Applied via polly 0.75.2's
+ * `triggerClassName` prop, which targets the trigger <button> directly. */
+.showcase-dropdown-trigger {
+  display: inline-flex;
+  gap: var(--polly-space-sm);
+  align-items: center;
+  padding: var(--polly-space-sm) var(--polly-space-md);
+  border: var(--polly-border-width-default) solid var(--polly-border);
+  border-radius: var(--polly-radius-sm);
+  background-color: var(--polly-surface);
+  color: var(--polly-text);
+  font: inherit;
+  cursor: pointer;
+}
+/* Consume polly 0.75.1's shared caret tokens (issue #137) so the demo's
+ * indicator matches Select / Collapsible automatically. Open-state rotation
+ * is driven by the trigger's own `data-open` attribute, not a signal read. */
+.showcase-dropdown-caret {
+  display: inline-block;
+  line-height: 1;
+  color: var(--polly-caret-color);
+  font-size: var(--polly-caret-size);
+  transition: transform var(--polly-motion-fast) ease;
+}
+.showcase-dropdown-caret::before {
+  content: var(--polly-caret-glyph);
+}
+.showcase-dropdown-trigger[data-open='true'] .showcase-dropdown-caret {
+  transform: rotate(180deg);
+}

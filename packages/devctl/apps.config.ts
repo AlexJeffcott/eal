@@ -41,6 +41,16 @@ export const APPS: readonly AppVerification[] = [
     e2e: ['packages/e2e-tests/tests/tasks.spec.ts'],
     mutate: ['packages/web/src/apps/tasks/filter.ts'],
   },
+  {
+    // A public, web-only app: no API, DB, or MCP layer, so no unit surface and
+    // nothing to mutate — it is presentational. Verified at the browser and
+    // e2e tiers.
+    id: 'showcase',
+    unit: [],
+    browser: ['packages/web/tests/browser/showcase.browser.tsx'],
+    e2e: ['packages/e2e-tests/tests/showcase.spec.ts'],
+    mutate: [],
+  },
 ];
 
 export function appById(id: string): AppVerification | undefined {

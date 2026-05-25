@@ -6,7 +6,7 @@
   "main": "src/main.tsx",
   "dependencies": {
     "@eal/client": "workspace:*",
-    "@fairfox/polly": "0.73.1",
+    "@fairfox/polly": "0.76.0",
     "@simplewebauthn/browser": "11.0.0",
     "fuse.js": "7.3.0",
     "preact": "10.29.1"
