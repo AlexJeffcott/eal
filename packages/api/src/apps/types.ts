@@ -51,12 +51,24 @@ export interface WsAppContext {
  * at server start. Server-factory dispatches incoming text messages whose
  * `type` field begins with the app's `prefix:` to `onMessage`, and binary
  * frames whose leading byte equals the app's `binaryTag` to `onBinary`.
+ *
+ * `principal` is the user Principal bound at auth-handshake time, or null
+ * for connections authenticated via the optional `authenticate` hook below
+ * (those keep their identity in app-private state keyed by `ws.id`).
+ *
+ * `authenticate` is the app's optional alternative auth handshake. Core's
+ * WS handler invokes it when an unauthenticated connection sends an
+ * `{type: 'auth', ...}` message that does not carry a user Bearer `token`.
+ * Return true to mark the connection authenticated (the app stores any
+ * identity it needs in its own per-`ws.id` state); return false to decline
+ * (core tries the next app, then rejects). May be async — WebCrypto
+ * signature verification, DB lookups, etc.
  */
 export interface WsMessageHandler {
-  onMessage(ws: WsLike, msg: unknown, principal: Principal): void;
-  onBinary?(ws: WsLike, frame: Uint8Array, principal: Principal): void;
-  /** Optional cleanup when a connection holding this app's state closes. */
+  onMessage(ws: WsLike, msg: unknown, principal: Principal | null): void | Promise<void>;
+  onBinary?(ws: WsLike, frame: Uint8Array, principal: Principal | null): void | Promise<void>;
   onClose?(ws: WsLike): void;
+  authenticate?(ws: WsLike, msg: unknown): boolean | Promise<boolean>;
 }
 
 /**

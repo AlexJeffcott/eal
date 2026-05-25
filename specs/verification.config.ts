@@ -50,6 +50,10 @@ export default defineVerification({
       type: 'enum',
       values: ['nonexistent', 'pending', 'consumed', 'expired'],
     },
+    'call.state': {
+      type: 'enum',
+      values: ['nonexistent', 'pending', 'connected', 'closed'],
+    },
   },
   messages: {
     maxInFlight: 1,

@@ -60,7 +60,7 @@ type ServerEvent = TaskEvent;
 type WsRole = 'browser' | 'agent';
 
 type ClientMessage =
-  | { type: 'auth'; token: string; role?: WsRole }
+  | { type: 'auth'; token?: string; role?: WsRole }
   | { type: 'subscribe'; topic: string }
   | { type: 'unsubscribe'; topic: string }
   | { type: 'chat:send'; text: string }
@@ -129,6 +129,13 @@ export async function createAppInternal(
   const connections = new Map<string, WsLike>(); // every authed ws, by id
   const agents = new Map<string, WsLike>(); // agent ws, by id — the chat workers
   const pendingChats = new Map<string, PendingChat>(); // requestId → routing
+  /**
+   * Connections authenticated by an app's WS authenticator rather than the
+   * default Bearer-token path. The value is the app's id (registry id, e.g.
+   * 'family-phone'); the app keeps any deeper identity (device id, etc.) in
+   * its own per-`ws.id` state.
+   */
+  const wsAppAuth = new Map<string, string>();
 
   function broadcast(topic: string, event: ServerEvent): void {
     const targets = subscribers.get(topic);
@@ -161,6 +168,7 @@ export async function createAppInternal(
     }
     wsPrincipals.delete(ws.id);
     wsRoles.delete(ws.id);
+    wsAppAuth.delete(ws.id);
     connections.delete(ws.id);
     if (agents.delete(ws.id)) {
       // An agent dropped — fail any chat routed to it so the browser that's
@@ -282,20 +290,21 @@ export async function createAppInternal(
       close(ws: WsLike) {
         handleClose(ws);
       },
-      message(ws: WsLike, raw: unknown) {
+      async message(ws: WsLike, raw: unknown) {
         // Binary frames are dispatched by their leading byte. Auth is required
         // (no binary frames in the pre-auth state) and the tag must match a
         // registered app; anything else is dropped silently to avoid leaking
         // framing details to attackers.
         const binary = toBinary(raw);
         if (binary !== null) {
-          const principal = wsPrincipals.get(ws.id);
-          if (!principal || binary.length === 0) return;
+          const principal = wsPrincipals.get(ws.id) ?? null;
+          const appAuthed = wsAppAuth.has(ws.id);
+          if ((!principal && !appAuthed) || binary.length === 0) return;
           const leadingByte = binary[0];
           if (leadingByte === undefined) return;
           const appId = binaryTagToApp.get(leadingByte);
           if (!appId) return;
-          appWsHandlers.get(appId)?.onBinary?.(ws, binary, principal);
+          await appWsHandlers.get(appId)?.onBinary?.(ws, binary, principal);
           return;
         }
 
@@ -312,32 +321,57 @@ export async function createAppInternal(
         // route unknown message types to the app that claims their prefix.
         const msgType: string = msg.type;
 
-        // First-message auth handshake. Until a principal is bound, only
-        // { type: 'auth', token } is accepted; everything else is rejected.
-        const principal = wsPrincipals.get(ws.id);
+        // First-message auth handshake. Until either the core user-Bearer
+        // path or an app-supplied authenticator has bound the connection,
+        // only { type: 'auth', ... } is accepted; everything else is rejected.
+        const principal = wsPrincipals.get(ws.id) ?? null;
 
         if (msg.type === 'auth') {
-          const candidate = getPrincipalFn(new Request('https://localhost/ws', {
-            headers: { authorization: `Bearer ${msg.token}` },
-          }));
-          if (!candidate) {
-            ws.send(JSON.stringify({ type: 'error', code: 'unauthenticated', message: 'invalid token' }));
+          // User/bearer path: msg carries a non-empty `token`. Existing role
+          // semantics ('browser' vs 'agent') are preserved.
+          if (typeof msg.token === 'string' && msg.token.length > 0) {
+            const candidate = getPrincipalFn(new Request('https://localhost/ws', {
+              headers: { authorization: `Bearer ${msg.token}` },
+            }));
+            if (!candidate) {
+              ws.send(JSON.stringify({ type: 'error', code: 'unauthenticated', message: 'invalid token' }));
+              return;
+            }
+            const role: WsRole = msg.role === 'agent' ? 'agent' : 'browser';
+            wsPrincipals.set(ws.id, candidate);
+            wsRoles.set(ws.id, role);
+            connections.set(ws.id, ws);
+            if (role === 'agent') agents.set(ws.id, ws);
+            ws.send(JSON.stringify({
+              type: 'auth:ok',
+              role,
+              user: { id: candidate.userId, displayName: candidate.displayName },
+            }));
             return;
           }
-          const role: WsRole = msg.role === 'agent' ? 'agent' : 'browser';
-          wsPrincipals.set(ws.id, candidate);
-          wsRoles.set(ws.id, role);
-          connections.set(ws.id, ws);
-          if (role === 'agent') agents.set(ws.id, ws);
+          // No bearer token — fall through to app-supplied authenticators
+          // in registry order. The first that returns true claims the
+          // connection; the app maintains its own per-`ws.id` identity.
+          for (const [appId, handler] of appWsHandlers) {
+            if (!handler.authenticate) continue;
+            const ok = await handler.authenticate(ws, msg);
+            if (ok) {
+              wsAppAuth.set(ws.id, appId);
+              connections.set(ws.id, ws);
+              ws.send(JSON.stringify({ type: 'auth:ok', via: appId }));
+              return;
+            }
+          }
           ws.send(JSON.stringify({
-            type: 'auth:ok',
-            role,
-            user: { id: candidate.userId, displayName: candidate.displayName },
+            type: 'error',
+            code: 'unauthenticated',
+            message: 'no auth handler matched',
           }));
           return;
         }
 
-        if (!principal) {
+        const appAuthed = wsAppAuth.has(ws.id);
+        if (!principal && !appAuthed) {
           ws.send(JSON.stringify({ type: 'error', code: 'unauthenticated', message: 'authenticate first' }));
           return;
         }
@@ -355,6 +389,8 @@ export async function createAppInternal(
           case 'chat:send': {
             // Persist the human's message, echo the canonical row, then route
             // the conversation to a connected agent for Claude to answer.
+            // Chat is user-only; app-authed connections silently ignore.
+            if (!principal) return;
             let userMessage;
             try {
               userMessage = sendUserMessageCore(db, { text: msg.text }, principal);
@@ -431,7 +467,7 @@ export async function createAppInternal(
               const prefix = msgType.slice(0, colon);
               const appId = prefixToApp.get(prefix);
               if (appId) {
-                appWsHandlers.get(appId)?.onMessage(ws, msg, principal);
+                await appWsHandlers.get(appId)?.onMessage(ws, msg, principal);
                 return;
               }
             }

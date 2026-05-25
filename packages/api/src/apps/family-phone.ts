@@ -2,6 +2,7 @@ import { Elysia } from 'elysia';
 import { familyPhoneHttpRoutes } from '../handlers/family-phone.http.ts';
 import { familyPhonePairHttpRoutes } from '../handlers/family-phone-pair.http.ts';
 import { familyPhoneDeviceAuthHttpRoutes } from '../handlers/family-phone-device-auth.http.ts';
+import { createFamilyPhoneWsHandler } from '../handlers/family-phone.ws.ts';
 import type { ApiApp } from './types.ts';
 
 /**
@@ -95,5 +96,10 @@ export const familyPhoneApp: ApiApp = {
     });
     const deviceAuth = familyPhoneDeviceAuthHttpRoutes({ db: ctx.db });
     return new Elysia().use(devices).use(pair).use(deviceAuth);
+  },
+  ws: {
+    prefix: 'call',
+    binaryTag: 0x10,
+    handler: createFamilyPhoneWsHandler,
   },
 };
