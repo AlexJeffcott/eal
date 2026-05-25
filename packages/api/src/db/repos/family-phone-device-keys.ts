@@ -13,6 +13,7 @@ export interface FamilyPhoneDeviceKeysRepo {
     publicKey: Uint8Array;
     alg: string;
   }): FamilyPhoneDeviceKeyRow;
+  findByDeviceId(deviceId: number): FamilyPhoneDeviceKeyRow | null;
 }
 
 export function createFamilyPhoneDeviceKeysRepo(
@@ -23,12 +24,19 @@ export function createFamilyPhoneDeviceKeysRepo(
      VALUES (?, ?, ?)
      RETURNING device_id, public_key, alg, created_at`,
   );
+  const findByDeviceIdStmt = db.prepare<FamilyPhoneDeviceKeyRow, [number]>(
+    `SELECT device_id, public_key, alg, created_at
+     FROM family_phone_device_keys WHERE device_id = ?`,
+  );
 
   return {
     insert(input): FamilyPhoneDeviceKeyRow {
       const row = insertStmt.get(input.deviceId, input.publicKey, input.alg);
       if (!row) throw new Error('family_phone_device_keys.insert: RETURNING gave no row');
       return row;
+    },
+    findByDeviceId(deviceId): FamilyPhoneDeviceKeyRow | null {
+      return findByDeviceIdStmt.get(deviceId) ?? null;
     },
   };
 }

@@ -1,6 +1,7 @@
 import { Elysia } from 'elysia';
 import { familyPhoneHttpRoutes } from '../handlers/family-phone.http.ts';
 import { familyPhonePairHttpRoutes } from '../handlers/family-phone-pair.http.ts';
+import { familyPhoneDeviceAuthHttpRoutes } from '../handlers/family-phone-device-auth.http.ts';
 import type { ApiApp } from './types.ts';
 
 /**
@@ -39,20 +40,50 @@ CREATE TABLE IF NOT EXISTS family_phone_device_keys (
   alg         TEXT    NOT NULL,
   created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS family_phone_challenges (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id    INTEGER NOT NULL REFERENCES family_phone_devices(id) ON DELETE CASCADE,
+  nonce        BLOB    NOT NULL UNIQUE,
+  created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+  expires_at   TEXT    NOT NULL,
+  consumed_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_family_phone_challenges_device_id  ON family_phone_challenges (device_id);
+CREATE INDEX IF NOT EXISTS idx_family_phone_challenges_expires_at ON family_phone_challenges (expires_at);
+
+CREATE TABLE IF NOT EXISTS family_phone_device_sessions (
+  token_hash    BLOB    PRIMARY KEY,
+  device_id     INTEGER NOT NULL REFERENCES family_phone_devices(id) ON DELETE CASCADE,
+  created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+  expires_at    TEXT    NOT NULL,
+  last_used_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_family_phone_device_sessions_device_id  ON family_phone_device_sessions (device_id);
+CREATE INDEX IF NOT EXISTS idx_family_phone_device_sessions_expires_at ON family_phone_device_sessions (expires_at);
 `;
 
 export const familyPhoneApp: ApiApp = {
   id: 'family-phone',
   schema: SCHEMA,
   /**
-   * `/api/family-phone/pair/complete` is called by a brand-new device that
-   * has no credentials yet — it would be turned away by the global
-   * user-principal gate. The handler enforces auth on its own terms (the
-   * submitted user_code must match an un-consumed, un-expired pair request).
+   * Routes the family-phone app authenticates on its own terms, bypassing
+   * the global user-principal gate:
+   *   - /pair/complete   — a brand-new device with no credentials yet
+   *   - /device/challenge — a paired device requesting a nonce to sign
+   *   - /device/auth     — a paired device submitting a signature
+   * The handlers enforce auth on the submitted user_code (pair) or on the
+   * cryptographic signature against the registered public key (device).
    * All other family-phone routes still flow through the global gate.
    */
-  ownsAuthFor: (method, pathname) =>
-    method === 'POST' && pathname === '/api/family-phone/pair/complete',
+  ownsAuthFor: (method, pathname) => {
+    if (method !== 'POST') return false;
+    return (
+      pathname === '/api/family-phone/pair/complete' ||
+      pathname === '/api/family-phone/device/challenge' ||
+      pathname === '/api/family-phone/device/auth'
+    );
+  },
   routes: (ctx) => {
     const devices = familyPhoneHttpRoutes({
       db: ctx.db,
@@ -62,6 +93,7 @@ export const familyPhoneApp: ApiApp = {
       db: ctx.db,
       getPrincipal: ctx.getPrincipal,
     });
-    return new Elysia().use(devices).use(pair);
+    const deviceAuth = familyPhoneDeviceAuthHttpRoutes({ db: ctx.db });
+    return new Elysia().use(devices).use(pair).use(deviceAuth);
   },
 };
