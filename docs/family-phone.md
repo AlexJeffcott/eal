@@ -13,7 +13,7 @@ A private family communication system with two kinds of client:
 
 All clients talk to a small self-hosted server (Pi at home) that routes calls, manages identity, and exposes a directory and admin page.
 
-The agent is a separate project (AJT's long-running personal Claude instance) that shows up in family-phone's directory as just another contact.
+The agent lives in eal alongside the family-phone server. It runs as the `eal agent` CLI worker (`eal/packages/cli/src/commands/agent.ts`), holds a persistent WebSocket to the server as a device of type `agent`, and shows up in family-phone's directory as just another contact. The same worker already answers chat requests from the eal web app; family-phone is its second client surface.
 
 ## Aesthetic brief
 
@@ -64,7 +64,7 @@ Three layers:
 
 - **Clients**: hardware handsets, PWAs. Each is a unique device identity in the directory.
 - **Home server** (Pi): directory, auth, signalling, audio relay, admin page, location sink, voicemail store. Single source of truth.
-- **Agent** (separate project): AJT's long-running Claude instance. Shows up in the directory as a contact. Only knows what AJT tells it.
+- **Agent**: AJT's long-running Claude instance, hosted in eal as the `eal agent` worker. Shows up in the directory as a contact. Only knows what AJT tells it.
 
 ### Audio relay over WebSockets (no media server)
 
@@ -146,7 +146,7 @@ Each phase is shippable on its own. If the project stops at any point, you still
 2. **WebSocket audio relay.** Elysia WebSocket endpoint. Connection registry. Tiny signalling protocol (`call`, `accept`, `reject`, `hangup`). Opus frame forwarding. Test rig: two raw browser tabs streaming audio to each other via the server. No UI.
 3. **First PWA.** Preact + signals. Device token auth. Mic capture, speaker playback, Opus encode/decode. Contact list from the server. Tap-to-call. Persistent WebSocket with ring-on-incoming. Deliverable: laptop can call phone browser and hold a real conversation.
 4. **Directory and admin page.** Humans and devices CRUD. Spoken-code sign-in flow for adding new devices. Admin page with human management and call matrix. Call matrix enforced server-side.
-5. **Agent as a contact.** Small adapter process on the Pi. Whisper for transcription, Claude for thinking, TTS for reply. Agent is a directory entry you can call like anyone else. Structured-markdown memory. Narrow tool surface: `place_call`, `send_voice_message`.
+5. **Agent as a contact.** Extend the existing `eal agent` worker to take voice as well as text: Whisper for transcription on the way in, Claude for thinking, TTS for reply on the way out. Agent is a directory entry you can call like anyone else. Structured-markdown memory, shared with the worker's existing text surface. Narrow tool surface added to the claude-runner: `place_call`, `send_voice_message`.
 6. **Agent-initiated calls and proactivity.** Scheduler. Per-user rules. "Message pending" state in PWAs.
 7. **PSTN inbound via trunk.** Twilio or Voxbone number. Bridge into the signalling layer as another contact.
 8. **GPS sink.** Browser geolocation from PWAs. Location table. Map view in admin.
@@ -168,12 +168,12 @@ What's known about working on the board, captured as we go.
 
 ## Agent boundary
 
-Agent is a *separate project* — AJT's long-running Claude instance — with its own repo, memory, and tools. family-phone is a client of the agent, not an owner of it.
+Agent and family-phone share a process and a repo, but not a trust boundary. The `eal agent` worker is AJT's long-running Claude instance; family-phone is one of its clients, not its owner. Keep the seam between them honest even though both live in eal.
 
-- Agent has **narrow tools** into family-phone: `place_call(contact)`, `send_voice_message(contact, audio)`. Nothing else.
+- Agent has **narrow tools** into family-phone: `place_call(contact)`, `send_voice_message(contact, audio)`. Nothing else. The tools go through the family-phone HTTP/WS API like any other client, not through in-process shortcuts.
 - Agent does **not** have raw database access to the family directory, call history, or locations. It only knows what AJT tells it.
 - Agent memory lives in structured markdown notes (same pattern as AJT's existing memory system). Human-readable and editable.
-- Agent is reachable from other surfaces too (terminal, Claude Code) — family-phone is one interface, not the only one.
+- Agent is reachable from other surfaces too — the eal web app today, terminal and Claude Code tomorrow. family-phone is one interface, not the only one.
 
 ## Deferred questions
 
