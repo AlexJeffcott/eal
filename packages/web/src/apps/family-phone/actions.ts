@@ -9,10 +9,58 @@ import {
   type PairedThisSession,
 } from './stores.ts';
 import { clearPairedDevice, loadPairedDevice, savePairedDevice } from './keystore.ts';
+import { startAudioCapture, startAudioPlayback, type AudioCapture, type AudioPlayback } from './audio.ts';
 
 function describeError(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+/**
+ * Live audio resources for the current call, owned at module scope because
+ * they are side-effecty (microphone permission, AudioContext) and there is
+ * never more than one active call. Cleared on hangup / peer disconnect.
+ */
+interface ActiveAudio {
+  callId: string;
+  capture: AudioCapture;
+  playback: AudioPlayback;
+  unsubscribeAudio: () => void;
+}
+let activeAudio: ActiveAudio | null = null;
+
+async function startAudioForCall(
+  callId: string,
+  conn: NonNullable<ReturnType<() => typeof $deviceConnection.value>>,
+): Promise<void> {
+  if (activeAudio) await stopAudio();
+  const playback = await startAudioPlayback();
+  const unsubscribeAudio = conn.subscribeAudio((cid, payload) => {
+    if (cid !== callId) return;
+    playback.push(payload);
+  });
+  try {
+    const capture = await startAudioCapture((payload) => {
+      conn.sendAudio(callId, payload);
+    });
+    activeAudio = { callId, capture, playback, unsubscribeAudio };
+  } catch (err) {
+    // Mic permission denied or hardware failure — keep the call up so the
+    // user can still hear the other side, but flag the asymmetry.
+    unsubscribeAudio();
+    await playback.stop();
+    $callNote.value = `Microphone unavailable (${describeError(err)}); incoming audio disabled.`;
+    throw err;
+  }
+}
+
+async function stopAudio(): Promise<void> {
+  const a = activeAudio;
+  if (!a) return;
+  activeAudio = null;
+  a.unsubscribeAudio();
+  await a.capture.stop().catch(() => {});
+  await a.playback.stop().catch(() => {});
 }
 
 function isKind(value: unknown): value is FamilyPhoneDeviceKind {
@@ -28,11 +76,11 @@ function toBase64Url(bytes: Uint8Array): string {
 /**
  * Wire the device's call signalling events into the local stores. Called
  * once per device-connection lifetime; the returned unsubscribe is held by
- * the connection itself and fires on close.
+ * the connection itself and fires on close. Side-effect: starts and stops
+ * the audio capture/playback pipeline as the call enters and leaves
+ * `connected`.
  */
-function installCallEventHandlers(
-  event: FamilyPhoneCallEvent,
-): void {
+function installCallEventHandlers(event: FamilyPhoneCallEvent): void {
   switch (event.type) {
     case 'call:invite-ack': {
       // Caller's pending call now has its real call_id. The placeholder
@@ -53,29 +101,37 @@ function installCallEventHandlers(
       return;
     }
     case 'call:accepted': {
-      // Caller-side: the callee picked up. Transition pending → connected.
       const current = $activeCall.value;
       if (current && current.role === 'caller' && current.callId === event.callId) {
         $activeCall.value = { ...current, state: 'connected' };
+        const conn = $deviceConnection.value;
+        if (conn) {
+          void startAudioForCall(event.callId, conn).catch(() => { /* note already set */ });
+        }
       }
       return;
     }
     case 'call:accept-ack': {
-      // Callee-side acknowledgement that the server registered the accept.
       const current = $activeCall.value;
       if (current && current.role === 'callee' && current.callId === event.callId) {
         $activeCall.value = { ...current, state: 'connected' };
+        const conn = $deviceConnection.value;
+        if (conn) {
+          void startAudioForCall(event.callId, conn).catch(() => { /* note already set */ });
+        }
       }
       return;
     }
     case 'call:rejected': {
       $activeCall.value = null;
       $callNote.value = 'Call was rejected.';
+      void stopAudio();
       return;
     }
     case 'call:cancelled': {
       $incomingCall.value = null;
       $callNote.value = 'Caller cancelled the call.';
+      void stopAudio();
       return;
     }
     case 'call:hung-up': {
@@ -83,6 +139,7 @@ function installCallEventHandlers(
       $incomingCall.value = null;
       $callNote.value =
         event.reason === 'peer-disconnect' ? 'The other device disconnected.' : 'Call ended.';
+      void stopAudio();
       return;
     }
   }

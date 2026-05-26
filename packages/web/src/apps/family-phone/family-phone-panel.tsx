@@ -93,7 +93,11 @@ function ActiveCallSurface(props: {
       <Cluster gap="var(--polly-space-md)" justify="space-between">
         <Layout gap="var(--polly-space-xs)">
           <Text as="h2" weight="bold">{stateLabel}</Text>
-          <Text tone="muted">Audio is not yet wired (Phase G3).</Text>
+          <Text tone="muted">
+            {props.state === 'connected'
+              ? 'Microphone live — speak into the device.'
+              : 'Connecting audio…'}
+          </Text>
         </Layout>
         <Button
           tier="primary"
