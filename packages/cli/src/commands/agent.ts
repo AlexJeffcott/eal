@@ -96,10 +96,7 @@ async function runAgentWorker(global: GlobalOptions): Promise<number> {
   }
 
   const client = createEalClient(global.apiUrl, { token });
-  const runClaude = await createClaudeRunner({
-    apiUrl: global.apiUrl,
-    tokenPath: tokenPath(global.tokenPathOverride),
-  });
+  const runClaude = await selectClaudeRunner(global);
 
   log('eal agent: starting — the web app can now chat with the assistant.');
   log('  Press Ctrl-C to stop.');
@@ -222,6 +219,29 @@ async function startPhoneLoop(
     await delay(backoffMs);
     backoffMs = Math.min(backoffMs * 2, RECONNECT_MAX_MS);
   }
+}
+
+/**
+ * The real ClaudeRunner spawns the `claude` CLI; that is unfit for an
+ * automated end-to-end where the test must not depend on a working
+ * Anthropic key or Claude Code install. Setting EAL_CLAUDE_FAKE_REPLY
+ * substitutes a deterministic runner that emits the given string as a
+ * single delta — enough to exercise the sentence-chunking and TTS path
+ * the voice loop relies on. Production never sets this.
+ */
+async function selectClaudeRunner(global: GlobalOptions): Promise<ClaudeRunner> {
+  const fakeReply = process.env['EAL_CLAUDE_FAKE_REPLY'];
+  if (typeof fakeReply === 'string') {
+    log('eal agent: EAL_CLAUDE_FAKE_REPLY set — using deterministic stub runner for tests');
+    return async (_input, emit) => {
+      emit(fakeReply);
+      return { content: fakeReply, sessionId: 'fake-session' };
+    };
+  }
+  return createClaudeRunner({
+    apiUrl: global.apiUrl,
+    tokenPath: tokenPath(global.tokenPathOverride),
+  });
 }
 
 function selectVoiceProviders(): { stt: SttProvider; tts: TtsProvider } | null {
