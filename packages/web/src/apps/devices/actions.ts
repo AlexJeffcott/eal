@@ -13,6 +13,7 @@ import {
   type PairedThisSession,
 } from './stores.ts';
 import { Notification } from '../../platform/notification.ts';
+import { ensurePushSubscription } from '../../platform/push.ts';
 import { clearPairedDevice, loadPairedDevice, savePairedDevice } from './keystore.ts';
 import { subtleCrypto } from '../../platform/subtle-crypto.ts';
 // Family-phone subscribes its own call:* handler to the same WS connection
@@ -110,6 +111,21 @@ async function openDeviceConnection(
   conn.subscribe(installDirectoryEventHandlers);
   conn.subscribe(installCallEventHandlers);
   $deviceConnection.value = conn;
+  // If notifications are already granted on this device, refresh the
+  // push subscription on every connect — handles vendor endpoint
+  // rotation and server-side VAPID key changes by re-registering. The
+  // call is best-effort; ensurePushSubscription returns null silently
+  // on every recoverable failure.
+  void (async () => {
+    try {
+      const subscription = await ensurePushSubscription();
+      if (subscription) {
+        conn.subscribePush(subscription);
+      }
+    } catch (err) {
+      console.warn('[push] re-subscribe on connect failed:', err);
+    }
+  })();
 }
 
 /**
@@ -269,8 +285,22 @@ export const DEVICES_ACTIONS: ActionRegistry<AppStores> = {
       if (perms.notifications === 'denied') {
         stores.$devicesError.value =
           'Notification permission denied. Re-enable it in your browser\'s site settings.';
-      } else if (perms.notifications === 'unsupported') {
+        return;
+      }
+      if (perms.notifications === 'unsupported') {
         stores.$devicesError.value = 'This browser does not support notifications.';
+        return;
+      }
+      // Permission granted. Bind a Web Push subscription to the
+      // server's VAPID identity and register it on the device's
+      // already-authed WS so an offline call:invite can wake this
+      // device's phone. No-op when the device hasn't paired yet —
+      // the subscription happens on first pairing instead.
+      const conn = stores.$deviceConnection.value;
+      if (!conn) return;
+      const subscription = await ensurePushSubscription();
+      if (subscription) {
+        conn.subscribePush(subscription);
       }
     } catch (err) {
       stores.$devicesError.value = describeError(err);
@@ -288,6 +318,37 @@ export const DEVICES_ACTIONS: ActionRegistry<AppStores> = {
 
   'devices:dismiss-error': ({ stores }) => {
     stores.$devicesError.value = null;
+  },
+
+  'devices:rename': async ({ data, stores }) => {
+    const raw = data['deviceId'];
+    if (typeof raw !== 'string') return;
+    const id = Number(raw);
+    if (!Number.isInteger(id) || id <= 0) return;
+    const current = data['currentLabel'] ?? '';
+    // window.prompt is the simplest in-tab text-entry primitive; it
+    // blocks the page and returns null on cancel. A polly Modal-based
+    // dialog would be nicer but isn't justified for a one-field edit.
+    const next = typeof window !== 'undefined' ? window.prompt('Rename device', current) : null;
+    if (next === null) return;
+    const trimmed = next.trim();
+    if (trimmed.length === 0) return;
+    if (trimmed === current) return;
+    stores.$devicesError.value = null;
+    try {
+      await stores.client.renameFamilyPhoneDevice(id, trimmed);
+    } catch (err) {
+      stores.$devicesError.value = describeError(err);
+      return;
+    }
+    // Refresh the directory so the new name appears on this tab and
+    // every other connected tab gets it through the directory:changed
+    // broadcast.
+    try {
+      stores.$devices.value = await stores.client.listFamilyPhoneDevices();
+    } catch (err) {
+      stores.$devicesError.value = describeError(err);
+    }
   },
 
   'devices:delete': async ({ data, stores }) => {

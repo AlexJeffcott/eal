@@ -223,13 +223,22 @@ function DeviceRow(props: {
         </Badge>
         <Badge variant="default">{device.kind}</Badge>
         {ownedByMe && (
-          <Button
-            tier="tertiary"
-            color="danger"
-            label="Delete"
-            data-action="devices:delete"
-            data-action-device-id={String(device.id)}
-          />
+          <>
+            <Button
+              tier="tertiary"
+              label="Rename"
+              data-action="devices:rename"
+              data-action-device-id={String(device.id)}
+              data-action-current-label={device.label}
+            />
+            <Button
+              tier="tertiary"
+              color="danger"
+              label="Delete"
+              data-action="devices:delete"
+              data-action-device-id={String(device.id)}
+            />
+          </>
         )}
       </Cluster>
     </Cluster>

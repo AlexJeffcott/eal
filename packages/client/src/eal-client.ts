@@ -204,6 +204,8 @@ export interface EalClient {
   ): Promise<FamilyPhonePairCompleteResult>;
   /** Delete a device the caller owns; cascades to its key, challenges, sessions. */
   deleteFamilyPhoneDevice(id: number): Promise<void>;
+  /** Rename a device the caller owns. Trimmed, non-empty, ≤60 chars. */
+  renameFamilyPhoneDevice(id: number, label: string): Promise<void>;
   /**
    * Open a device-authenticated WebSocket. The connection runs its own
    * challenge/sign handshake against the supplied keypair and is independent
@@ -677,6 +679,13 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
       await deleteJson<{ deleted: boolean }>(`/api/family-phone/devices/${id}`);
     },
 
+    async renameFamilyPhoneDevice(id: number, label: string): Promise<void> {
+      await patchJson<{ device: { id: number; label: string } }>(
+        `/api/family-phone/devices/${id}`,
+        { label },
+      );
+    },
+
     async connectFamilyPhoneDevice(input): Promise<FamilyPhoneDeviceConnection> {
       const { deviceId, privateKey } = input;
       // Subscribers survive reconnects — bound to the handle, not the WS.
@@ -783,6 +792,17 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
         hangup(callId) {
           sendCall({ type: 'call:hangup', call_id: callId });
         },
+        subscribePush(input) {
+          sendCall({
+            type: 'push:subscribe',
+            endpoint: input.endpoint,
+            p256dh: input.p256dh,
+            auth: input.auth,
+          });
+        },
+        unsubscribePush(endpoint) {
+          sendCall({ type: 'push:unsubscribe', endpoint });
+        },
         subscribe(handler) {
           subscribers.add(handler);
           return () => subscribers.delete(handler);
@@ -868,6 +888,15 @@ function parseFamilyPhoneCallEvent(raw: string): FamilyPhoneCallEvent | null {
   }
   if (t === 'directory:changed') {
     return { type: 'directory:changed' };
+  }
+  if (t === 'push:subscribed') {
+    return { type: 'push:subscribed' };
+  }
+  if (t === 'push:subscribe-failed' && 'reason' in parsed && typeof parsed.reason === 'string') {
+    return { type: 'push:subscribe-failed', reason: parsed.reason };
+  }
+  if (t === 'push:unsubscribed') {
+    return { type: 'push:unsubscribed' };
   }
   return null;
 }

@@ -1,9 +1,16 @@
 import { randomBytes } from 'node:crypto';
+import webpush from 'web-push';
 import { createFamilyPhoneChallengesRepo } from '../db/repos/family-phone-challenges.ts';
 import { createFamilyPhoneDeviceKeysRepo } from '../db/repos/family-phone-device-keys.ts';
+import { createFamilyPhoneDevicesRepo } from '../db/repos/family-phone-devices.ts';
+import {
+  createFamilyPhonePushSubscriptionsRepo,
+  type FamilyPhonePushSubscriptionsRepo,
+} from '../db/repos/family-phone-push-subscriptions.ts';
 import { createFamilyPhoneDeviceSessionsRepo } from '../db/repos/family-phone-device-sessions.ts';
 import { authCore, defaultRandomToken } from './family-phone-device-auth.shared.ts';
 import { AuthError } from './auth.shared.ts';
+import { loadPushVapidConfig } from './push.http.ts';
 import type { WsAppContext, WsLike, WsMessageHandler } from '../apps/types.ts';
 
 /**
@@ -32,6 +39,41 @@ function readTargetDeviceId(msg: unknown): number | null {
 }
 
 /**
+ * Parse a `{type: 'push:subscribe', endpoint, p256dh, auth}` envelope.
+ * Returns the parsed fields or null on shape mismatch. No length or
+ * format validation here — the vendor's `endpoint` strings vary in
+ * shape across browsers and we want to accept whatever the SPA was
+ * given by pushManager.subscribe.
+ */
+function readPushSubscribe(
+  msg: unknown,
+): { endpoint: string; p256dh: string; auth: string } | null {
+  if (typeof msg !== 'object' || msg === null) return null;
+  if (!('endpoint' in msg) || typeof msg.endpoint !== 'string') return null;
+  if (!('p256dh' in msg) || typeof msg.p256dh !== 'string') return null;
+  if (!('auth' in msg) || typeof msg.auth !== 'string') return null;
+  return { endpoint: msg.endpoint, p256dh: msg.p256dh, auth: msg.auth };
+}
+
+function readPushUnsubscribe(msg: unknown): { endpoint: string } | null {
+  if (typeof msg !== 'object' || msg === null) return null;
+  if (!('endpoint' in msg) || typeof msg.endpoint !== 'string') return null;
+  return { endpoint: msg.endpoint };
+}
+
+/**
+ * web-push throws errors carrying a `statusCode` field on vendor
+ * responses. Read it defensively without casting — `unknown` flows
+ * through structural narrowing.
+ */
+function readWebPushStatusCode(err: unknown): number {
+  if (typeof err !== 'object' || err === null) return 0;
+  if (!('statusCode' in err)) return 0;
+  const candidate = err.statusCode;
+  return typeof candidate === 'number' ? candidate : 0;
+}
+
+/**
  * Match an `{type: 'auth', device_id, nonce, signature}` envelope; return
  * the parsed fields or null. Validates types but not bytes (signature
  * verification is the next step).
@@ -54,6 +96,13 @@ export function createFamilyPhoneWsHandler(
   const challenges = createFamilyPhoneChallengesRepo(ctx.db);
   const deviceKeys = createFamilyPhoneDeviceKeysRepo(ctx.db);
   const sessions = createFamilyPhoneDeviceSessionsRepo(ctx.db);
+  const pushSubs: FamilyPhonePushSubscriptionsRepo = createFamilyPhonePushSubscriptionsRepo(ctx.db);
+  const devicesRepo = createFamilyPhoneDevicesRepo(ctx.db);
+  // VAPID config is read once when the handler boots. Calling
+  // sendNotification when this is null is wasted work — the
+  // module-global webpush.setVapidDetails was skipped at boot, so
+  // every call would throw. Guard the offline-wake branch on it.
+  const vapid = loadPushVapidConfig();
   const authDeps = {
     challenges,
     deviceKeys,
@@ -74,6 +123,59 @@ export function createFamilyPhoneWsHandler(
     if (call.caller.wsId === wsId) return call.callee;
     if (call.callee.wsId === wsId) return call.caller;
     return null;
+  }
+
+  /**
+   * Fire a Web Push notification at every push subscription registered
+   * for `targetDeviceId`. Called when a call:invite finds the target
+   * offline — the call itself still fails (the caller's UI shows
+   * target-offline), but the recipient's phone buzzes so they can
+   * open the app and call back.
+   *
+   * Best-effort: VAPID misconfiguration, network failures, and vendor
+   * errors all short-circuit silently. A vendor 404/410 deletes the
+   * stale subscription row so future invites skip it.
+   */
+  async function fireOfflineCallWake(
+    targetDeviceId: number,
+    callerDeviceId: number,
+  ): Promise<void> {
+    if (!vapid) return;
+    const targets = pushSubs.listByDevice(targetDeviceId);
+    if (targets.length === 0) return;
+    const callerDevice = devicesRepo.findById(callerDeviceId);
+    const callerLabel = callerDevice?.label ?? 'Someone';
+    const payload = JSON.stringify({
+      kind: 'call',
+      title: 'Incoming call',
+      body: `From ${callerLabel}`,
+      // Coalesce multiple invites from the same caller — repeated
+      // dials should re-buzz the OS (renotify: true in the SW) but
+      // not stack on the lock screen.
+      tag: `call:${callerDeviceId}`,
+      url: '/devices',
+    });
+    await Promise.all(
+      targets.map(async (t) => {
+        try {
+          await webpush.sendNotification(
+            { endpoint: t.endpoint, keys: { p256dh: t.p256dh, auth: t.auth } },
+            payload,
+            { TTL: 30 },
+          );
+        } catch (err) {
+          const statusCode = readWebPushStatusCode(err);
+          if (statusCode === 404 || statusCode === 410) {
+            // The subscription is dead. Clear it so future invites
+            // don't waste a round trip on a vendor that will reject
+            // every time.
+            pushSubs.deleteByEndpoint(t.endpoint);
+          } else {
+            console.warn('[push] call-wake send failed:', err);
+          }
+        }
+      }),
+    );
   }
 
   return {
@@ -125,6 +227,13 @@ export function createFamilyPhoneWsHandler(
           }
           const targetWsId = deviceToWs.get(targetDeviceId);
           if (!targetWsId) {
+            // Target isn't on the WS — the call itself can't go through
+            // (no media path), but if the target has a registered push
+            // subscription we ring its phone so the human can open the
+            // app and call back. The notification fires async; the
+            // caller's UI sees `call:invite-failed` immediately, same as
+            // before, so existing behaviour is preserved.
+            void fireOfflineCallWake(targetDeviceId, deviceId);
             ws.send(JSON.stringify({ type: 'call:invite-failed', reason: 'target-offline' }));
             return;
           }
@@ -193,6 +302,45 @@ export function createFamilyPhoneWsHandler(
           if (!peer) return;
           call.state = 'closed';
           ctx.ws.sendTo(peer.wsId, { type: 'call:hung-up', call_id: callId });
+          return;
+        }
+
+        case 'push:subscribe': {
+          // The authed device registers (or refreshes) its Web Push
+          // subscription. Upsert keyed by endpoint so a re-subscribe
+          // with new keys (the vendor occasionally rotates them) lands
+          // in place. The deviceId comes from the WS session, not the
+          // payload, so a device can't register a subscription against
+          // another device's id.
+          const fields = readPushSubscribe(msg);
+          if (!fields) {
+            ws.send(JSON.stringify({ type: 'push:subscribe-failed', reason: 'bad-shape' }));
+            return;
+          }
+          try {
+            pushSubs.upsert({
+              deviceId,
+              endpoint: fields.endpoint,
+              p256dh: fields.p256dh,
+              auth: fields.auth,
+            });
+            ws.send(JSON.stringify({ type: 'push:subscribed' }));
+          } catch (err) {
+            console.error('[push] subscribe upsert failed:', err);
+            ws.send(JSON.stringify({ type: 'push:subscribe-failed', reason: 'server-error' }));
+          }
+          return;
+        }
+
+        case 'push:unsubscribe': {
+          // Drop the subscription row matching the supplied endpoint.
+          // A device disabling notifications calls this so it stops
+          // ringing; a device wiping its keys calls it on its way out.
+          // No-op if the endpoint isn't registered.
+          const fields = readPushUnsubscribe(msg);
+          if (!fields) return;
+          pushSubs.deleteByEndpoint(fields.endpoint);
+          ws.send(JSON.stringify({ type: 'push:unsubscribed' }));
           return;
         }
 

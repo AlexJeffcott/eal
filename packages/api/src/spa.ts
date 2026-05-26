@@ -84,12 +84,88 @@ async function buildBundle(): Promise<SpaBundle> {
 <text x="256" y="320" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="200" font-weight="700" fill="#ffffff" text-anchor="middle">eal</text>
 </svg>`;
 
-  // Minimal service worker — just satisfies the install-criteria heuristic
-  // browsers use to enable "Add to Home Screen" / install banners. No
-  // caching yet; that lands when we have an actual offline story to tell.
-  const serviceWorker = `self.addEventListener('install', (e) => { self.skipWaiting(); });
-self.addEventListener('activate', (e) => { e.waitUntil(self.clients.claim()); });
-self.addEventListener('fetch', () => { /* pass-through */ });
+  // Service worker — notifications only. Fetch is deliberately
+  // pass-through (no precache, no runtime caching) so a buggy SW can
+  // never lock a user into a stale bundle. Push handler decodes the
+  // RFC 8291-decrypted body (web-push performs the encryption on the
+  // server side), calls showNotification, and notificationclick
+  // focuses or opens the eal PWA at the right route.
+  //
+  // Payload shape (server emits via web-push.sendNotification):
+  //   { kind: 'call', title, body, tag, url }
+  const serviceWorker = `const SW_VERSION = 'eal-sw-v1-notifications';
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(self.skipWaiting());
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil((async () => {
+    try {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    } catch {}
+    await self.clients.claim();
+    console.log('[sw] ' + SW_VERSION + ' active');
+  })());
+});
+
+self.addEventListener('fetch', (event) => {
+  event.respondWith(fetch(event.request));
+});
+
+self.addEventListener('push', (event) => {
+  event.waitUntil((async () => {
+    let payload = null;
+    if (event.data) {
+      try { payload = event.data.json(); } catch {}
+    }
+    const title = (payload && typeof payload.title === 'string' && payload.title) || 'eal';
+    const body = (payload && typeof payload.body === 'string' && payload.body) || '';
+    const tag = (payload && typeof payload.tag === 'string' && payload.tag) || 'eal';
+    const url = (payload && typeof payload.url === 'string' && payload.url) || '/';
+    const kind = (payload && typeof payload.kind === 'string' && payload.kind) || '';
+    // Vibrate pattern is the closest thing iOS Web Push gives us to a
+    // ringtone — it overrides the user's notification-style choice for
+    // "Banners" and triggers the haptic engine on a locked phone. The
+    // pattern reads as ring-ring-ring (3 long buzzes, short gaps); the
+    // OS still plays its default notification tone alongside.
+    // Sustained or custom audio is not available to a SW push handler
+    // on iOS; that's a platform limit, not a fairfox/eal one.
+    const vibrate = kind === 'call' ? [400, 200, 400, 200, 400] : [200];
+    await self.registration.showNotification(title, {
+      body,
+      tag,
+      renotify: true,
+      icon: '/icon.svg',
+      badge: '/icon.svg',
+      vibrate,
+      data: { url },
+    });
+  })());
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil((async () => {
+    const target = (event.notification.data && typeof event.notification.data.url === 'string'
+      ? event.notification.data.url
+      : '/') || '/';
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of clients) {
+      if (client.url.includes(self.location.origin)) {
+        try {
+          await client.focus();
+          if (!client.url.endsWith(target)) {
+            await client.navigate(target);
+          }
+          return;
+        } catch {}
+      }
+    }
+    await self.clients.openWindow(target);
+  })());
+});
 `;
 
   return { js, css, html, manifest, iconSvg, iconMaskable, serviceWorker };
@@ -122,7 +198,13 @@ export async function buildSpa() {
       headers: { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'public, max-age=86400' },
     }))
     .get('/sw.js', () => new Response(bundle.serviceWorker, {
-      headers: { 'content-type': 'application/javascript; charset=utf-8', 'service-worker-allowed': '/' },
+      headers: {
+        'content-type': 'application/javascript; charset=utf-8',
+        'service-worker-allowed': '/',
+        // A stale SW locks every installed PWA out of new versions;
+        // refetch the bytes on every check.
+        'cache-control': 'no-store',
+      },
     }))
     .get('/', () => htmlResponse())
     .get('/*', ({ request, set }) => {

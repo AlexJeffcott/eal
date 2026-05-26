@@ -5,6 +5,7 @@ import { createUsersRepo } from '../db/repos/users.ts';
 import { createFamilyPhoneChallengesRepo } from '../db/repos/family-phone-challenges.ts';
 import { createFamilyPhoneDevicesRepo } from '../db/repos/family-phone-devices.ts';
 import { createFamilyPhoneDeviceKeysRepo } from '../db/repos/family-phone-device-keys.ts';
+import { createFamilyPhonePushSubscriptionsRepo } from '../db/repos/family-phone-push-subscriptions.ts';
 import { formatSqliteDateTime } from '../auth/datetime.ts';
 import {
   CHALLENGE_TTL_MS,
@@ -359,6 +360,60 @@ describe('family-phone.ws — call state machine, two authed peers', () => {
     harness.binary.length = 0;
     handler.onBinary?.(wsA, frame, null);
     expect(harness.binary.length).toBe(0);
+  });
+
+  test('push:subscribe persists the row and acks with push:subscribed', async () => {
+    const { harness, handler, alex, wsA } = await setup();
+    handler.onMessage(
+      wsA,
+      {
+        type: 'push:subscribe',
+        endpoint: 'https://fcm.example/abc',
+        p256dh: 'p-a',
+        auth: 'a-a',
+      },
+      null,
+    );
+    expect(find(harness.send, 'alex-ws', 'push:subscribed')).not.toBeNull();
+    const subs = createFamilyPhonePushSubscriptionsRepo(db).listByDevice(alex.deviceId);
+    expect(subs).toHaveLength(1);
+    expect(subs[0]?.endpoint).toBe('https://fcm.example/abc');
+    expect(subs[0]?.p256dh).toBe('p-a');
+  });
+
+  test('push:subscribe with a missing field fails without persisting', async () => {
+    const { harness, handler, alex, wsA } = await setup();
+    handler.onMessage(
+      wsA,
+      { type: 'push:subscribe', endpoint: 'https://fcm.example/x', p256dh: 'p' },
+      null,
+    );
+    const failed = find(harness.send, 'alex-ws', 'push:subscribe-failed');
+    expect(failed).not.toBeNull();
+    expect(failed?.['reason']).toBe('bad-shape');
+    expect(createFamilyPhonePushSubscriptionsRepo(db).listByDevice(alex.deviceId)).toEqual([]);
+  });
+
+  test('push:unsubscribe removes the row keyed by endpoint', async () => {
+    const { harness, handler, alex, wsA } = await setup();
+    handler.onMessage(
+      wsA,
+      {
+        type: 'push:subscribe',
+        endpoint: 'https://fcm.example/abc',
+        p256dh: 'p-a',
+        auth: 'a-a',
+      },
+      null,
+    );
+    harness.send.length = 0;
+    handler.onMessage(
+      wsA,
+      { type: 'push:unsubscribe', endpoint: 'https://fcm.example/abc' },
+      null,
+    );
+    expect(find(harness.send, 'alex-ws', 'push:unsubscribed')).not.toBeNull();
+    expect(createFamilyPhonePushSubscriptionsRepo(db).listByDevice(alex.deviceId)).toEqual([]);
   });
 
   test('peer disconnect mid-call surfaces call:hung-up with reason=peer-disconnect', async () => {

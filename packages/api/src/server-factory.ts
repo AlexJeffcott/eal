@@ -8,6 +8,7 @@ import type { RpConfig } from './auth/webauthn.ts';
 import { buildSpa } from './spa.ts';
 import type { TaskEvent } from './handlers/tasks.http.ts';
 import { messagesHttpRoutes } from './handlers/messages.http.ts';
+import { loadPushVapidConfig, pushHttpRoutes } from './handlers/push.http.ts';
 import { usersHttpRoutes } from './handlers/users.http.ts';
 import { API_APPS } from './apps/registry.ts';
 import type {
@@ -191,6 +192,12 @@ export async function createAppInternal(
   const auth = authHttpRoutes({ db, rp });
   const messages = messagesHttpRoutes({ db, getPrincipal: getPrincipalFn });
   const users = usersHttpRoutes({ db, getPrincipal: getPrincipalFn });
+  // VAPID config is read at factory time; tests construct the factory
+  // without env vars set and get a null config (push endpoints 503).
+  // The actual web-push initialisation happens once in server.ts so
+  // a hot-restarted factory doesn't redundantly re-bind it.
+  const vapid = loadPushVapidConfig();
+  const push = pushHttpRoutes({ vapid });
 
   // App routes are composed from the registry; global concerns (auth, users,
   // the chat relay) are mounted directly — they are not apps.
@@ -279,7 +286,8 @@ export async function createAppInternal(
     .use(auth.public)
     .use(auth.authed)
     .use(messages)
-    .use(users);
+    .use(users)
+    .use(push);
   for (const app of apps) {
     builder = builder.use(app.routes(apiCtx));
   }

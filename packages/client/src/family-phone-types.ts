@@ -53,7 +53,10 @@ export type FamilyPhoneCallEvent =
   | { type: 'call:cancelled'; callId: string }
   | { type: 'call:hung-up'; callId: string; reason?: string }
   | { type: 'presence:changed'; deviceId: number; online: boolean }
-  | { type: 'directory:changed' };
+  | { type: 'directory:changed' }
+  | { type: 'push:subscribed' }
+  | { type: 'push:subscribe-failed'; reason: string }
+  | { type: 'push:unsubscribed' };
 
 /**
  * A live device-authenticated WebSocket. Returned by
@@ -84,6 +87,12 @@ export interface FamilyPhoneDeviceConnection {
    * the wire framing is parsed out by the connection.
    */
   subscribeAudio(handler: (callId: string, payload: Uint8Array) => void): () => void;
+  /** Register this device's Web Push subscription with the server so an
+   * offline call:invite can wake the phone. Server upserts by endpoint;
+   * calling again with the same endpoint refreshes the keys in place. */
+  subscribePush(input: { endpoint: string; p256dh: string; auth: string }): void;
+  /** Drop a Web Push subscription registration by its endpoint. */
+  unsubscribePush(endpoint: string): void;
   /** Tear down the connection. */
   close(): void;
 }

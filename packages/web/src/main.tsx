@@ -19,6 +19,7 @@ import { bindShowcaseForm } from './apps/showcase/stores.ts';
 import { ACTION_REGISTRY } from './actions/registry.ts';
 import { bootstrapDevices } from './apps/devices/actions.ts';
 import { installTaskUrlSync } from './apps/tasks/url-sync.ts';
+import { installServiceWorker } from './platform/service-worker.ts';
 import { installRouter } from './shell/router.ts';
 
 import '@fairfox/polly/ui/theme.css';
@@ -195,6 +196,10 @@ async function bootstrap(): Promise<void> {
   // `?code=` query untouched.
   installRouter();
   installTaskUrlSync();
+
+  // Register the notifications service worker. Best-effort — failures
+  // are logged and notifications stay disabled for the session.
+  void installServiceWorker();
 
   // Global Q shortcut: focus the quick-add input from anywhere on the page.
   // GTD-style capture should require one keystroke; the user shouldn't have to

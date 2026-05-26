@@ -264,6 +264,10 @@ export function createMockEalClient(): MockEalClient {
       /* mock: no-op */
     },
 
+    async renameFamilyPhoneDevice() {
+      /* mock: no-op */
+    },
+
     async connectFamilyPhoneDevice(input) {
       // Mock: returns a no-op handle. Tests that need to exercise the call
       // signalling pump should spin up the real api against an in-memory db.
@@ -277,6 +281,8 @@ export function createMockEalClient(): MockEalClient {
         subscribe() { return () => {}; },
         sendAudio() {},
         subscribeAudio() { return () => {}; },
+        subscribePush() {},
+        unsubscribePush() {},
         close() {},
       };
     },

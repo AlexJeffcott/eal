@@ -64,6 +64,23 @@ CREATE TABLE IF NOT EXISTS family_phone_device_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_family_phone_device_sessions_device_id  ON family_phone_device_sessions (device_id);
 CREATE INDEX IF NOT EXISTS idx_family_phone_device_sessions_expires_at ON family_phone_device_sessions (expires_at);
+
+-- One row per (device, browser-vendor push endpoint). A given device
+-- typically has one row (the active subscription), but a key rotation
+-- temporarily produces two until the old endpoint's vendor returns
+-- 404/410 and the row is dropped. Endpoint is the natural unique key;
+-- the device_id index lets the "wake target X" lookup walk just X's
+-- rows on every offline call.
+CREATE TABLE IF NOT EXISTS family_phone_push_subscriptions (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id   INTEGER NOT NULL REFERENCES family_phone_devices(id) ON DELETE CASCADE,
+  endpoint    TEXT    NOT NULL UNIQUE,
+  p256dh      TEXT    NOT NULL,
+  auth        TEXT    NOT NULL,
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_family_phone_push_subs_device_id ON family_phone_push_subscriptions (device_id);
 `;
 
 export const familyPhoneApp: ApiApp = {

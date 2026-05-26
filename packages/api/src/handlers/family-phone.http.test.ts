@@ -50,16 +50,22 @@ async function fetchJson(
   app: Awaited<ReturnType<typeof createTestApp>>,
   method: string,
   path: string,
+  body?: unknown,
 ): Promise<{ status: number; body: unknown }> {
-  const res = await app.handle(new Request(`https://localhost:3000${path}`, { method }));
+  const init: RequestInit = { method };
+  if (body !== undefined) {
+    init.headers = { 'content-type': 'application/json' };
+    init.body = JSON.stringify(body);
+  }
+  const res = await app.handle(new Request(`https://localhost:3000${path}`, init));
   const text = await res.text();
-  let body: unknown = text;
+  let parsed: unknown = text;
   try {
-    body = text.length === 0 ? null : JSON.parse(text);
+    parsed = text.length === 0 ? null : JSON.parse(text);
   } catch {
     /* keep text */
   }
-  return { status: res.status, body };
+  return { status: res.status, body: parsed };
 }
 
 function deviceIdsInDb(db: DatabaseClient): number[] {
@@ -160,6 +166,86 @@ describe('family-phone http wire contract', () => {
   test('DELETE /api/family-phone/devices/:id: 401 when unauthenticated', async () => {
     const app = await createTestApp(db, { principalOverride: null });
     const res = await fetchJson(app, 'DELETE', '/api/family-phone/devices/1');
+    expect(res.status).toBe(401);
+  });
+
+  test('PATCH /api/family-phone/devices/:id: owner can rename their own device', async () => {
+    interface InsertedRow { id: number }
+    const inserted = db
+      .prepare<InsertedRow, [number]>(
+        "INSERT INTO family_phone_devices (user_id, label, kind) VALUES (?, 'old', 'pwa') RETURNING id",
+      )
+      .get(alex.userId);
+    if (!inserted) throw new Error('insert returned no row');
+    const app = await createTestApp(db, { principalOverride: alex });
+    const res = await fetchJson(app, 'PATCH', `/api/family-phone/devices/${inserted.id}`, {
+      label: '  Alex iPhone  ',
+    });
+    expect(res.status).toBe(200);
+    interface Row { label: string }
+    const row = db
+      .prepare<Row, [number]>('SELECT label FROM family_phone_devices WHERE id = ?')
+      .get(inserted.id);
+    expect(row?.label).toBe('Alex iPhone');
+  });
+
+  test('PATCH /api/family-phone/devices/:id: 403 when caller does not own the device', async () => {
+    const elisa = createUsersRepo(db).insert({ displayName: 'elisa' });
+    interface InsertedRow { id: number }
+    const inserted = db
+      .prepare<InsertedRow, [number]>(
+        "INSERT INTO family_phone_devices (user_id, label, kind) VALUES (?, 'elisas', 'handset') RETURNING id",
+      )
+      .get(elisa.id);
+    if (!inserted) throw new Error('insert returned no row');
+    const app = await createTestApp(db, { principalOverride: alex });
+    const res = await fetchJson(app, 'PATCH', `/api/family-phone/devices/${inserted.id}`, {
+      label: 'hijack',
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test('PATCH /api/family-phone/devices/:id: 404 for an unknown device', async () => {
+    const app = await createTestApp(db, { principalOverride: alex });
+    const res = await fetchJson(app, 'PATCH', '/api/family-phone/devices/9999', {
+      label: 'x',
+    });
+    expect(res.status).toBe(404);
+  });
+
+  test('PATCH /api/family-phone/devices/:id: 400 for an empty label', async () => {
+    interface InsertedRow { id: number }
+    const inserted = db
+      .prepare<InsertedRow, [number]>(
+        "INSERT INTO family_phone_devices (user_id, label, kind) VALUES (?, 'old', 'pwa') RETURNING id",
+      )
+      .get(alex.userId);
+    if (!inserted) throw new Error('insert returned no row');
+    const app = await createTestApp(db, { principalOverride: alex });
+    const res = await fetchJson(app, 'PATCH', `/api/family-phone/devices/${inserted.id}`, {
+      label: '   ',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test('PATCH /api/family-phone/devices/:id: 400 for an over-long label', async () => {
+    interface InsertedRow { id: number }
+    const inserted = db
+      .prepare<InsertedRow, [number]>(
+        "INSERT INTO family_phone_devices (user_id, label, kind) VALUES (?, 'old', 'pwa') RETURNING id",
+      )
+      .get(alex.userId);
+    if (!inserted) throw new Error('insert returned no row');
+    const app = await createTestApp(db, { principalOverride: alex });
+    const res = await fetchJson(app, 'PATCH', `/api/family-phone/devices/${inserted.id}`, {
+      label: 'x'.repeat(61),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test('PATCH /api/family-phone/devices/:id: 401 when unauthenticated', async () => {
+    const app = await createTestApp(db, { principalOverride: null });
+    const res = await fetchJson(app, 'PATCH', '/api/family-phone/devices/1', { label: 'x' });
     expect(res.status).toBe(401);
   });
 

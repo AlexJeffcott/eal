@@ -1,5 +1,5 @@
-import { Button, Layout, Modal, Text } from '@fairfox/polly/ui';
-import { $navOpen } from './stores.ts';
+import { Badge, Button, Layout, Modal, Text } from '@fairfox/polly/ui';
+import { $currentUser, $navOpen } from './stores.ts';
 import { $route } from './router.ts';
 import { SignOut } from './auth/sign-out.tsx';
 import { CLI_PAIR_PATH } from './auth/cli-pair.tsx';
@@ -29,6 +29,11 @@ export function NavDrawer() {
             <Layout gap="var(--polly-space-xs)">
               <strong>eal</strong>
               <Text tone="muted">Elisa, Alex and Leo.</Text>
+              {$currentUser.value !== null ? (
+                <span data-current-user>
+                  <Badge variant="success">{$currentUser.value.displayName}</Badge>
+                </span>
+              ) : null}
             </Layout>
 
             <Layout gap="var(--polly-space-xs)">

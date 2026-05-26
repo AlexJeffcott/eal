@@ -57,17 +57,12 @@ export function App() {
             )}
             <span />
             {user ? (
-              <Layout inline columns="auto auto" gap="var(--polly-space-xs)" alignItems="center">
-                <Button
-                  tier="tertiary"
-                  size="small"
-                  data-action="chat:toggle"
-                  label="Assistant"
-                />
-                <span data-current-user>
-                  <Badge variant="success">{user.displayName}</Badge>
-                </span>
-              </Layout>
+              <Button
+                tier="tertiary"
+                size="small"
+                data-action="chat:toggle"
+                label="Assistant"
+              />
             ) : (
               <span />
             )}

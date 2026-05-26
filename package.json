@@ -14,6 +14,7 @@
     "@eal/shared": "workspace:*",
     "@stryker-mutator/core": "^9.6.1",
     "@types/bun": "1.3.13",
+    "@types/web-push": "^3.6.4",
     "fast-check": "^4.8.0",
     "puppeteer": "^25.0.4",
     "typescript": "6.0.3"

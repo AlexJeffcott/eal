@@ -1,7 +1,9 @@
 import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
+import webpush from 'web-push';
 import { createDb, type DatabaseClient } from './db/client.ts';
 import { getPrincipal } from './auth/principals.ts';
+import { loadPushVapidConfig } from './handlers/push.http.ts';
 import { createAppInternal } from './server-factory.ts';
 
 export { type App } from './server-factory.ts';
@@ -27,6 +29,21 @@ function resolveDatabasePath(): string {
   }
   return path;
 }
+
+/**
+ * Configure web-push's module-global VAPID identity once at boot, if
+ * keys are set. Subsequent webpush.sendNotification calls bind to
+ * this identity. Idempotent across hot restarts in the same process
+ * (calling setVapidDetails twice is fine), and tolerated to be a
+ * no-op when keys are absent — every push call short-circuits in
+ * that branch.
+ */
+function configurePushIfEnabled(): void {
+  const vapid = loadPushVapidConfig();
+  if (!vapid) return;
+  webpush.setVapidDetails(vapid.subject, vapid.publicKey, vapid.privateKey);
+}
+configurePushIfEnabled();
 
 export function createApp(db: DatabaseClient) {
   return createAppInternal(db, (request) => getPrincipal(request, db));

@@ -28,6 +28,9 @@ export interface FamilyPhoneDevicesRepo {
   /** Every device in the household, ordered by owner name then device id. */
   listAllWithOwner(): FamilyPhoneDeviceWithOwner[];
   findById(id: number): FamilyPhoneDeviceRow | null;
+  /** Set a new label on an existing device. Returns the patched row,
+   * or null when the id doesn't exist. */
+  renameById(id: number, label: string): FamilyPhoneDeviceRow | null;
   /** Removes the device. ON DELETE CASCADE clears its key, challenges, sessions. */
   deleteById(id: number): boolean;
 }
@@ -52,6 +55,12 @@ export function createFamilyPhoneDevicesRepo(db: DatabaseClient): FamilyPhoneDev
   const deleteByIdStmt = db.prepare<unknown, [number]>(
     'DELETE FROM family_phone_devices WHERE id = ?',
   );
+  const renameByIdStmt = db.prepare<FamilyPhoneDeviceRow, [string, number]>(
+    `UPDATE family_phone_devices
+     SET label = ?
+     WHERE id = ?
+     RETURNING id, user_id, label, kind, created_at, paired_at`,
+  );
 
   return {
     insert(input): FamilyPhoneDeviceRow {
@@ -69,6 +78,9 @@ export function createFamilyPhoneDevicesRepo(db: DatabaseClient): FamilyPhoneDev
     },
     findById(id): FamilyPhoneDeviceRow | null {
       return findByIdStmt.get(id) ?? null;
+    },
+    renameById(id, label): FamilyPhoneDeviceRow | null {
+      return renameByIdStmt.get(label, id) ?? null;
     },
     deleteById(id): boolean {
       return deleteByIdStmt.run(id).changes > 0;
