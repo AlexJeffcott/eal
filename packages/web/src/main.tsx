@@ -298,4 +298,16 @@ async function bootstrap(): Promise<void> {
   stores.$currentUser.value = me;
 }
 
+// Register the service worker if the browser supports it. The SW currently
+// only exists to satisfy Chrome's install-criteria heuristic — no caching,
+// no push handling — but living at the root scope means a future offline
+// or push story slots in without re-registering.
+if ('serviceWorker' in navigator) {
+  void navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((err) => {
+    // Service worker registration failures are non-fatal; the app works
+    // without it, just without the Add-to-Home-Screen banner on Android.
+    console.warn('service worker registration failed', err);
+  });
+}
+
 void bootstrap();
