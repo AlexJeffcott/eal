@@ -131,6 +131,14 @@ export const config: CoverageConfig = {
       reason: 'core unit-tested; realDeps wrapper + real WebCrypto key generation exercised once the voice-call e2e lands',
       claimedBy: 'n/a — exercised manually via `eal agent pair-phone` against a running api until scripts/e2e-agent-voice-call.ts lands',
     },
+    'packages/cli/src/commands/stt-whisper.ts': {
+      reason: 'cleanWhisperOutput unit-tested; the spawn/fetch paths are exercised against real whisper.cpp and the OpenAI API in manual bring-up',
+      claimedBy: 'n/a — exercised manually until scripts/e2e-agent-voice-call.ts lands',
+    },
+    'packages/cli/src/commands/tts-piper.ts': {
+      reason: 'wav/resample helpers unit-tested; the spawn paths are exercised against real piper and macOS say in manual bring-up',
+      claimedBy: 'n/a — exercised manually until scripts/e2e-agent-voice-call.ts lands',
+    },
     'packages/cli/src/commands/claude-runner.ts': {
       reason: 'pure helpers unit-tested; the real `claude` subprocess is exercised by the chat e2e',
       claimedBy: 'scripts/e2e-chat.ts',

@@ -10,6 +10,8 @@ import { DEFAULT_REJECT_REASON, installAgentPhoneHandler } from './agent-phone-l
 import { createVoiceLoop } from './voice-loop.ts';
 import type { SttProvider, TtsProvider } from './voice-providers.ts';
 import { createFixtureStt, createFixtureTts } from './voice-providers-fixture.ts';
+import { createWhisperHostedStt, createWhisperLocalStt } from './stt-whisper.ts';
+import { createPiperTts, createSayTts } from './tts-piper.ts';
 
 /**
  * `eal agent` — the long-running assistant worker.
@@ -223,11 +225,60 @@ async function startPhoneLoop(
 }
 
 function selectVoiceProviders(): { stt: SttProvider; tts: TtsProvider } | null {
-  const stt = process.env['EAL_STT_PROVIDER'];
-  const tts = process.env['EAL_TTS_PROVIDER'];
-  if (stt !== 'fixture' || tts !== 'fixture') return null;
-  // Only the fixture pair is wired today. Real Whisper/piper bindings
-  // land in a follow-up; until then voice is opt-in via env vars so
-  // accidental runs never advertise capability the worker does not have.
-  return { stt: createFixtureStt(), tts: createFixtureTts() };
+  const sttName = process.env['EAL_STT_PROVIDER'];
+  const ttsName = process.env['EAL_TTS_PROVIDER'];
+  if (sttName === undefined || ttsName === undefined) return null;
+  const stt = pickStt(sttName);
+  const tts = pickTts(ttsName);
+  if (stt === null || tts === null) return null;
+  return { stt, tts };
+}
+
+function pickStt(name: string): SttProvider | null {
+  if (name === 'fixture') return createFixtureStt();
+  if (name === 'whisper-local') {
+    const binPath = process.env['EAL_WHISPER_BIN'];
+    const modelPath = process.env['EAL_WHISPER_MODEL'];
+    if (!binPath || !modelPath) {
+      logError('eal agent: EAL_STT_PROVIDER=whisper-local requires EAL_WHISPER_BIN and EAL_WHISPER_MODEL');
+      return null;
+    }
+    return createWhisperLocalStt({ binPath, modelPath });
+  }
+  if (name === 'whisper-hosted') {
+    const apiKey = process.env['EAL_OPENAI_API_KEY'];
+    if (!apiKey) {
+      logError('eal agent: EAL_STT_PROVIDER=whisper-hosted requires EAL_OPENAI_API_KEY');
+      return null;
+    }
+    return createWhisperHostedStt({ apiKey });
+  }
+  logError(`eal agent: unknown EAL_STT_PROVIDER="${name}" (expected: fixture | whisper-local | whisper-hosted)`);
+  return null;
+}
+
+function pickTts(name: string): TtsProvider | null {
+  if (name === 'fixture') return createFixtureTts();
+  if (name === 'say') return createSayTts();
+  if (name === 'piper') {
+    const binPath = process.env['EAL_PIPER_BIN'];
+    const modelPath = process.env['EAL_PIPER_MODEL'];
+    if (!binPath || !modelPath) {
+      logError('eal agent: EAL_TTS_PROVIDER=piper requires EAL_PIPER_BIN and EAL_PIPER_MODEL');
+      return null;
+    }
+    const rateEnv = process.env['EAL_PIPER_RATE'];
+    const modelSampleRate = rateEnv ? Number(rateEnv) : undefined;
+    if (rateEnv !== undefined && (modelSampleRate === undefined || !Number.isFinite(modelSampleRate) || modelSampleRate <= 0)) {
+      logError(`eal agent: EAL_PIPER_RATE="${rateEnv}" is not a positive number`);
+      return null;
+    }
+    return createPiperTts(
+      modelSampleRate !== undefined
+        ? { binPath, modelPath, modelSampleRate }
+        : { binPath, modelPath },
+    );
+  }
+  logError(`eal agent: unknown EAL_TTS_PROVIDER="${name}" (expected: fixture | piper | say)`);
+  return null;
 }
