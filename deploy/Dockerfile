@@ -9,10 +9,18 @@ FROM oven/bun:1.3
 
 WORKDIR /app
 
-# Litestream binary, lifted from its official image. Pinned — and the pin MUST
-# match the version used in local dev (the replica format is not compatible
-# across the 0.3 / 0.5 lines). Check `litestream version` locally before bumping.
-COPY --from=litestream/litestream:0.5.11 /usr/local/bin/litestream /usr/local/bin/litestream
+# Litestream replicates to Tigris over HTTPS; the bun base image ships
+# without a CA bundle, so Litestream cannot verify the TLS chain and every
+# request fails with "x509: certificate signed by unknown authority".
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+# Litestream binary, lifted from its official image. Pinned to the stable
+# 0.3 line; the 0.5 line is a partial rewrite with an incompatible config
+# schema and is not yet ready for production. The replica format is not
+# compatible across the 0.3 / 0.5 lines either — bumping requires migrating
+# the existing replicas. Check `litestream version` locally before bumping.
+COPY --from=litestream/litestream:0.3.13 /usr/local/bin/litestream /usr/local/bin/litestream
 
 # Dependencies first — this layer is cached unless a manifest or the lockfile
 # changes. `packages/` carries both the workspace manifests and the source.

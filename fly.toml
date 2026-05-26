@@ -19,10 +19,6 @@ primary_region = "cdg"  # closest Fly region to Italy
   # The platform proxy terminates TLS; the container speaks plain HTTP.
   SKIP_TLS = "1"
   LITESTREAM_CONFIG = "deploy/litestream.yml"
-  # First deploy bypasses Litestream — ephemeral disk only, data resets on
-  # every machine start. Wire up the LITESTREAM_* secrets and drop this once
-  # the deploy is worth keeping.
-  SKIP_LITESTREAM = "1"
   EAL_ORIGIN = "https://eal.fly.dev"
 
 [http_service]

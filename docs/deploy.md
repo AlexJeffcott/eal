@@ -44,18 +44,14 @@ vars — Fly's **Tigris** is the natural fit, but any S3-compatible store works.
 ## Fly.io
 
 1. `fly launch --no-deploy` — accept `fly.toml`; it sets `app` and the region.
-2. Create a Tigris bucket: `fly storage create`. It prints the bucket name,
-   endpoint, and keys.
-3. Set the Litestream config as secrets:
-   ```sh
-   fly secrets set \
-     LITESTREAM_BUCKET=… LITESTREAM_PATH=db \
-     LITESTREAM_ENDPOINT=… LITESTREAM_REGION=auto \
-     LITESTREAM_ACCESS_KEY_ID=… LITESTREAM_SECRET_ACCESS_KEY=…
-   ```
-4. Edit `EAL_ORIGIN` in `fly.toml` to your real hostname (`https://<app>.fly.dev`
+2. Create a Tigris bucket: `fly storage create -a <app> -n <bucket>`. Fly
+   sets `BUCKET_NAME` + `AWS_ENDPOINT_URL_S3` + `AWS_REGION` +
+   `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` as secrets on the app.
+   `deploy/litestream.yml` reads them directly — no `fly secrets set` for
+   Litestream needed.
+3. Edit `EAL_ORIGIN` in `fly.toml` to your real hostname (`https://<app>.fly.dev`
    or a custom domain).
-5. `fly deploy`. Fly health-checks `/public/health` before routing.
+4. `fly deploy`. Fly health-checks `/public/health` before routing.
 
 ## Verifying before you deploy
 
