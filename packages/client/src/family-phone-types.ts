@@ -11,6 +11,11 @@ export interface FamilyPhoneDevice {
   kind: FamilyPhoneDeviceKind;
   createdAt: string;
   pairedAt: string | null;
+  /** The user who owns this device — for "Leo's handset (Leo)" rendering. */
+  ownerUserId: number;
+  ownerDisplayName: string;
+  /** True if the device currently holds an open device-authed WS to the server. */
+  online: boolean;
 }
 
 export interface FamilyPhonePairStartInput {

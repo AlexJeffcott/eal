@@ -46,7 +46,10 @@ function readDeviceAuth(
   return { deviceId: msg.device_id, nonce: msg.nonce, signature: msg.signature };
 }
 
-export function createFamilyPhoneWsHandler(ctx: WsAppContext): WsMessageHandler {
+export function createFamilyPhoneWsHandler(
+  ctx: WsAppContext,
+  onlineDevices: Set<number>,
+): WsMessageHandler {
   const challenges = createFamilyPhoneChallengesRepo(ctx.db);
   const deviceKeys = createFamilyPhoneDeviceKeysRepo(ctx.db);
   const sessions = createFamilyPhoneDeviceSessionsRepo(ctx.db);
@@ -91,6 +94,7 @@ export function createFamilyPhoneWsHandler(ctx: WsAppContext): WsMessageHandler 
       }
       wsDevices.set(ws.id, fields.deviceId);
       deviceToWs.set(fields.deviceId, ws.id);
+      onlineDevices.add(fields.deviceId);
       return true;
     },
 
@@ -208,7 +212,10 @@ export function createFamilyPhoneWsHandler(ctx: WsAppContext): WsMessageHandler 
     onClose(ws: WsLike): void {
       const deviceId = wsDevices.get(ws.id);
       wsDevices.delete(ws.id);
-      if (deviceId !== undefined) deviceToWs.delete(deviceId);
+      if (deviceId !== undefined) {
+        deviceToWs.delete(deviceId);
+        onlineDevices.delete(deviceId);
+      }
       // Tear down any call this connection was party to. The peer learns
       // via call:hung-up with reason 'peer-disconnect' so the UI can
       // distinguish a clean hangup from a crash.

@@ -630,6 +630,8 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
         kind: 'handset' | 'pwa' | 'agent';
         created_at: string;
         paired_at: string | null;
+        owner_display_name: string;
+        online: boolean;
       }
       const { devices } = await getJsonOrThrow<{ devices: WireRow[] }>(
         '/api/family-phone/devices',
@@ -640,6 +642,9 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
         kind: d.kind,
         createdAt: d.created_at,
         pairedAt: d.paired_at,
+        ownerUserId: d.user_id,
+        ownerDisplayName: d.owner_display_name,
+        online: d.online,
       }));
     },
 

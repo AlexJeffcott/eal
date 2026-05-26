@@ -251,7 +251,7 @@ export function FamilyPhonePanel() {
             <Layout gap="var(--polly-space-xs)">
               {devices.map((d) => {
                 const isSelf = paired !== null && paired.deviceId === d.id;
-                const canCall = connection !== null && !isSelf && active === null;
+                const canCall = connection !== null && !isSelf && active === null && d.online;
                 return (
                   <Cluster
                     key={d.id}
@@ -261,11 +261,14 @@ export function FamilyPhonePanel() {
                   >
                     <Cluster gap="var(--polly-space-sm)">
                       <Text weight="medium">{d.label}</Text>
+                      <Text tone="muted">({d.ownerDisplayName})</Text>
                       {isSelf && <Badge variant="info">this device</Badge>}
                     </Cluster>
                     <Cluster gap="var(--polly-space-xs)">
+                      <Badge variant={d.online ? 'success' : 'default'}>
+                        {d.online ? 'online' : 'offline'}
+                      </Badge>
                       <Badge variant="default">{d.kind}</Badge>
-                      <Text tone="muted">#{d.id}</Text>
                       <Button
                         tier="secondary"
                         label="Call"

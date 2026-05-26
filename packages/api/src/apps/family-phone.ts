@@ -89,6 +89,7 @@ export const familyPhoneApp: ApiApp = {
     const devices = familyPhoneHttpRoutes({
       db: ctx.db,
       getPrincipal: ctx.getPrincipal,
+      onlineDevices: ONLINE_DEVICES,
     });
     const pair = familyPhonePairHttpRoutes({
       db: ctx.db,
@@ -100,6 +101,14 @@ export const familyPhoneApp: ApiApp = {
   ws: {
     prefix: 'call',
     binaryTag: 0x10,
-    handler: createFamilyPhoneWsHandler,
+    handler: (ctx) => createFamilyPhoneWsHandler(ctx, ONLINE_DEVICES),
   },
 };
+
+/**
+ * Per-process presence set, shared between the WS handler (which mutates it
+ * on device auth/close) and the directory HTTP route (which reads it to
+ * paint online/offline per row). Process-local — the single-machine deploy
+ * makes that fine; a future multi-machine setup moves this to Redis.
+ */
+const ONLINE_DEVICES = new Set<number>();

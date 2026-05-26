@@ -6,6 +6,12 @@ import { createFamilyPhoneDevicesRepo } from '../db/repos/family-phone-devices.t
 export interface FamilyPhoneRoutesContext {
   db: DatabaseClient;
   getPrincipal: (request: Request) => Principal | null;
+  /**
+   * Live set of currently-online device ids. Family-phone's WS handler
+   * mutates this on auth/close so the directory endpoint can paint
+   * presence without an extra round-trip.
+   */
+  onlineDevices: Set<number>;
 }
 
 export function familyPhoneHttpRoutes(ctx: FamilyPhoneRoutesContext) {
@@ -14,6 +20,16 @@ export function familyPhoneHttpRoutes(ctx: FamilyPhoneRoutesContext) {
     .get('/devices', ({ request }) => {
       const principal = ctx.getPrincipal(request);
       if (!principal) return { error: 'unauthenticated' };
-      return { devices: devices.listByUserId(principal.userId) };
+      const rows = devices.listAllWithOwner().map((d) => ({
+        id: d.id,
+        user_id: d.user_id,
+        label: d.label,
+        kind: d.kind,
+        created_at: d.created_at,
+        paired_at: d.paired_at,
+        owner_display_name: d.owner_display_name,
+        online: ctx.onlineDevices.has(d.id),
+      }));
+      return { devices: rows };
     });
 }

@@ -9,6 +9,15 @@ export interface FamilyPhoneDeviceRow {
   paired_at: string | null;
 }
 
+/**
+ * Device row joined with its owner's display name. The directory endpoint
+ * returns this shape so every row carries enough context to render
+ * "Leo's handset (Leo)" without a second round-trip.
+ */
+export interface FamilyPhoneDeviceWithOwner extends FamilyPhoneDeviceRow {
+  owner_display_name: string;
+}
+
 export interface FamilyPhoneDevicesRepo {
   insert(input: {
     userId: number;
@@ -16,7 +25,8 @@ export interface FamilyPhoneDevicesRepo {
     kind: 'handset' | 'pwa' | 'agent';
     pairedAt?: string;
   }): FamilyPhoneDeviceRow;
-  listByUserId(userId: number): FamilyPhoneDeviceRow[];
+  /** Every device in the household, ordered by owner name then device id. */
+  listAllWithOwner(): FamilyPhoneDeviceWithOwner[];
 }
 
 export function createFamilyPhoneDevicesRepo(db: DatabaseClient): FamilyPhoneDevicesRepo {
@@ -25,9 +35,12 @@ export function createFamilyPhoneDevicesRepo(db: DatabaseClient): FamilyPhoneDev
      VALUES (?, ?, ?, ?)
      RETURNING id, user_id, label, kind, created_at, paired_at`,
   );
-  const listByUserIdStmt = db.prepare<FamilyPhoneDeviceRow, [number]>(
-    `SELECT id, user_id, label, kind, created_at, paired_at
-     FROM family_phone_devices WHERE user_id = ? ORDER BY id ASC`,
+  const listAllStmt = db.prepare<FamilyPhoneDeviceWithOwner, []>(
+    `SELECT d.id, d.user_id, d.label, d.kind, d.created_at, d.paired_at,
+            u.display_name AS owner_display_name
+     FROM family_phone_devices d
+     JOIN users u ON u.id = d.user_id
+     ORDER BY u.display_name COLLATE NOCASE, d.id`,
   );
 
   return {
@@ -41,8 +54,8 @@ export function createFamilyPhoneDevicesRepo(db: DatabaseClient): FamilyPhoneDev
       if (!row) throw new Error('family_phone_devices.insert: RETURNING gave no row');
       return row;
     },
-    listByUserId(userId): FamilyPhoneDeviceRow[] {
-      return listByUserIdStmt.all(userId);
+    listAllWithOwner(): FamilyPhoneDeviceWithOwner[] {
+      return listAllStmt.all();
     },
   };
 }

@@ -11,6 +11,8 @@ interface DeviceRow {
   label: string;
   kind: 'handset' | 'pwa' | 'agent';
   created_at: string;
+  owner_display_name: string;
+  online: boolean;
 }
 
 interface DevicesResponse {
@@ -19,7 +21,12 @@ interface DevicesResponse {
 
 function isDeviceRow(value: unknown): value is DeviceRow {
   if (typeof value !== 'object' || value === null) return false;
-  if (!('id' in value && 'user_id' in value && 'label' in value && 'kind' in value && 'created_at' in value)) {
+  if (
+    !(
+      'id' in value && 'user_id' in value && 'label' in value && 'kind' in value &&
+      'created_at' in value && 'owner_display_name' in value && 'online' in value
+    )
+  ) {
     return false;
   }
   return (
@@ -27,7 +34,9 @@ function isDeviceRow(value: unknown): value is DeviceRow {
     typeof value.user_id === 'number' &&
     typeof value.label === 'string' &&
     (value.kind === 'handset' || value.kind === 'pwa' || value.kind === 'agent') &&
-    typeof value.created_at === 'string'
+    typeof value.created_at === 'string' &&
+    typeof value.owner_display_name === 'string' &&
+    typeof value.online === 'boolean'
   );
 }
 
@@ -64,7 +73,7 @@ describe('family-phone http wire contract', () => {
     alex = { userId: u.id, displayName: u.display_name };
   });
 
-  test('GET /api/family-phone/devices: returns the caller\'s devices only', async () => {
+  test("GET /api/family-phone/devices: returns the household's devices with owner names", async () => {
     const elisa = createUsersRepo(db).insert({ displayName: 'elisa' });
     db.prepare(
       "INSERT INTO family_phone_devices (user_id, label, kind) VALUES (?, ?, ?)",
@@ -82,11 +91,15 @@ describe('family-phone http wire contract', () => {
     expect(res.status).toBe(200);
     expect(isDevicesResponse(res.body)).toBe(true);
     if (!isDevicesResponse(res.body)) throw new Error('unreachable');
-    expect(res.body.devices.length).toBe(2);
+    expect(res.body.devices.length).toBe(3);
     expect(res.body.devices.map((d) => d.label).sort()).toEqual([
       "Alex's handset",
       "Alex's laptop PWA",
+      "Elisa's handset",
     ]);
+    const elisaRow = res.body.devices.find((d) => d.label === "Elisa's handset");
+    expect(elisaRow?.owner_display_name).toBe('elisa');
+    expect(elisaRow?.online).toBe(false);
   });
 
   test('GET /api/family-phone/devices: 401 when unauthenticated', async () => {
