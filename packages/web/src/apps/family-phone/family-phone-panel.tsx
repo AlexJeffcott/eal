@@ -193,10 +193,11 @@ export function FamilyPhonePanel() {
       {paired === null ? (
         <Surface variant="callout" padding="var(--polly-space-md)">
           <Layout gap="var(--polly-space-md)">
-            <Text as="h2" weight="bold">Join with a code</Text>
+            <Text as="h2" weight="bold">Join the household</Text>
             <Text tone="muted">
-              Add this browser to the household using a code from a device
-              that is already in. Name the device whatever you'll call it.
+              Add this browser to the household using an invite code from
+              a device that is already in. Name the device whatever you
+              like.
             </Text>
             <Layout gap="var(--polly-space-sm)">
               <ActionInput
