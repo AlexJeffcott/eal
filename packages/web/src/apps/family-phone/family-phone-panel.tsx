@@ -163,6 +163,15 @@ export function FamilyPhonePanel() {
               {devices.map((d) => {
                 const isSelf = paired !== null && paired.deviceId === d.id;
                 const canCall = connection !== null && !isSelf && active === null && d.online;
+                const reason = isSelf
+                  ? 'This is your own device.'
+                  : connection === null
+                    ? 'Pair this browser in Devices to place a call.'
+                    : active !== null
+                      ? 'Already in a call.'
+                      : !d.online
+                        ? 'That device is offline.'
+                        : undefined;
                 return (
                   <Cluster
                     key={d.id}
@@ -183,6 +192,7 @@ export function FamilyPhonePanel() {
                         tier="primary"
                         label="Call"
                         disabled={!canCall}
+                        {...(reason ? { title: reason } : {})}
                         data-action="family-phone:place-call"
                         data-action-target-device-id={String(d.id)}
                       />

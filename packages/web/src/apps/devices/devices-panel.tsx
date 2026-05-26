@@ -14,6 +14,7 @@ import {
   $deviceConnection,
   $devices,
   $devicesError,
+  $notificationPermission,
   $pairCompleteCode,
   $pairCompleteKind,
   $pairCompleteLabel,
@@ -136,11 +137,13 @@ export function DevicesPanel() {
                 )}
               </Cluster>
               <Cluster gap="var(--polly-space-xs)">
-                <Button
-                  tier="tertiary"
-                  label="Enable notifications"
-                  data-action="devices:request-permissions"
-                />
+                {$notificationPermission.value !== 'granted' && (
+                  <Button
+                    tier="tertiary"
+                    label="Enable notifications"
+                    data-action="devices:request-permissions"
+                  />
+                )}
                 <Button
                   tier="tertiary"
                   color="danger"

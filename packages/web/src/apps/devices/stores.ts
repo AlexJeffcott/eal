@@ -41,6 +41,15 @@ export const $pairedThisSession = $state<PairedThisSession | null>(null);
  */
 export const $deviceConnection = $state<FamilyPhoneDeviceConnection | null>(null);
 
+/**
+ * Cached snapshot of the Notification permission state. Updated on app
+ * boot and after every devices:request-permissions invocation; the
+ * Devices panel reads it to decide whether to render the "Enable
+ * notifications" button at all.
+ */
+export const $notificationPermission =
+  $state<NotificationPermission | 'unsupported'>('default');
+
 export interface DevicesStores {
   $devices: typeof $devices;
   $devicesError: typeof $devicesError;
@@ -51,6 +60,7 @@ export interface DevicesStores {
   $pairCompleteKind: typeof $pairCompleteKind;
   $pairedThisSession: typeof $pairedThisSession;
   $deviceConnection: typeof $deviceConnection;
+  $notificationPermission: typeof $notificationPermission;
 }
 
 export function createDevicesStores(): DevicesStores {
@@ -64,6 +74,7 @@ export function createDevicesStores(): DevicesStores {
     $pairCompleteKind,
     $pairedThisSession,
     $deviceConnection,
+    $notificationPermission,
   };
 }
 
@@ -78,4 +89,5 @@ export function resetDevicesStores(): void {
   $pairedThisSession.value = null;
   $deviceConnection.value?.close();
   $deviceConnection.value = null;
+  $notificationPermission.value = 'default';
 }

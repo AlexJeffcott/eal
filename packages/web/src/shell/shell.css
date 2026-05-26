@@ -12,6 +12,34 @@
   position: sticky;
   inset-block-start: 0;
   z-index: 10;
+  /*
+   * Respect iOS's status-bar safe area when the app is installed as a
+   * standalone PWA. The status bar overlays the page (because we set
+   * apple-mobile-web-app-status-bar-style=black-translucent on the shell
+   * HTML) — without padding here the top of the menu sits *under* the
+   * clock and battery indicator. Zero on platforms without notches.
+   */
+  padding-block-start: env(safe-area-inset-top, 0);
+  padding-inline-start: env(safe-area-inset-left, 0);
+  padding-inline-end: env(safe-area-inset-right, 0);
+}
+
+/*
+ * Long inline error strings (network failures, server stack traces leaking
+ * through) used to overflow their badge and blow out the page layout. Force
+ * wrap on whitespace, break truly-long tokens (URLs, opaque IDs) on any
+ * character, and cap the height with a scroll so a multi-paragraph error
+ * stays inside the callout.
+ */
+.shell-callout-danger {
+  --polly-border: var(--polly-status-danger-text);
+}
+.shell-callout-danger,
+[data-polly-badge][data-polly-variant='danger'] {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-block-size: 12rem;
+  overflow-y: auto;
 }
 
 /*
@@ -79,11 +107,6 @@
 }
 .eal-clickable {
   cursor: pointer;
-}
-
-/* The "live updates offline" callout recolours its border to the danger tone. */
-.shell-callout-danger {
-  --polly-border: var(--polly-status-danger-text);
 }
 
 /* The assistant transcript scrolls within the sheet; the sheet itself doesn't. */

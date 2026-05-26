@@ -679,27 +679,16 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
 
     async connectFamilyPhoneDevice(input): Promise<FamilyPhoneDeviceConnection> {
       const { deviceId, privateKey } = input;
-      // 1. Fetch a fresh nonce. The route is ownsAuthFor-exempt; the server
-      // 404s if the device id is unknown so we surface that early.
-      const { nonce } = await postJson<{ nonce: string; expires_at: string }>(
-        '/api/family-phone/device/challenge',
-        { device_id: deviceId },
-      );
-      // 2. Sign the nonce with the device private key.
-      const nonceBytes = fromBase64UrlBytes(nonce);
-      const sigBuf = await crypto.subtle.sign(
-        { name: 'ECDSA', hash: 'SHA-256' },
-        privateKey,
-        nonceBytes,
-      );
-      const signature = toBase64UrlBytes(new Uint8Array(sigBuf));
-
-      // 3. Open the WS and send the device-auth handshake.
-      const ws = new WebSocket(wsUrl);
-      ws.binaryType = 'arraybuffer';
+      // Subscribers survive reconnects — bound to the handle, not the WS.
       const subscribers = new Set<(event: FamilyPhoneCallEvent) => void>();
       const audioSubscribers = new Set<(callId: string, payload: Uint8Array) => void>();
-      ws.addEventListener('message', (e: MessageEvent) => {
+      // The live socket; swapped on every reconnect. `closed` records the
+      // caller's intent — set by close(), it stops the reconnect loop.
+      let ws: WebSocket | null = null;
+      let closed = false;
+      let reconnectAttempt = 0;
+
+      function onMessage(e: MessageEvent): void {
         if (typeof e.data === 'string') {
           const event = parseFamilyPhoneCallEvent(e.data);
           if (event) for (const h of subscribers) h(event);
@@ -713,37 +702,68 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
           const payload = view.slice(17);
           for (const h of audioSubscribers) h(callId, payload);
         }
-      });
-      await new Promise<void>((resolveOpen, rejectOpen) => {
-        ws.addEventListener('open', () => resolveOpen(), { once: true });
-        ws.addEventListener('error', () => rejectOpen(new Error('device ws connect failed')), {
-          once: true,
+      }
+
+      async function openOnce(): Promise<void> {
+        // Each connect needs a fresh nonce — challenges are single-use.
+        const { nonce } = await postJson<{ nonce: string; expires_at: string }>(
+          '/api/family-phone/device/challenge',
+          { device_id: deviceId },
+        );
+        const nonceBytes = fromBase64UrlBytes(nonce);
+        const sigBuf = await crypto.subtle.sign(
+          { name: 'ECDSA', hash: 'SHA-256' },
+          privateKey,
+          nonceBytes,
+        );
+        const signature = toBase64UrlBytes(new Uint8Array(sigBuf));
+        const socket = new WebSocket(wsUrl);
+        socket.binaryType = 'arraybuffer';
+        socket.addEventListener('message', onMessage);
+        await new Promise<void>((resolveOpen, rejectOpen) => {
+          socket.addEventListener('open', () => resolveOpen(), { once: true });
+          socket.addEventListener('error', () => rejectOpen(new Error('device ws connect failed')), {
+            once: true,
+          });
         });
-      });
-      await new Promise<void>((resolveAuth, rejectAuth) => {
-        const onAuth = (e: MessageEvent): void => {
-          if (typeof e.data !== 'string') return;
-          let parsed: { type?: string; code?: string; message?: string };
-          try { parsed = JSON.parse(e.data); } catch { return; }
-          if (parsed.type === 'auth:ok') {
-            ws.removeEventListener('message', onAuth);
-            resolveAuth();
-          } else if (parsed.type === 'error' && parsed.code === 'unauthenticated') {
-            ws.removeEventListener('message', onAuth);
-            rejectAuth(new Error(`device ws auth rejected: ${parsed.message ?? ''}`));
-          }
-        };
-        ws.addEventListener('message', onAuth);
-        ws.send(JSON.stringify({
-          type: 'auth',
-          device_id: deviceId,
-          nonce,
-          signature,
-        }));
-      });
+        await new Promise<void>((resolveAuth, rejectAuth) => {
+          const onAuth = (e: MessageEvent): void => {
+            if (typeof e.data !== 'string') return;
+            let parsed: { type?: string; code?: string; message?: string };
+            try { parsed = JSON.parse(e.data); } catch { return; }
+            if (parsed.type === 'auth:ok') {
+              socket.removeEventListener('message', onAuth);
+              resolveAuth();
+            } else if (parsed.type === 'error' && parsed.code === 'unauthenticated') {
+              socket.removeEventListener('message', onAuth);
+              rejectAuth(new Error(`device ws auth rejected: ${parsed.message ?? ''}`));
+            }
+          };
+          socket.addEventListener('message', onAuth);
+          socket.send(JSON.stringify({ type: 'auth', device_id: deviceId, nonce, signature }));
+        });
+        // Reconnect on unexpected close. Phones suspending their tab, network
+        // changes, and Fly machine restarts all close the underlying WS;
+        // without this the panel shows the device as online but no call ever
+        // arrives. Exponential backoff capped at 30s.
+        socket.addEventListener('close', () => {
+          if (closed) return;
+          ws = null;
+          const delayMs = Math.min(30_000, 500 * 2 ** reconnectAttempt);
+          reconnectAttempt += 1;
+          setTimeout(() => {
+            if (closed) return;
+            openOnce().catch(() => { /* will retry on next close */ });
+          }, delayMs);
+        });
+        ws = socket;
+        reconnectAttempt = 0;
+      }
+
+      await openOnce();
 
       function sendCall(payload: unknown): void {
-        ws.send(JSON.stringify(payload));
+        ws?.send(JSON.stringify(payload));
       }
 
       return {
@@ -768,6 +788,7 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
           return () => subscribers.delete(handler);
         },
         sendAudio(callId, payload) {
+          if (!ws) return;
           const frame = new Uint8Array(new ArrayBuffer(1 + 16 + payload.byteLength));
           frame[0] = AUDIO_TAG;
           const idBytes = new TextEncoder().encode(callId).slice(0, 16);
@@ -780,9 +801,11 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
           return () => audioSubscribers.delete(handler);
         },
         close() {
+          closed = true;
           subscribers.clear();
           audioSubscribers.clear();
-          ws.close();
+          ws?.close();
+          ws = null;
         },
       };
     },

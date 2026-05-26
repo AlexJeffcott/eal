@@ -12,6 +12,7 @@ import {
   $pairStartSecondsLeft,
   type PairedThisSession,
 } from './stores.ts';
+import { Notification } from '../../platform/notification.ts';
 import { clearPairedDevice, loadPairedDevice, savePairedDevice } from './keystore.ts';
 import { subtleCrypto } from '../../platform/subtle-crypto.ts';
 // Family-phone subscribes its own call:* handler to the same WS connection
@@ -119,6 +120,10 @@ async function openDeviceConnection(
  */
 export async function bootstrapDevices(stores: AppStores): Promise<void> {
   clientRef = stores.client;
+  // Snapshot the Notification permission so the panel can hide the
+  // "Enable notifications" button when it's already granted.
+  stores.$notificationPermission.value =
+    Notification === null ? 'unsupported' : Notification.permission;
   let persisted;
   try {
     persisted = await loadPairedDevice();
@@ -246,6 +251,7 @@ export const DEVICES_ACTIONS: ActionRegistry<AppStores> = {
       // Failure is non-fatal — the user can re-prompt manually later.
       try {
         const perms = await requestCallPermissions();
+        stores.$notificationPermission.value = perms.notifications;
         if (perms.notifications === 'denied') {
           stores.$devicesError.value =
             'Notification permission denied. Re-enable it in your browser\'s site settings to hear ringing.';
@@ -259,6 +265,7 @@ export const DEVICES_ACTIONS: ActionRegistry<AppStores> = {
   'devices:request-permissions': async ({ stores }) => {
     try {
       const perms = await requestCallPermissions();
+      stores.$notificationPermission.value = perms.notifications;
       if (perms.notifications === 'denied') {
         stores.$devicesError.value =
           'Notification permission denied. Re-enable it in your browser\'s site settings.';
