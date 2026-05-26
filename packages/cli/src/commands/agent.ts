@@ -1,9 +1,12 @@
-import { createEalClient, type ChatAgentReply, type ChatAgentRequest } from '@eal/client';
+import { createEalClient, type ChatAgentReply, type ChatAgentRequest, type EalClient } from '@eal/client';
 import { delay } from '@eal/shared';
 import { readToken, tokenPath } from '../lib/token-store.ts';
+import { readAgentDevice, type AgentDeviceRecord } from '../lib/agent-device-store.ts';
+import { importAgentPrivateKey } from '../lib/agent-key-import.ts';
 import { log, logError } from '../lib/process.ts';
 import type { GlobalOptions } from '../types.ts';
 import { createClaudeRunner, type ClaudeRunner } from './claude-runner.ts';
+import { DEFAULT_REJECT_REASON, installAgentPhoneHandler } from './agent-phone-loop.ts';
 
 /**
  * `eal agent` — the long-running assistant worker.
@@ -96,6 +99,16 @@ async function runAgentWorker(global: GlobalOptions): Promise<number> {
   log('eal agent: starting — the web app can now chat with the assistant.');
   log('  Press Ctrl-C to stop.');
 
+  // Family-phone identity is optional. If the device record is present
+  // the worker also appears on the call network; without it the chat
+  // path still works and we just point the operator at the pair command.
+  const phoneRecord = readAgentDevice();
+  if (phoneRecord === null) {
+    log('eal agent: voice disabled — run `eal agent pair-phone --code=<user-code>` to register on family-phone.');
+  } else {
+    void startPhoneLoop(client, phoneRecord);
+  }
+
   // A dropped socket triggers `onClose`, which resolves the per-attempt
   // `closed` promise; the loop then backs off and reconnects. Never returns.
   let backoffMs = RECONNECT_BASE_MS;
@@ -134,6 +147,44 @@ async function runAgentWorker(global: GlobalOptions): Promise<number> {
     // Backoff before reconnecting: here the wait itself is the behaviour.
     // Doubles on each consecutive failure (capped) and is reset above once a
     // connection succeeds.
+    await delay(backoffMs);
+    backoffMs = Math.min(backoffMs * 2, RECONNECT_MAX_MS);
+  }
+}
+
+/**
+ * Open the agent's family-phone device socket and install the
+ * placeholder call handler. The underlying connection manages its own
+ * reconnect-on-close (see `connectFamilyPhoneDevice` in eal-client.ts),
+ * so this function only needs to retry the *initial* open — once a
+ * first connect succeeds, drops are handled internally.
+ */
+async function startPhoneLoop(client: EalClient, record: AgentDeviceRecord): Promise<void> {
+  let privateKey: CryptoKey;
+  try {
+    privateKey = await importAgentPrivateKey(record.privateKeyPkcs8B64);
+  } catch (err) {
+    logError(
+      `eal agent: family-phone key import failed: ${err instanceof Error ? err.message : String(err)} — voice disabled until next restart`,
+    );
+    return;
+  }
+
+  let backoffMs = RECONNECT_BASE_MS;
+  for (;;) {
+    try {
+      const connection = await client.connectFamilyPhoneDevice({
+        deviceId: record.deviceId,
+        privateKey,
+      });
+      installAgentPhoneHandler(connection, { log, rejectReason: DEFAULT_REJECT_REASON });
+      log(`eal agent: family-phone device ${record.deviceId} ("${record.label}") online — incoming calls will be politely rejected until the voice loop lands.`);
+      return;
+    } catch (err) {
+      logError(
+        `eal agent: family-phone connect failed: ${err instanceof Error ? err.message : String(err)} — retry in ${backoffMs}ms`,
+      );
+    }
     await delay(backoffMs);
     backoffMs = Math.min(backoffMs * 2, RECONNECT_MAX_MS);
   }
