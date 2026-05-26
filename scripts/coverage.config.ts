@@ -127,6 +127,10 @@ export const config: CoverageConfig = {
       reason: 'handleChatRequest is unit-tested; the connect/reconnect daemon loop runs in the chat e2e',
       claimedBy: 'scripts/e2e-chat.ts',
     },
+    'packages/cli/src/commands/agent-pair-phone.ts': {
+      reason: 'core unit-tested; realDeps wrapper + real WebCrypto key generation exercised once the voice-call e2e lands',
+      claimedBy: 'n/a — exercised manually via `eal agent pair-phone` against a running api until scripts/e2e-agent-voice-call.ts lands',
+    },
     'packages/cli/src/commands/claude-runner.ts': {
       reason: 'pure helpers unit-tested; the real `claude` subprocess is exercised by the chat e2e',
       claimedBy: 'scripts/e2e-chat.ts',

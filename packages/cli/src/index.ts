@@ -18,7 +18,8 @@ const COMMANDS: Record<string, CommandSpec> = {
     },
   },
   agent: {
-    description: 'Run the assistant worker — lets the web app chat with Claude',
+    description:
+      'Run the assistant worker, or pair it onto family-phone (subcommands: pair-phone)',
     handler: async (global) => {
       const { agentCommand } = await import('./commands/agent.ts');
       return agentCommand(global);

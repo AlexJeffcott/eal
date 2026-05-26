@@ -59,8 +59,28 @@ export async function handleChatRequest(
   }
 }
 
-/** Dispatcher: `eal agent`. Runs until the process is killed. */
+/**
+ * Dispatcher: `eal agent [subcommand]`.
+ *
+ * With no subcommand it runs the long-running worker loop. With
+ * `pair-phone` it routes to the family-phone device pairing flow so the
+ * worker can later identify itself on the call network.
+ */
 export async function agentCommand(global: GlobalOptions): Promise<number> {
+  const first = global.commandArgs[0];
+  if (first === 'pair-phone') {
+    const { agentPairPhoneCommand } = await import('./agent-pair-phone.ts');
+    return agentPairPhoneCommand({ ...global, commandArgs: global.commandArgs.slice(1) });
+  }
+  if (first !== undefined && first.startsWith('-') === false) {
+    logError(`eal agent: unknown subcommand "${first}"`);
+    logError('  expected: pair-phone (or no subcommand to run the worker)');
+    return 1;
+  }
+  return runAgentWorker(global);
+}
+
+async function runAgentWorker(global: GlobalOptions): Promise<number> {
   const token = readToken(global.tokenPathOverride);
   if (token === null) {
     logError('eal agent: this device is not paired — run `eal auth pair --label=<name>` first.');
