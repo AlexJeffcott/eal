@@ -26,3 +26,25 @@
 .family-phone-error {
   border-left: 4px solid var(--polly-color-danger, #e34);
 }
+
+.family-phone-incoming {
+  border-left: 4px solid var(--polly-color-info, #2af);
+  animation: family-phone-ring 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes family-phone-ring {
+  from {
+    box-shadow: 0 0 0 0 rgba(64, 128, 255, 0.4);
+  }
+  to {
+    box-shadow: 0 0 0 6px rgba(64, 128, 255, 0);
+  }
+}
+
+.family-phone-active-call {
+  border-left: 4px solid var(--polly-color-success, #2c7);
+}
+
+.family-phone-note {
+  border-left: 4px solid var(--polly-color-warning, #f93);
+}

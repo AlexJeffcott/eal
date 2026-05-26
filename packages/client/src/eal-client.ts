@@ -26,7 +26,9 @@ import type {
   Message,
 } from './chat-types.ts';
 import type {
+  FamilyPhoneCallEvent,
   FamilyPhoneDevice,
+  FamilyPhoneDeviceConnection,
   FamilyPhonePairCompleteInput,
   FamilyPhonePairCompleteResult,
   FamilyPhonePairStartInput,
@@ -201,6 +203,17 @@ export interface EalClient {
   completeFamilyPhonePair(
     input: FamilyPhonePairCompleteInput,
   ): Promise<FamilyPhonePairCompleteResult>;
+  /**
+   * Open a device-authenticated WebSocket. The connection runs its own
+   * challenge/sign handshake against the supplied keypair and is independent
+   * of the user Bearer-token WS that `connect()` opens. Returns a handle the
+   * caller uses to place calls, accept/reject incoming, and listen for the
+   * family-phone signalling events.
+   */
+  connectFamilyPhoneDevice(input: {
+    deviceId: number;
+    privateKey: CryptoKey;
+  }): Promise<FamilyPhoneDeviceConnection>;
 
   // ── Chat (browser side) ──────────────────────────────────────────────────
   /** Load the signed-in user's current assistant conversation, oldest first. */
@@ -653,5 +666,137 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
       );
       return { deviceId: wire.device_id };
     },
+
+    async connectFamilyPhoneDevice(input): Promise<FamilyPhoneDeviceConnection> {
+      const { deviceId, privateKey } = input;
+      // 1. Fetch a fresh nonce. The route is ownsAuthFor-exempt; the server
+      // 404s if the device id is unknown so we surface that early.
+      const { nonce } = await postJson<{ nonce: string; expires_at: string }>(
+        '/api/family-phone/device/challenge',
+        { device_id: deviceId },
+      );
+      // 2. Sign the nonce with the device private key.
+      const nonceBytes = fromBase64UrlBytes(nonce);
+      const sigBuf = await crypto.subtle.sign(
+        { name: 'ECDSA', hash: 'SHA-256' },
+        privateKey,
+        nonceBytes,
+      );
+      const signature = toBase64UrlBytes(new Uint8Array(sigBuf));
+
+      // 3. Open the WS and send the device-auth handshake.
+      const ws = new WebSocket(wsUrl);
+      const subscribers = new Set<(event: FamilyPhoneCallEvent) => void>();
+      ws.addEventListener('message', (e: MessageEvent) => {
+        if (typeof e.data !== 'string') return;
+        const event = parseFamilyPhoneCallEvent(e.data);
+        if (event) for (const h of subscribers) h(event);
+      });
+      await new Promise<void>((resolveOpen, rejectOpen) => {
+        ws.addEventListener('open', () => resolveOpen(), { once: true });
+        ws.addEventListener('error', () => rejectOpen(new Error('device ws connect failed')), {
+          once: true,
+        });
+      });
+      await new Promise<void>((resolveAuth, rejectAuth) => {
+        const onAuth = (e: MessageEvent): void => {
+          if (typeof e.data !== 'string') return;
+          let parsed: { type?: string; code?: string; message?: string };
+          try { parsed = JSON.parse(e.data); } catch { return; }
+          if (parsed.type === 'auth:ok') {
+            ws.removeEventListener('message', onAuth);
+            resolveAuth();
+          } else if (parsed.type === 'error' && parsed.code === 'unauthenticated') {
+            ws.removeEventListener('message', onAuth);
+            rejectAuth(new Error(`device ws auth rejected: ${parsed.message ?? ''}`));
+          }
+        };
+        ws.addEventListener('message', onAuth);
+        ws.send(JSON.stringify({
+          type: 'auth',
+          device_id: deviceId,
+          nonce,
+          signature,
+        }));
+      });
+
+      function sendCall(payload: unknown): void {
+        ws.send(JSON.stringify(payload));
+      }
+
+      return {
+        deviceId,
+        placeCall(targetDeviceId) {
+          sendCall({ type: 'call:invite', target_device_id: targetDeviceId });
+        },
+        acceptCall(callId) {
+          sendCall({ type: 'call:accept', call_id: callId });
+        },
+        rejectCall(callId) {
+          sendCall({ type: 'call:reject', call_id: callId });
+        },
+        cancelCall(callId) {
+          sendCall({ type: 'call:cancel', call_id: callId });
+        },
+        hangup(callId) {
+          sendCall({ type: 'call:hangup', call_id: callId });
+        },
+        subscribe(handler) {
+          subscribers.add(handler);
+          return () => subscribers.delete(handler);
+        },
+        close() {
+          subscribers.clear();
+          ws.close();
+        },
+      };
+    },
   };
+}
+
+function fromBase64UrlBytes(value: string): Uint8Array<ArrayBuffer> {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padLen = (4 - (padded.length % 4)) % 4;
+  const decoded = atob(padded + '='.repeat(padLen));
+  const out = new Uint8Array(new ArrayBuffer(decoded.length));
+  for (let i = 0; i < decoded.length; i++) out[i] = decoded.charCodeAt(i);
+  return out;
+}
+
+function toBase64UrlBytes(bytes: Uint8Array): string {
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function parseFamilyPhoneCallEvent(raw: string): FamilyPhoneCallEvent | null {
+  let parsed: { type?: unknown };
+  try { parsed = JSON.parse(raw); } catch { return null; }
+  if (typeof parsed !== 'object' || parsed === null || typeof parsed.type !== 'string') return null;
+  const t = parsed.type;
+  if (t === 'call:invite-ack' && 'call_id' in parsed && typeof parsed.call_id === 'string') {
+    return { type: 'call:invite-ack', callId: parsed.call_id };
+  }
+  if (t === 'call:invite-failed' && 'reason' in parsed && typeof parsed.reason === 'string') {
+    return { type: 'call:invite-failed', reason: parsed.reason };
+  }
+  if (
+    t === 'call:incoming' &&
+    'call_id' in parsed && typeof parsed.call_id === 'string' &&
+    'from_device_id' in parsed && typeof parsed.from_device_id === 'number'
+  ) {
+    return { type: 'call:incoming', callId: parsed.call_id, fromDeviceId: parsed.from_device_id };
+  }
+  if (
+    (t === 'call:accepted' || t === 'call:accept-ack' || t === 'call:rejected' ||
+     t === 'call:cancelled' || t === 'call:hung-up') &&
+    'call_id' in parsed && typeof parsed.call_id === 'string'
+  ) {
+    const base = { callId: parsed.call_id };
+    if (t === 'call:hung-up' && 'reason' in parsed && typeof parsed.reason === 'string') {
+      return { type: t, ...base, reason: parsed.reason };
+    }
+    return { type: t, ...base };
+  }
+  return null;
 }

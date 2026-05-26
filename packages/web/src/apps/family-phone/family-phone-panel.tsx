@@ -8,10 +8,14 @@ import {
   Surface,
   Text,
 } from '@fairfox/polly/ui';
-import type { FamilyPhoneDeviceKind } from '@eal/client';
+import type { FamilyPhoneDevice, FamilyPhoneDeviceKind } from '@eal/client';
 import {
+  $activeCall,
+  $callNote,
+  $deviceConnection,
   $familyPhoneDevices,
   $familyPhoneError,
+  $incomingCall,
   $pairCompleteCode,
   $pairStartCode,
   $pairStartKind,
@@ -26,10 +30,96 @@ const KIND_OPTIONS: { value: FamilyPhoneDeviceKind; label: string }[] = [
 ];
 
 function fingerprint(b64: string): string {
-  // First 12 base64url characters are enough for a sanity-check fingerprint
-  // shown next to the issued device id. Real verification happens by
-  // challenge/response, not by humans comparing strings.
   return b64.slice(0, 12);
+}
+
+function deviceLabel(devices: FamilyPhoneDevice[], id: number): string {
+  return devices.find((d) => d.id === id)?.label ?? `device #${id}`;
+}
+
+function IncomingCallBanner(props: {
+  callId: string;
+  fromDeviceId: number;
+  devices: FamilyPhoneDevice[];
+}) {
+  const from = deviceLabel(props.devices, props.fromDeviceId);
+  return (
+    <Surface variant="callout" padding="var(--polly-space-md)" className="family-phone-incoming">
+      <Cluster gap="var(--polly-space-md)" justify="space-between">
+        <Layout gap="var(--polly-space-xs)">
+          <Text as="h2" weight="bold">Ringing</Text>
+          <Text>{from} is calling.</Text>
+        </Layout>
+        <Cluster gap="var(--polly-space-sm)">
+          <Button
+            tier="primary"
+            color="success"
+            label="Accept"
+            data-action="family-phone:accept-call"
+            data-action-call-id={props.callId}
+          />
+          <Button
+            tier="secondary"
+            color="danger"
+            label="Reject"
+            data-action="family-phone:reject-call"
+            data-action-call-id={props.callId}
+          />
+        </Cluster>
+      </Cluster>
+    </Surface>
+  );
+}
+
+function ActiveCallSurface(props: {
+  role: 'caller' | 'callee';
+  state: 'pending' | 'connected' | 'closing';
+  peerDeviceId: number;
+  devices: FamilyPhoneDevice[];
+}) {
+  const peer = deviceLabel(props.devices, props.peerDeviceId);
+  const stateLabel =
+    props.state === 'pending'
+      ? props.role === 'caller'
+        ? `Ringing ${peer}…`
+        : `Connecting to ${peer}…`
+      : props.state === 'connected'
+        ? `In call with ${peer}`
+        : 'Ending call…';
+  const hangupLabel =
+    props.state === 'pending' && props.role === 'caller' ? 'Cancel' : 'Hang up';
+  return (
+    <Surface variant="callout" padding="var(--polly-space-md)" className="family-phone-active-call">
+      <Cluster gap="var(--polly-space-md)" justify="space-between">
+        <Layout gap="var(--polly-space-xs)">
+          <Text as="h2" weight="bold">{stateLabel}</Text>
+          <Text tone="muted">Audio is not yet wired (Phase G3).</Text>
+        </Layout>
+        <Button
+          tier="primary"
+          color="danger"
+          label={hangupLabel}
+          data-action="family-phone:hangup"
+          disabled={props.state === 'closing'}
+        />
+      </Cluster>
+    </Surface>
+  );
+}
+
+function CallNoteStrip(props: { note: string }) {
+  return (
+    <Surface variant="callout" padding="var(--polly-space-sm)" className="family-phone-note">
+      <Cluster gap="var(--polly-space-sm)" justify="space-between">
+        <Text>{props.note}</Text>
+        <Button
+          tier="tertiary"
+          label="Dismiss"
+          data-action="family-phone:dismiss-note"
+        />
+      </Cluster>
+    </Surface>
+  );
 }
 
 export function FamilyPhonePanel() {
@@ -37,6 +127,10 @@ export function FamilyPhonePanel() {
   const error = $familyPhoneError.value;
   const startCode = $pairStartCode.value;
   const paired = $pairedThisSession.value;
+  const connection = $deviceConnection.value;
+  const incoming = $incomingCall.value;
+  const active = $activeCall.value;
+  const note = $callNote.value;
 
   return (
     <Layout gap="var(--polly-space-lg)" className="family-phone-panel">
@@ -45,8 +139,7 @@ export function FamilyPhonePanel() {
           <Text as="h1" weight="bold">Family phone</Text>
           <Text as="p" tone="muted">
             Pair a device by speaking a short code from a trusted device to a new one.
-            The new device generates a keypair locally; only its public half travels
-            over the wire.
+            Once paired in this tab, you can place a call to any other online device.
           </Text>
         </Layout>
       </Surface>
@@ -55,6 +148,22 @@ export function FamilyPhonePanel() {
         <Surface variant="callout" padding="var(--polly-space-sm)" className="family-phone-error">
           <Badge variant="danger">{error}</Badge>
         </Surface>
+      )}
+      {note !== null && <CallNoteStrip note={note} />}
+      {incoming !== null && (
+        <IncomingCallBanner
+          callId={incoming.callId}
+          fromDeviceId={incoming.fromDeviceId}
+          devices={devices}
+        />
+      )}
+      {active !== null && (
+        <ActiveCallSurface
+          role={active.role}
+          state={active.state}
+          peerDeviceId={active.peerDeviceId}
+          devices={devices}
+        />
       )}
 
       <Surface variant="callout" padding="var(--polly-space-md)">
@@ -106,6 +215,9 @@ export function FamilyPhonePanel() {
                     Paired as device #{paired.deviceId} ({fingerprint(paired.publicKeyB64)}…)
                   </Badge>
                 )}
+                {connection !== null && (
+                  <Badge variant="success">WS connected</Badge>
+                )}
               </Cluster>
               <Text tone="muted">
                 The private key stays in this tab's memory and is lost on reload —
@@ -130,20 +242,34 @@ export function FamilyPhonePanel() {
             <Text tone="muted">No devices paired yet.</Text>
           ) : (
             <Layout gap="var(--polly-space-xs)">
-              {devices.map((d) => (
-                <Cluster
-                  key={d.id}
-                  gap="var(--polly-space-sm)"
-                  justify="space-between"
-                  className="family-phone-device-row"
-                >
-                  <Text weight="medium">{d.label}</Text>
-                  <Cluster gap="var(--polly-space-xs)">
-                    <Badge variant="default">{d.kind}</Badge>
-                    <Text tone="muted">#{d.id}</Text>
+              {devices.map((d) => {
+                const isSelf = paired !== null && paired.deviceId === d.id;
+                const canCall = connection !== null && !isSelf && active === null;
+                return (
+                  <Cluster
+                    key={d.id}
+                    gap="var(--polly-space-sm)"
+                    justify="space-between"
+                    className="family-phone-device-row"
+                  >
+                    <Cluster gap="var(--polly-space-sm)">
+                      <Text weight="medium">{d.label}</Text>
+                      {isSelf && <Badge variant="info">this tab</Badge>}
+                    </Cluster>
+                    <Cluster gap="var(--polly-space-xs)">
+                      <Badge variant="default">{d.kind}</Badge>
+                      <Text tone="muted">#{d.id}</Text>
+                      <Button
+                        tier="secondary"
+                        label="Call"
+                        disabled={!canCall}
+                        data-action="family-phone:place-call"
+                        data-action-target-device-id={String(d.id)}
+                      />
+                    </Cluster>
                   </Cluster>
-                </Cluster>
-              ))}
+                );
+              })}
             </Layout>
           )}
         </Layout>

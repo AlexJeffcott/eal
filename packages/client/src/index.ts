@@ -24,7 +24,9 @@ export type {
   Message,
 } from './chat-types.ts';
 export type {
+  FamilyPhoneCallEvent,
   FamilyPhoneDevice,
+  FamilyPhoneDeviceConnection,
   FamilyPhoneDeviceKind,
   FamilyPhonePairCompleteInput,
   FamilyPhonePairCompleteResult,

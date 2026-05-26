@@ -260,6 +260,21 @@ export function createMockEalClient(): MockEalClient {
       return { deviceId: 1 };
     },
 
+    async connectFamilyPhoneDevice(input) {
+      // Mock: returns a no-op handle. Tests that need to exercise the call
+      // signalling pump should spin up the real api against an in-memory db.
+      return {
+        deviceId: input.deviceId,
+        placeCall() {},
+        acceptCall() {},
+        rejectCall() {},
+        cancelCall() {},
+        hangup() {},
+        subscribe() { return () => {}; },
+        close() {},
+      };
+    },
+
     async createTask(input): Promise<Task> {
       consumeTaskError();
       const user = requireSignedIn();

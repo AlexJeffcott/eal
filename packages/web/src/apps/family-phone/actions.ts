@@ -1,6 +1,13 @@
 import type { ActionRegistry } from '@fairfox/polly/actions';
 import type { AppStores } from '../../stores.ts';
-import type { FamilyPhoneDeviceKind } from '@eal/client';
+import type { EalClient, FamilyPhoneCallEvent, FamilyPhoneDeviceKind } from '@eal/client';
+import {
+  $activeCall,
+  $callNote,
+  $deviceConnection,
+  $incomingCall,
+  type PairedThisSession,
+} from './stores.ts';
 
 function describeError(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -18,12 +25,83 @@ function toBase64Url(bytes: Uint8Array): string {
 }
 
 /**
- * Actions for the family-phone web app. The trusted-device side mints a
- * `user_code` to read aloud; the new-device side generates an ECDSA P-256
- * keypair, exports the public half as SPKI, and submits both. Phase G keeps
- * the keypair in memory only — persistence (IndexedDB) lands when later
- * phases need the device to remain authenticated across reloads.
+ * Wire the device's call signalling events into the local stores. Called
+ * once per device-connection lifetime; the returned unsubscribe is held by
+ * the connection itself and fires on close.
  */
+function installCallEventHandlers(
+  event: FamilyPhoneCallEvent,
+): void {
+  switch (event.type) {
+    case 'call:invite-ack': {
+      // Caller's pending call now has its real call_id. The placeholder
+      // entry was set the moment the user clicked Call.
+      const current = $activeCall.value;
+      if (current && current.role === 'caller' && current.callId === '') {
+        $activeCall.value = { ...current, callId: event.callId };
+      }
+      return;
+    }
+    case 'call:invite-failed': {
+      $activeCall.value = null;
+      $callNote.value = `Call could not be placed: ${event.reason}.`;
+      return;
+    }
+    case 'call:incoming': {
+      $incomingCall.value = { callId: event.callId, fromDeviceId: event.fromDeviceId };
+      return;
+    }
+    case 'call:accepted': {
+      // Caller-side: the callee picked up. Transition pending → connected.
+      const current = $activeCall.value;
+      if (current && current.role === 'caller' && current.callId === event.callId) {
+        $activeCall.value = { ...current, state: 'connected' };
+      }
+      return;
+    }
+    case 'call:accept-ack': {
+      // Callee-side acknowledgement that the server registered the accept.
+      const current = $activeCall.value;
+      if (current && current.role === 'callee' && current.callId === event.callId) {
+        $activeCall.value = { ...current, state: 'connected' };
+      }
+      return;
+    }
+    case 'call:rejected': {
+      $activeCall.value = null;
+      $callNote.value = 'Call was rejected.';
+      return;
+    }
+    case 'call:cancelled': {
+      $incomingCall.value = null;
+      $callNote.value = 'Caller cancelled the call.';
+      return;
+    }
+    case 'call:hung-up': {
+      $activeCall.value = null;
+      $incomingCall.value = null;
+      $callNote.value =
+        event.reason === 'peer-disconnect' ? 'The other device disconnected.' : 'Call ended.';
+      return;
+    }
+  }
+}
+
+async function openDeviceConnection(
+  client: EalClient,
+  paired: PairedThisSession,
+): Promise<void> {
+  const existing = $deviceConnection.value;
+  if (existing && existing.deviceId === paired.deviceId) return;
+  existing?.close();
+  const conn = await client.connectFamilyPhoneDevice({
+    deviceId: paired.deviceId,
+    privateKey: paired.privateKey,
+  });
+  conn.subscribe(installCallEventHandlers);
+  $deviceConnection.value = conn;
+}
+
 export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
   'family-phone:set-pair-label': ({ data, stores }) => {
     const value = data['value'];
@@ -83,14 +161,17 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
         publicKey: publicKeyB64,
         alg: 'ES256',
       });
-      stores.$pairedThisSession.value = {
+      const paired: PairedThisSession = {
         deviceId: result.deviceId,
         privateKey: kp.privateKey,
         publicKeyB64,
       };
+      stores.$pairedThisSession.value = paired;
       stores.$pairCompleteCode.value = '';
-      // Refresh the directory so the new device appears immediately.
       stores.$familyPhoneDevices.value = await stores.client.listFamilyPhoneDevices();
+      // Immediately open the device WS so the new device can place and
+      // receive calls without an extra explicit step.
+      await openDeviceConnection(stores.client, paired);
     } catch (err) {
       stores.$familyPhoneError.value = describeError(err);
     }
@@ -103,5 +184,75 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
     } catch (err) {
       stores.$familyPhoneError.value = describeError(err);
     }
+  },
+
+  'family-phone:dismiss-note': ({ stores }) => {
+    stores.$callNote.value = null;
+  },
+
+  'family-phone:place-call': ({ data, stores }) => {
+    const raw = data['targetDeviceId'];
+    if (typeof raw !== 'string') return;
+    const target = Number(raw);
+    if (!Number.isFinite(target) || target <= 0) return;
+    const conn = stores.$deviceConnection.value;
+    if (!conn) {
+      stores.$callNote.value = 'Pair a device on this tab first to place a call.';
+      return;
+    }
+    if (stores.$activeCall.value !== null) {
+      stores.$callNote.value = 'Already in a call.';
+      return;
+    }
+    // The real call_id arrives on call:invite-ack; mark pending with an
+    // empty placeholder so the UI can render an "Outgoing…" surface.
+    stores.$activeCall.value = {
+      callId: '',
+      role: 'caller',
+      peerDeviceId: target,
+      state: 'pending',
+    };
+    conn.placeCall(target);
+  },
+
+  'family-phone:accept-call': ({ data, stores }) => {
+    const callId = data['callId'];
+    if (typeof callId !== 'string' || callId.length === 0) return;
+    const incoming = stores.$incomingCall.value;
+    if (!incoming || incoming.callId !== callId) return;
+    const conn = stores.$deviceConnection.value;
+    if (!conn) return;
+    stores.$activeCall.value = {
+      callId,
+      role: 'callee',
+      peerDeviceId: incoming.fromDeviceId,
+      state: 'pending',
+    };
+    stores.$incomingCall.value = null;
+    conn.acceptCall(callId);
+  },
+
+  'family-phone:reject-call': ({ data, stores }) => {
+    const callId = data['callId'];
+    if (typeof callId !== 'string' || callId.length === 0) return;
+    const incoming = stores.$incomingCall.value;
+    if (!incoming || incoming.callId !== callId) return;
+    const conn = stores.$deviceConnection.value;
+    if (!conn) return;
+    stores.$incomingCall.value = null;
+    conn.rejectCall(callId);
+  },
+
+  'family-phone:hangup': ({ stores }) => {
+    const active = stores.$activeCall.value;
+    if (!active) return;
+    const conn = stores.$deviceConnection.value;
+    if (!conn) return;
+    if (active.role === 'caller' && active.state === 'pending' && active.callId !== '') {
+      conn.cancelCall(active.callId);
+    } else if (active.callId !== '') {
+      conn.hangup(active.callId);
+    }
+    stores.$activeCall.value = { ...active, state: 'closing' };
   },
 };
