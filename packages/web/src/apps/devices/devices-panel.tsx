@@ -8,6 +8,7 @@ import {
   Surface,
   Text,
 } from '@fairfox/polly/ui';
+import { Show } from '@preact/signals/utils';
 import type { FamilyPhoneDeviceKind } from '@eal/client';
 import { $currentUser } from '../../shell/stores.ts';
 import {
@@ -146,13 +147,13 @@ export function DevicesPanel() {
                 </Badge>
               </Cluster>
               <Cluster gap="var(--polly-space-xs)">
-                {$notificationPermission.value !== 'granted' && (
+                <Show when={() => $notificationPermission.value !== 'granted'}>
                   <Button
                     tier="tertiary"
                     label="Enable notifications"
                     data-action="devices:request-permissions"
                   />
-                )}
+                </Show>
                 <Button
                   tier="tertiary"
                   color="danger"
@@ -161,14 +162,14 @@ export function DevicesPanel() {
                 />
               </Cluster>
             </Cluster>
-            {$notificationPermission.value === 'denied' && (
+            <Show when={() => $notificationPermission.value === 'denied'}>
               <Text tone="muted">
                 Your browser is blocking notifications. Open this site's
                 settings (the lock icon in the address bar on desktop, the
                 aA menu on iOS Safari) and switch Notifications to Allow,
                 then reload.
               </Text>
-            )}
+            </Show>
           </Layout>
         </Surface>
       )}
