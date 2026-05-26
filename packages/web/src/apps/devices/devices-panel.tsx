@@ -135,12 +135,19 @@ export function DevicesPanel() {
                   <Badge variant="warning">disconnected</Badge>
                 )}
               </Cluster>
-              <Button
-                tier="tertiary"
-                color="danger"
-                label="Un-pair"
-                data-action="devices:unpair"
-              />
+              <Cluster gap="var(--polly-space-xs)">
+                <Button
+                  tier="tertiary"
+                  label="Enable notifications"
+                  data-action="devices:request-permissions"
+                />
+                <Button
+                  tier="tertiary"
+                  color="danger"
+                  label="Un-pair"
+                  data-action="devices:unpair"
+                />
+              </Cluster>
             </Cluster>
           </Layout>
         </Surface>

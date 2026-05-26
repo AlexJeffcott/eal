@@ -19,6 +19,7 @@ import { clearPairedDevice, loadPairedDevice, savePairedDevice } from './keystor
 // avoids a circular import.
 import {
   installCallEventHandlers,
+  requestCallPermissions,
   resetFamilyPhoneCallState,
 } from '../family-phone/actions.ts';
 
@@ -233,6 +234,32 @@ export const DEVICES_ACTIONS: ActionRegistry<AppStores> = {
           `Paired, but persistence failed (${describeError(err)}). Will not survive reload.`;
       }
       await openDeviceConnection(stores.client, paired);
+      // Ask for every browser permission this browser needs from the same
+      // user gesture that completed the pair. Today that is the
+      // Notifications API for incoming-call alerts; microphone is
+      // requested at call-accept time, when the gesture lines up there.
+      // Failure is non-fatal — the user can re-prompt manually later.
+      try {
+        const perms = await requestCallPermissions();
+        if (perms.notifications === 'denied') {
+          stores.$devicesError.value =
+            'Notification permission denied. Re-enable it in your browser\'s site settings to hear ringing.';
+        }
+      } catch { /* best-effort */ }
+    } catch (err) {
+      stores.$devicesError.value = describeError(err);
+    }
+  },
+
+  'devices:request-permissions': async ({ stores }) => {
+    try {
+      const perms = await requestCallPermissions();
+      if (perms.notifications === 'denied') {
+        stores.$devicesError.value =
+          'Notification permission denied. Re-enable it in your browser\'s site settings.';
+      } else if (perms.notifications === 'unsupported') {
+        stores.$devicesError.value = 'This browser does not support notifications.';
+      }
     } catch (err) {
       stores.$devicesError.value = describeError(err);
     }

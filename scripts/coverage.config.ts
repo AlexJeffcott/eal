@@ -83,6 +83,22 @@ export const config: CoverageConfig = {
       reason: 'tasks action dispatchers run in the polly browser tier',
       claimedBy: 'packages/web/tests/browser/tasks.browser.tsx',
     },
+    'packages/web/src/apps/family-phone/audio.ts': {
+      reason: 'WebAudio capture/playback — AudioWorklet + getUserMedia only meaningful in a real browser',
+      claimedBy: 'n/a — exercised by manual two-browser call session',
+    },
+    'packages/web/src/apps/family-phone/stores.ts': {
+      reason: 'call-only signals; reads exercised by actions.test.ts, createFamilyPhoneStores/reset by the shell composition root',
+      claimedBy: 'packages/web/src/apps/family-phone/actions.test.ts',
+    },
+    'packages/web/src/apps/family-phone/actions.ts': {
+      reason: 'installCallEventHandlers wiring unit-tested; place-call/accept/etc dispatchers run in the polly browser tier and against the live api',
+      claimedBy: 'packages/web/src/apps/family-phone/actions.test.ts',
+    },
+    'packages/web/src/apps/devices/stores.ts': {
+      reason: 'devices signals; reads exercised by actions.test.ts, factory/reset by the shell composition root',
+      claimedBy: 'packages/web/src/apps/family-phone/actions.test.ts',
+    },
     'packages/web/src/shell/router.ts': {
       reason: 'navigate() is exercised by nav.browser.tsx; the popstate wiring is boot glue',
       claimedBy: 'packages/web/tests/browser/nav.browser.tsx',

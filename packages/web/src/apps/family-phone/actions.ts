@@ -2,13 +2,67 @@ import type { ActionRegistry } from '@fairfox/polly/actions';
 import type { AppStores } from '../../stores.ts';
 import type { FamilyPhoneCallEvent } from '@eal/client';
 import { $activeCall, $callNote, $incomingCall } from './stores.ts';
-import { $deviceConnection } from '../devices/stores.ts';
+import { $deviceConnection, $devices } from '../devices/stores.ts';
 import {
   startAudioCapture,
   startAudioPlayback,
   type AudioCapture,
   type AudioPlayback,
 } from './audio.ts';
+import { Ringtone } from './ringtone.ts';
+import { defaultNotificationApi, IncomingCallNotifier } from './notifications.ts';
+
+/**
+ * Singletons for the in-page ringtone + browser notification. They are
+ * lazily-built so tests can swap them via setRingtoneForTest /
+ * setNotifierForTest, and so importing this module has no audio side
+ * effect at boot.
+ */
+let ringtoneInstance: Ringtone | null = null;
+let notifierInstance: IncomingCallNotifier | null = null;
+
+function ringtone(): Ringtone {
+  if (ringtoneInstance === null) ringtoneInstance = new Ringtone();
+  return ringtoneInstance;
+}
+function notifier(): IncomingCallNotifier {
+  if (notifierInstance === null) {
+    notifierInstance = new IncomingCallNotifier(defaultNotificationApi());
+  }
+  return notifierInstance;
+}
+
+/** Test seam: swap the live singletons for stubs in browser tests. */
+export function setRingtoneForTest(value: Ringtone | null): void {
+  ringtoneInstance = value;
+}
+export function setNotifierForTest(value: IncomingCallNotifier | null): void {
+  notifierInstance = value;
+}
+
+/**
+ * Ask the browser for every permission this app needs from a single user
+ * gesture. Today that is the Notifications API; microphone is requested
+ * just-in-time on call accept because browsers require it on a per-call
+ * gesture anyway. Returns the resolved state.
+ */
+export async function requestCallPermissions(): Promise<{
+  notifications: NotificationPermission | 'unsupported';
+}> {
+  const result = await notifier().requestPermission();
+  return { notifications: result };
+}
+
+function callerLabel(fromDeviceId: number): { title: string; body: string } {
+  const device = $devices.value.find((d) => d.id === fromDeviceId);
+  if (!device) {
+    return { title: 'Incoming call', body: `device #${fromDeviceId} is calling` };
+  }
+  return {
+    title: 'Incoming call',
+    body: `${device.label} (${device.ownerDisplayName}) is calling`,
+  };
+}
 
 function describeError(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -84,6 +138,9 @@ export function installCallEventHandlers(event: FamilyPhoneCallEvent): void {
     }
     case 'call:incoming': {
       $incomingCall.value = { callId: event.callId, fromDeviceId: event.fromDeviceId };
+      const { title, body } = callerLabel(event.fromDeviceId);
+      ringtone().start();
+      notifier().show(title, body);
       return;
     }
     case 'call:accepted': {
@@ -101,6 +158,9 @@ export function installCallEventHandlers(event: FamilyPhoneCallEvent): void {
       const current = $activeCall.value;
       if (current && current.role === 'callee' && current.callId === event.callId) {
         $activeCall.value = { ...current, state: 'connected' };
+        // Callee just answered — silence the ring and dismiss the banner.
+        void ringtone().stop();
+        notifier().dismiss();
         const conn = $deviceConnection.value;
         if (conn) {
           void startAudioForCall(event.callId, conn).catch(() => { /* note already set */ });
@@ -111,12 +171,16 @@ export function installCallEventHandlers(event: FamilyPhoneCallEvent): void {
     case 'call:rejected': {
       $activeCall.value = null;
       $callNote.value = 'Call was rejected.';
+      void ringtone().stop();
+      notifier().dismiss();
       void stopAudio();
       return;
     }
     case 'call:cancelled': {
       $incomingCall.value = null;
       $callNote.value = 'Caller cancelled the call.';
+      void ringtone().stop();
+      notifier().dismiss();
       void stopAudio();
       return;
     }
@@ -125,6 +189,8 @@ export function installCallEventHandlers(event: FamilyPhoneCallEvent): void {
       $incomingCall.value = null;
       $callNote.value =
         event.reason === 'peer-disconnect' ? 'The other device disconnected.' : 'Call ended.';
+      void ringtone().stop();
+      notifier().dismiss();
       void stopAudio();
       return;
     }
@@ -143,6 +209,8 @@ export function resetFamilyPhoneCallState(): void {
   $activeCall.value = null;
   $incomingCall.value = null;
   $callNote.value = null;
+  void ringtone().stop();
+  notifier().dismiss();
   void stopAudio();
 }
 
