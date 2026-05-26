@@ -142,8 +142,9 @@ export function FamilyPhonePanel() {
         <Layout gap="var(--polly-space-sm)">
           <Text as="h1" weight="bold">Family phone</Text>
           <Text as="p" tone="muted">
-            Pair a device by speaking a short code from a trusted device to a new one.
-            Once paired in this tab, you can place a call to any other online device.
+            To add this tab to the household, mint a short code from a tab
+            that's already signed in, then type it into the field below.
+            Once paired, you can call any other online device.
           </Text>
         </Layout>
       </Surface>
@@ -172,7 +173,7 @@ export function FamilyPhonePanel() {
 
       <Surface variant="callout" padding="var(--polly-space-md)">
         <Layout gap="var(--polly-space-md)">
-          <Text as="h2" weight="bold">From a trusted device — start pairing</Text>
+          <Text as="h2" weight="bold">Mint a pairing code</Text>
           <form data-action="family-phone:start-pair">
             <Layout gap="var(--polly-space-sm)">
               <ActionInput
@@ -191,7 +192,7 @@ export function FamilyPhonePanel() {
                 <Button type="submit" tier="primary" label="Mint code" />
                 {startCode !== null && (
                   <Badge variant="info" className="family-phone-code">
-                    Speak: <strong>{startCode}</strong>
+                    Code: <strong>{startCode}</strong>
                   </Badge>
                 )}
               </Cluster>
@@ -203,15 +204,15 @@ export function FamilyPhonePanel() {
       {paired === null ? (
         <Surface variant="callout" padding="var(--polly-space-md)">
           <Layout gap="var(--polly-space-md)">
-            <Text as="h2" weight="bold">On the new device — complete pairing</Text>
+            <Text as="h2" weight="bold">Pair this tab</Text>
             <form data-action="family-phone:complete-pair">
               <Layout gap="var(--polly-space-sm)">
                 <ActionInput
                   saveOn="input"
                   value={$pairCompleteCode.value}
                   action="family-phone:set-complete-code"
-                  placeholder="Spoken code (e.g. ABC-123)"
-                  ariaLabel="Spoken pair code"
+                  placeholder="Pairing code (e.g. ABC-123)"
+                  ariaLabel="Pairing code"
                 />
                 <Cluster gap="var(--polly-space-sm)">
                   <Button type="submit" tier="primary" label="Generate keypair & pair" />
