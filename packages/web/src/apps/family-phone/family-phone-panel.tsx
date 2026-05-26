@@ -29,10 +29,6 @@ const KIND_OPTIONS: { value: FamilyPhoneDeviceKind; label: string }[] = [
   { value: 'agent', label: 'Agent' },
 ];
 
-function fingerprint(b64: string): string {
-  return b64.slice(0, 12);
-}
-
 function deviceLabel(devices: FamilyPhoneDevice[], id: number): string {
   return devices.find((d) => d.id === id)?.label ?? `device #${id}`;
 }
@@ -139,14 +135,7 @@ export function FamilyPhonePanel() {
   return (
     <Layout gap="var(--polly-space-lg)" className="family-phone-panel">
       <Surface variant="plain" padding="var(--polly-space-md)">
-        <Layout gap="var(--polly-space-sm)">
-          <Text as="h1" weight="bold">Family phone</Text>
-          <Text as="p" tone="muted">
-            To add this tab to the household, mint a short code from a tab
-            that's already signed in, then type it into the field below.
-            Once paired, you can call any other online device.
-          </Text>
-        </Layout>
+        <Text as="h1" weight="bold">Family phone</Text>
       </Surface>
 
       {error !== null && (
@@ -173,7 +162,7 @@ export function FamilyPhonePanel() {
 
       <Surface variant="callout" padding="var(--polly-space-md)">
         <Layout gap="var(--polly-space-md)">
-          <Text as="h2" weight="bold">Mint a pairing code</Text>
+          <Text as="h2" weight="bold">Add a device</Text>
           <form data-action="family-phone:start-pair">
             <Layout gap="var(--polly-space-sm)">
               <ActionInput
@@ -204,24 +193,19 @@ export function FamilyPhonePanel() {
       {paired === null ? (
         <Surface variant="callout" padding="var(--polly-space-md)">
           <Layout gap="var(--polly-space-md)">
-            <Text as="h2" weight="bold">Pair this tab</Text>
+            <Text as="h2" weight="bold">Pair this device</Text>
             <form data-action="family-phone:complete-pair">
               <Layout gap="var(--polly-space-sm)">
                 <ActionInput
                   saveOn="input"
                   value={$pairCompleteCode.value}
                   action="family-phone:set-complete-code"
-                  placeholder="Pairing code (e.g. ABC-123)"
+                  placeholder="Pairing code"
                   ariaLabel="Pairing code"
                 />
                 <Cluster gap="var(--polly-space-sm)">
-                  <Button type="submit" tier="primary" label="Generate keypair & pair" />
+                  <Button type="submit" tier="primary" label="Pair" />
                 </Cluster>
-                <Text tone="muted">
-                  The private key is stored in this browser as a non-extractable
-                  WebCrypto key; it stays with this tab across reloads but never
-                  travels off this device.
-                </Text>
               </Layout>
             </form>
           </Layout>
@@ -229,30 +213,24 @@ export function FamilyPhonePanel() {
       ) : (
         <Surface variant="callout" padding="var(--polly-space-md)">
           <Layout gap="var(--polly-space-md)">
-            <Text as="h2" weight="bold">This tab is paired</Text>
-            <Cluster gap="var(--polly-space-sm)">
-              <Badge variant="success" className="family-phone-paired">
-                Device #{paired.deviceId} ({fingerprint(paired.publicKeyB64)}…)
-              </Badge>
-              {connection !== null ? (
-                <Badge variant="success">WS connected</Badge>
-              ) : (
-                <Badge variant="warning">WS disconnected</Badge>
-              )}
-            </Cluster>
-            <Cluster gap="var(--polly-space-sm)">
+            <Cluster gap="var(--polly-space-sm)" justify="space-between">
+              <Cluster gap="var(--polly-space-sm)">
+                <Badge variant="success" className="family-phone-paired">
+                  Device #{paired.deviceId}
+                </Badge>
+                {connection !== null ? (
+                  <Badge variant="success">connected</Badge>
+                ) : (
+                  <Badge variant="warning">disconnected</Badge>
+                )}
+              </Cluster>
               <Button
-                tier="secondary"
+                tier="tertiary"
                 color="danger"
-                label="Un-pair this tab"
+                label="Un-pair"
                 data-action="family-phone:unpair"
               />
             </Cluster>
-            <Text tone="muted">
-              Un-pairing clears the local key and disconnects. The device row
-              stays in the directory on the server until the household admin
-              removes it.
-            </Text>
           </Layout>
         </Surface>
       )}
@@ -283,7 +261,7 @@ export function FamilyPhonePanel() {
                   >
                     <Cluster gap="var(--polly-space-sm)">
                       <Text weight="medium">{d.label}</Text>
-                      {isSelf && <Badge variant="info">this tab</Badge>}
+                      {isSelf && <Badge variant="info">this device</Badge>}
                     </Cluster>
                     <Cluster gap="var(--polly-space-xs)">
                       <Badge variant="default">{d.kind}</Badge>
