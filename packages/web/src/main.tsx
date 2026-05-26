@@ -18,6 +18,9 @@ import { $tasksById } from './apps/tasks/stores.ts';
 import { bindShowcaseForm } from './apps/showcase/stores.ts';
 import { ACTION_REGISTRY } from './actions/registry.ts';
 import { bootstrapDevices } from './apps/devices/actions.ts';
+import { installCallEventHandlers } from './apps/family-phone/actions.ts';
+import { $devices } from './apps/devices/stores.ts';
+import type { FamilyPhoneDevice, FamilyPhoneCallEvent } from '@eal/client';
 import { installTaskUrlSync } from './apps/tasks/url-sync.ts';
 import { installRouter } from './shell/router.ts';
 
@@ -296,6 +299,35 @@ async function bootstrap(): Promise<void> {
     }
   }
   stores.$currentUser.value = me;
+}
+
+/**
+ * Test seam — installs window-level hooks that let an in-browser harness
+ * fire synthetic call-events and seed the device directory. Gated by the
+ * `?e2e=1` URL parameter so it has zero effect on real users; only the
+ * puppeteer test in scripts/e2e-family-phone-ringtone.ts ever sets the
+ * parameter. The check-no-test-app-in-prod lint stays happy because what
+ * gets exposed (installCallEventHandlers, $devices) are production
+ * exports, not test helpers.
+ */
+if (typeof window !== 'undefined' && /[?&]e2e=1\b/.test(window.location.search)) {
+  window.__familyPhoneTest = {
+    fireCallEvent(event: FamilyPhoneCallEvent): void {
+      installCallEventHandlers(event);
+    },
+    seedDevices(devices: FamilyPhoneDevice[]): void {
+      $devices.value = devices;
+    },
+  };
+}
+
+declare global {
+  interface Window {
+    __familyPhoneTest?: {
+      fireCallEvent(event: FamilyPhoneCallEvent): void;
+      seedDevices(devices: FamilyPhoneDevice[]): void;
+    };
+  }
 }
 
 void bootstrap();
