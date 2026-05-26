@@ -200,37 +200,61 @@ export function FamilyPhonePanel() {
         </Layout>
       </Surface>
 
-      <Surface variant="callout" padding="var(--polly-space-md)">
-        <Layout gap="var(--polly-space-md)">
-          <Text as="h2" weight="bold">On the new device — complete pairing</Text>
-          <form data-action="family-phone:complete-pair">
-            <Layout gap="var(--polly-space-sm)">
-              <ActionInput
-                saveOn="input"
-                value={$pairCompleteCode.value}
-                action="family-phone:set-complete-code"
-                placeholder="Spoken code (e.g. ABC-123)"
-                ariaLabel="Spoken pair code"
+      {paired === null ? (
+        <Surface variant="callout" padding="var(--polly-space-md)">
+          <Layout gap="var(--polly-space-md)">
+            <Text as="h2" weight="bold">On the new device — complete pairing</Text>
+            <form data-action="family-phone:complete-pair">
+              <Layout gap="var(--polly-space-sm)">
+                <ActionInput
+                  saveOn="input"
+                  value={$pairCompleteCode.value}
+                  action="family-phone:set-complete-code"
+                  placeholder="Spoken code (e.g. ABC-123)"
+                  ariaLabel="Spoken pair code"
+                />
+                <Cluster gap="var(--polly-space-sm)">
+                  <Button type="submit" tier="primary" label="Generate keypair & pair" />
+                </Cluster>
+                <Text tone="muted">
+                  The private key is stored in this browser as a non-extractable
+                  WebCrypto key; it stays with this tab across reloads but never
+                  travels off this device.
+                </Text>
+              </Layout>
+            </form>
+          </Layout>
+        </Surface>
+      ) : (
+        <Surface variant="callout" padding="var(--polly-space-md)">
+          <Layout gap="var(--polly-space-md)">
+            <Text as="h2" weight="bold">This tab is paired</Text>
+            <Cluster gap="var(--polly-space-sm)">
+              <Badge variant="success" className="family-phone-paired">
+                Device #{paired.deviceId} ({fingerprint(paired.publicKeyB64)}…)
+              </Badge>
+              {connection !== null ? (
+                <Badge variant="success">WS connected</Badge>
+              ) : (
+                <Badge variant="warning">WS disconnected</Badge>
+              )}
+            </Cluster>
+            <Cluster gap="var(--polly-space-sm)">
+              <Button
+                tier="secondary"
+                color="danger"
+                label="Un-pair this tab"
+                data-action="family-phone:unpair"
               />
-              <Cluster gap="var(--polly-space-sm)">
-                <Button type="submit" tier="primary" label="Generate keypair & pair" />
-                {paired !== null && (
-                  <Badge variant="success" className="family-phone-paired">
-                    Paired as device #{paired.deviceId} ({fingerprint(paired.publicKeyB64)}…)
-                  </Badge>
-                )}
-                {connection !== null && (
-                  <Badge variant="success">WS connected</Badge>
-                )}
-              </Cluster>
-              <Text tone="muted">
-                The private key stays in this tab's memory and is lost on reload —
-                persistence lands in a later phase.
-              </Text>
-            </Layout>
-          </form>
-        </Layout>
-      </Surface>
+            </Cluster>
+            <Text tone="muted">
+              Un-pairing clears the local key and disconnects. The device row
+              stays in the directory on the server until the household admin
+              removes it.
+            </Text>
+          </Layout>
+        </Surface>
+      )}
 
       <Surface variant="callout" padding="var(--polly-space-md)">
         <Layout gap="var(--polly-space-sm)">

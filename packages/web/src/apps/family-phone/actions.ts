@@ -235,6 +235,14 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
 
   'family-phone:complete-pair': async ({ event, stores }) => {
     event.preventDefault();
+    // Re-entrancy guard. A paste that contains a trailing newline fires the
+    // form's implicit submit; without this, clicking the button afterwards
+    // submits a second (empty) time and surfaces a misleading error.
+    if (stores.$pairedThisSession.value !== null) {
+      stores.$familyPhoneError.value = null;
+      stores.$pairCompleteCode.value = '';
+      return;
+    }
     const code = stores.$pairCompleteCode.value.trim();
     if (code.length === 0) {
       stores.$familyPhoneError.value = 'Enter the spoken code first.';
@@ -352,6 +360,37 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
     conn.rejectCall(callId);
   },
 
+  'family-phone:unpair': async ({ stores }) => {
+    // Close any active call and the WS first, then clear in-memory state,
+    // then the persisted row. Order matters — IndexedDB errors must not
+    // leave a stale connection running.
+    if (stores.$activeCall.value !== null) {
+      const conn = stores.$deviceConnection.value;
+      if (conn && stores.$activeCall.value.callId !== '') {
+        conn.hangup(stores.$activeCall.value.callId);
+      }
+    }
+    await stopAudio();
+    stores.$deviceConnection.value?.close();
+    stores.$deviceConnection.value = null;
+    stores.$pairedThisSession.value = null;
+    stores.$activeCall.value = null;
+    stores.$incomingCall.value = null;
+    stores.$callNote.value = 'Device un-paired on this tab.';
+    try {
+      await clearPairedDevice();
+    } catch {
+      /* best-effort */
+    }
+    // Refresh the directory so the device that *was* this tab still shows
+    // up (it's still server-side; un-pairing here is local only).
+    try {
+      stores.$familyPhoneDevices.value = await stores.client.listFamilyPhoneDevices();
+    } catch {
+      /* keep stale list */
+    }
+  },
+
   'family-phone:hangup': ({ stores }) => {
     const active = stores.$activeCall.value;
     if (!active) return;
@@ -362,6 +401,12 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
     } else if (active.callId !== '') {
       conn.hangup(active.callId);
     }
-    stores.$activeCall.value = { ...active, state: 'closing' };
+    // The server delivers call:hung-up only to the peer, not the initiator,
+    // so we clear our own state immediately rather than waiting for a
+    // confirmation that never arrives. The peer's call:hung-up handler does
+    // the symmetric clear on their side.
+    stores.$activeCall.value = null;
+    stores.$callNote.value = 'Call ended.';
+    void stopAudio();
   },
 };

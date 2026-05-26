@@ -12,6 +12,14 @@
 #   LITESTREAM_CONFIG  path to the Litestream config file
 set -eu
 
+# Test-deploy escape hatch: skip the Litestream restore/replicate dance and
+# run the server directly against an ephemeral disk. Useful for verifying a
+# new deploy before wiring up object storage. Never set this in production.
+if [ "${SKIP_LITESTREAM:-}" = "1" ]; then
+  echo "entrypoint: SKIP_LITESTREAM=1 — ephemeral disk, no restore/replicate"
+  exec bun packages/api/src/server.ts
+fi
+
 echo "entrypoint: DATABASE_PATH=$DATABASE_PATH LITESTREAM_CONFIG=$LITESTREAM_CONFIG"
 
 # Cold start (ephemeral disk, or the local mirror after a wipe): the DB file is

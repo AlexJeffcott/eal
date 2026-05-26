@@ -8,7 +8,7 @@
 # Secrets (LITESTREAM_*) go via `fly secrets set` — see docs/deploy.md.
 
 app = "eal"
-primary_region = "lhr"  # set to your nearest Fly region
+primary_region = "cdg"  # closest Fly region to Italy
 
 [build]
   dockerfile = "deploy/Dockerfile"
@@ -19,8 +19,10 @@ primary_region = "lhr"  # set to your nearest Fly region
   # The platform proxy terminates TLS; the container speaks plain HTTP.
   SKIP_TLS = "1"
   LITESTREAM_CONFIG = "deploy/litestream.yml"
-  # EAL_ORIGIN — the public origin; the WebAuthn RP ID is its hostname. Set this
-  # to your real domain once you know it (e.g. https://eal.fly.dev), then deploy.
+  # First deploy bypasses Litestream — ephemeral disk only, data resets on
+  # every machine start. Wire up the LITESTREAM_* secrets and drop this once
+  # the deploy is worth keeping.
+  SKIP_LITESTREAM = "1"
   EAL_ORIGIN = "https://eal.fly.dev"
 
 [http_service]
@@ -28,7 +30,11 @@ primary_region = "lhr"  # set to your nearest Fly region
   force_https = true
   auto_stop_machines = false
   auto_start_machines = true
+  # Family-phone's WS handler and SQLite both live in-process, so two machines
+  # would diverge on state. Until we move to LiteFS or Postgres + Redis, the
+  # deploy is intentionally single-machine.
   min_machines_running = 1
+  max_machines_running = 1
 
   [[http_service.checks]]
     method = "GET"
