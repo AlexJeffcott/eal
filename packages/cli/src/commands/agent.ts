@@ -7,6 +7,9 @@ import { log, logError } from '../lib/process.ts';
 import type { GlobalOptions } from '../types.ts';
 import { createClaudeRunner, type ClaudeRunner } from './claude-runner.ts';
 import { DEFAULT_REJECT_REASON, installAgentPhoneHandler } from './agent-phone-loop.ts';
+import { createVoiceLoop } from './voice-loop.ts';
+import type { SttProvider, TtsProvider } from './voice-providers.ts';
+import { createFixtureStt, createFixtureTts } from './voice-providers-fixture.ts';
 
 /**
  * `eal agent` — the long-running assistant worker.
@@ -106,7 +109,13 @@ async function runAgentWorker(global: GlobalOptions): Promise<number> {
   if (phoneRecord === null) {
     log('eal agent: voice disabled — run `eal agent pair-phone --code=<user-code>` to register on family-phone.');
   } else {
-    void startPhoneLoop(client, phoneRecord);
+    const providers = selectVoiceProviders();
+    if (providers === null) {
+      log(
+        'eal agent: family-phone identity present but voice providers not selected — set EAL_STT_PROVIDER=fixture and EAL_TTS_PROVIDER=fixture to enable the fixture voice loop. Incoming calls will be rejected.',
+      );
+    }
+    void startPhoneLoop(client, phoneRecord, runClaude, providers);
   }
 
   // A dropped socket triggers `onClose`, which resolves the per-attempt
@@ -159,7 +168,12 @@ async function runAgentWorker(global: GlobalOptions): Promise<number> {
  * so this function only needs to retry the *initial* open — once a
  * first connect succeeds, drops are handled internally.
  */
-async function startPhoneLoop(client: EalClient, record: AgentDeviceRecord): Promise<void> {
+async function startPhoneLoop(
+  client: EalClient,
+  record: AgentDeviceRecord,
+  runClaude: ClaudeRunner,
+  providers: { stt: SttProvider; tts: TtsProvider } | null,
+): Promise<void> {
   let privateKey: CryptoKey;
   try {
     privateKey = await importAgentPrivateKey(record.privateKeyPkcs8B64);
@@ -177,8 +191,26 @@ async function startPhoneLoop(client: EalClient, record: AgentDeviceRecord): Pro
         deviceId: record.deviceId,
         privateKey,
       });
-      installAgentPhoneHandler(connection, { log, rejectReason: DEFAULT_REJECT_REASON });
-      log(`eal agent: family-phone device ${record.deviceId} ("${record.label}") online — incoming calls will be politely rejected until the voice loop lands.`);
+      const voiceLoopFactory = providers
+        ? (callId: string, sendAudio: (payload: Uint8Array) => void) =>
+            createVoiceLoop({
+              runClaude,
+              stt: providers.stt,
+              tts: providers.tts,
+              sendAudio,
+              log: (line) => log(`[call ${callId}] ${line}`),
+            })
+        : undefined;
+      installAgentPhoneHandler(connection, {
+        log,
+        rejectReason: DEFAULT_REJECT_REASON,
+        ...(voiceLoopFactory ? { voiceLoopFactory } : {}),
+      });
+      log(
+        providers
+          ? `eal agent: family-phone device ${record.deviceId} ("${record.label}") online — voice loop active.`
+          : `eal agent: family-phone device ${record.deviceId} ("${record.label}") online — incoming calls will be politely rejected.`,
+      );
       return;
     } catch (err) {
       logError(
@@ -188,4 +220,14 @@ async function startPhoneLoop(client: EalClient, record: AgentDeviceRecord): Pro
     await delay(backoffMs);
     backoffMs = Math.min(backoffMs * 2, RECONNECT_MAX_MS);
   }
+}
+
+function selectVoiceProviders(): { stt: SttProvider; tts: TtsProvider } | null {
+  const stt = process.env['EAL_STT_PROVIDER'];
+  const tts = process.env['EAL_TTS_PROVIDER'];
+  if (stt !== 'fixture' || tts !== 'fixture') return null;
+  // Only the fixture pair is wired today. Real Whisper/piper bindings
+  // land in a follow-up; until then voice is opt-in via env vars so
+  // accidental runs never advertise capability the worker does not have.
+  return { stt: createFixtureStt(), tts: createFixtureTts() };
 }
