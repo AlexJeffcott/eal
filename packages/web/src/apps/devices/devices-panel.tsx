@@ -131,10 +131,19 @@ export function DevicesPanel() {
                   Device #{paired.deviceId}
                 </Badge>
                 {connection !== null ? (
-                  <Badge variant="success">connected</Badge>
+                  <Badge variant="success">WS connected</Badge>
                 ) : (
-                  <Badge variant="warning">disconnected</Badge>
+                  <Badge variant="warning">WS disconnected</Badge>
                 )}
+                <Badge variant={
+                  $notificationPermission.value === 'granted'
+                    ? 'success'
+                    : $notificationPermission.value === 'denied'
+                      ? 'danger'
+                      : 'warning'
+                }>
+                  Notifications: {$notificationPermission.value}
+                </Badge>
               </Cluster>
               <Cluster gap="var(--polly-space-xs)">
                 {$notificationPermission.value !== 'granted' && (
@@ -152,6 +161,14 @@ export function DevicesPanel() {
                 />
               </Cluster>
             </Cluster>
+            {$notificationPermission.value === 'denied' && (
+              <Text tone="muted">
+                Your browser is blocking notifications. Open this site's
+                settings (the lock icon in the address bar on desktop, the
+                aA menu on iOS Safari) and switch Notifications to Allow,
+                then reload.
+              </Text>
+            )}
           </Layout>
         </Surface>
       )}
