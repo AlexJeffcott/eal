@@ -1,6 +1,7 @@
 import type { FunctionComponent } from 'preact';
 import { TasksPanel } from './tasks/tasks-panel.tsx';
 import { ShowcasePanel } from './showcase/showcase-panel.tsx';
+import { DevicesPanel } from './devices/devices-panel.tsx';
 import { FamilyPhonePanel } from './family-phone/family-phone-panel.tsx';
 
 /**
@@ -47,10 +48,18 @@ export const WEB_APPS: readonly WebApp[] = [
     root: ShowcasePanel,
   },
   {
+    id: 'devices',
+    path: '/devices',
+    label: 'Devices',
+    description: 'Join the household, invite new devices, and manage the directory.',
+    access: 'authed',
+    root: DevicesPanel,
+  },
+  {
     id: 'family-phone',
     path: '/family-phone',
-    label: 'Family phone',
-    description: 'Pair handsets and PWAs into the household comms system; place voice calls.',
+    label: 'Phone',
+    description: 'Voice calls between paired household devices.',
     access: 'authed',
     root: FamilyPhonePanel,
   },

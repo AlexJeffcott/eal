@@ -4,22 +4,6 @@
   margin: 0 auto;
 }
 
-.family-phone-code strong {
-  font-family: var(--polly-font-mono, ui-monospace, monospace);
-  font-size: 1.1em;
-  letter-spacing: 0.1em;
-}
-
-.family-phone-countdown {
-  opacity: 0.7;
-  font-size: 0.85em;
-  margin-left: 0.5em;
-}
-
-.family-phone-paired {
-  font-family: var(--polly-font-mono, ui-monospace, monospace);
-}
-
 .family-phone-device-row {
   padding: var(--polly-space-xs) var(--polly-space-sm);
   border-radius: var(--polly-radius-sm, 0.25rem);
@@ -27,10 +11,6 @@
 
 .family-phone-device-row:hover {
   background: var(--polly-color-surface-hover, rgba(0, 0, 0, 0.04));
-}
-
-.family-phone-error {
-  border-left: 4px solid var(--polly-color-danger, #e34);
 }
 
 .family-phone-incoming {
@@ -52,5 +32,9 @@
 }
 
 .family-phone-note {
+  border-left: 4px solid var(--polly-color-warning, #f93);
+}
+
+.family-phone-pair-first {
   border-left: 4px solid var(--polly-color-warning, #f93);
 }

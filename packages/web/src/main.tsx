@@ -17,7 +17,7 @@ import {
 import { $tasksById } from './apps/tasks/stores.ts';
 import { bindShowcaseForm } from './apps/showcase/stores.ts';
 import { ACTION_REGISTRY } from './actions/registry.ts';
-import { bootstrapFamilyPhonePairedDevice } from './apps/family-phone/actions.ts';
+import { bootstrapDevices } from './apps/devices/actions.ts';
 import { installTaskUrlSync } from './apps/tasks/url-sync.ts';
 import { installRouter } from './shell/router.ts';
 
@@ -27,6 +27,7 @@ import '@fairfox/polly/ui/components.css';
 import './shell/shell.css';
 import './apps/tasks/tasks.css';
 import './apps/showcase/showcase.css';
+import './apps/devices/devices.css';
 import './apps/family-phone/family-phone.css';
 
 /**
@@ -141,13 +142,13 @@ async function seedSessionData(stores: AppStores): Promise<void> {
     stores.$householdUsers.value = [];
   }
   try {
-    stores.$familyPhoneDevices.value = await stores.client.listFamilyPhoneDevices();
+    stores.$devices.value = await stores.client.listFamilyPhoneDevices();
   } catch (err) {
-    stores.$familyPhoneError.value = err instanceof Error ? err.message : String(err);
+    stores.$devicesError.value = err instanceof Error ? err.message : String(err);
   }
   // Rehydrate a previously-paired device on this tab — if IndexedDB has one,
   // its WS reconnects automatically and the user is ready to call.
-  await bootstrapFamilyPhonePairedDevice(stores);
+  await bootstrapDevices(stores);
 }
 
 /**

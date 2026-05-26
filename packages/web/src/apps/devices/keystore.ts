@@ -1,14 +1,17 @@
 /**
- * Per-origin IndexedDB store for the family-phone device identity. We keep
+ * Per-origin IndexedDB store for the household device identity. We keep
  * a single row keyed by `'device'` that holds the issued device id and the
  * non-extractable ECDSA P-256 private key. CryptoKey objects are storable
  * directly in IndexedDB (the structured-clone algorithm handles them), so
  * we never see the key bytes from JavaScript — which is exactly the
- * property the Phase D challenge/response flow depends on.
+ * property the device challenge/response flow depends on.
  *
  * When a paired tab reloads, `loadPairedDevice` returns the persisted
- * identity and the actions layer can re-open the device WebSocket without
+ * identity and the devices bootstrap re-opens the WebSocket without
  * asking the user to re-pair.
+ *
+ * The database name `eal-family-phone` is preserved from the previous
+ * location of this file so existing paired browsers keep working.
  */
 
 const DB_NAME = 'eal-family-phone';
