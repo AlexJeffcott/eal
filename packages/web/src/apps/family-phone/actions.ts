@@ -10,13 +10,14 @@ import {
   type AudioPlayback,
 } from './audio.ts';
 import { Ringtone } from './ringtone.ts';
-import { defaultNotificationApi, IncomingCallNotifier } from './notifications.ts';
+import { IncomingCallNotifier } from './notifications.ts';
 
 /**
- * Singletons for the in-page ringtone + browser notification. They are
- * lazily-built so tests can swap them via setRingtoneForTest /
- * setNotifierForTest, and so importing this module has no audio side
- * effect at boot.
+ * Singletons for the in-page ringtone + browser notification. Both pull
+ * their browser dependencies through the per-API adapter modules
+ * (platform/audio-context.ts, platform/notification.ts), so tests mock
+ * those modules to spy on the calls. Lazy-build so importing this
+ * module has no audio side effect at boot.
  */
 let ringtoneInstance: Ringtone | null = null;
 let notifierInstance: IncomingCallNotifier | null = null;
@@ -26,18 +27,8 @@ function ringtone(): Ringtone {
   return ringtoneInstance;
 }
 function notifier(): IncomingCallNotifier {
-  if (notifierInstance === null) {
-    notifierInstance = new IncomingCallNotifier(defaultNotificationApi());
-  }
+  if (notifierInstance === null) notifierInstance = new IncomingCallNotifier();
   return notifierInstance;
-}
-
-/** Test seam: swap the live singletons for stubs in browser tests. */
-export function setRingtoneForTest(value: Ringtone | null): void {
-  ringtoneInstance = value;
-}
-export function setNotifierForTest(value: IncomingCallNotifier | null): void {
-  notifierInstance = value;
 }
 
 /**

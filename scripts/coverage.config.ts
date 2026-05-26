@@ -87,6 +87,10 @@ export const config: CoverageConfig = {
       reason: 'WebAudio capture/playback — AudioWorklet + getUserMedia only meaningful in a real browser',
       claimedBy: 'n/a — exercised by manual two-browser call session',
     },
+    'packages/web/src/apps/family-phone/ringtone.ts': {
+      reason: 'core start/stop/isPlaying unit-tested; the catch branches around oscillator.stop and AudioContext.close fire only on browser implementation quirks and are exercised by the e2e ringtone harness',
+      claimedBy: 'scripts/e2e-family-phone-ringtone.ts',
+    },
     'packages/web/src/apps/family-phone/stores.ts': {
       reason: 'call-only signals; reads exercised by actions.test.ts, createFamilyPhoneStores/reset by the shell composition root',
       claimedBy: 'packages/web/src/apps/family-phone/actions.test.ts',

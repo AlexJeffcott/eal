@@ -1,20 +1,20 @@
-import { describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { delay } from '@eal/shared';
-import { Ringtone, type AudioContextCtor } from './ringtone.ts';
 
 /**
- * Stub WebAudio classes. The Ringtone class only touches a small surface
- * (createOscillator, createGain, currentTime, destination, gain ramps,
- * connect, close) — enough to assert with simple shape checks.
+ * Mock the platform adapter so Ringtone constructs the stub class
+ * instead of the real browser AudioContext. The mock is module-level
+ * — every `new AudioContext()` inside ringtone.ts lands on
+ * StubAudioContext, and the test inspects what the stub recorded.
  */
 
 interface StubGain {
   gain: {
     value: number;
-    setValueAtTime: (v: number, t: number) => void;
-    linearRampToValueAtTime: (v: number, t: number) => void;
+    setValueAtTime(value: number, time: number): unknown;
+    linearRampToValueAtTime(value: number, time: number): unknown;
   };
-  connect: (target: unknown) => unknown;
+  connect(target: unknown): unknown;
   ramps: { v: number; t: number }[];
 }
 
@@ -22,80 +22,74 @@ interface StubOscillator {
   frequency: { value: number };
   started: boolean;
   stopped: boolean;
-  connect: (target: unknown) => unknown;
-  start: () => void;
-  stop: () => void;
+  connect(target: unknown): unknown;
+  start(): void;
+  stop(): void;
 }
 
-interface StubCtx {
-  state: 'running' | 'closed';
-  currentTime: number;
-  destination: unknown;
-  gains: StubGain[];
-  oscillators: StubOscillator[];
-  closed: boolean;
-  createGain: () => StubGain;
-  createOscillator: () => StubOscillator;
-  close: () => Promise<void>;
-}
+class StubAudioContext {
+  static instances: StubAudioContext[] = [];
+  state: 'running' | 'closed' = 'running';
+  currentTime = 0;
+  destination: unknown = { id: 'destination' };
+  gains: StubGain[] = [];
+  oscillators: StubOscillator[] = [];
+  closed = false;
 
-function makeStubCtor(): { ctor: AudioContextCtor; instances: StubCtx[] } {
-  const instances: StubCtx[] = [];
-  // Class form so `new ctor()` is well-typed against AudioContextCtor.
-  class StubAudioContext {
-    state: 'running' | 'closed' = 'running';
-    currentTime = 0;
-    destination = { id: 'destination' };
-    gains: StubGain[] = [];
-    oscillators: StubOscillator[] = [];
-    closed = false;
-    constructor() {
-      instances.push(this);
-    }
-    createGain(): StubGain {
-      const ramps: { v: number; t: number }[] = [];
-      const gain: StubGain = {
-        gain: {
-          value: 0,
-          setValueAtTime(v, t) { ramps.push({ v, t }); },
-          linearRampToValueAtTime(v, t) { ramps.push({ v, t }); },
-        },
-        connect: () => undefined,
-        ramps,
-      };
-      this.gains.push(gain);
-      return gain;
-    }
-    createOscillator(): StubOscillator {
-      const o: StubOscillator = {
-        frequency: { value: 0 },
-        started: false,
-        stopped: false,
-        connect: () => undefined,
-        start() { this.started = true; },
-        stop() { this.stopped = true; },
-      };
-      this.oscillators.push(o);
-      return o;
-    }
-    async close(): Promise<void> {
-      this.closed = true;
-      this.state = 'closed';
-    }
+  constructor() {
+    StubAudioContext.instances.push(this);
   }
-  // Structural match against AudioContextCtor — the stub class implements
-  // every method Ringtone touches with compatible signatures.
-  const ctor: AudioContextCtor = StubAudioContext;
-  return { ctor, instances };
+
+  createGain(): StubGain {
+    const ramps: { v: number; t: number }[] = [];
+    const gain: StubGain = {
+      gain: {
+        value: 0,
+        setValueAtTime(v: number, t: number) { ramps.push({ v, t }); },
+        linearRampToValueAtTime(v: number, t: number) { ramps.push({ v, t }); },
+      },
+      connect: () => undefined,
+      ramps,
+    };
+    this.gains.push(gain);
+    return gain;
+  }
+
+  createOscillator(): StubOscillator {
+    const o: StubOscillator = {
+      frequency: { value: 0 },
+      started: false,
+      stopped: false,
+      connect: () => undefined,
+      start() { this.started = true; },
+      stop() { this.stopped = true; },
+    };
+    this.oscillators.push(o);
+    return o;
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+    this.state = 'closed';
+  }
 }
+
+mock.module('../../platform/audio-context.ts', () => ({
+  AudioContext: StubAudioContext,
+}));
+
+const { Ringtone } = await import('./ringtone.ts');
 
 describe('Ringtone', () => {
+  beforeEach(() => {
+    StubAudioContext.instances = [];
+  });
+
   test('start() opens an AudioContext and runs two oscillators at 440 + 480 Hz', () => {
-    const { ctor, instances } = makeStubCtor();
-    const r = new Ringtone({ audioContextCtor: ctor });
+    const r = new Ringtone();
     r.start();
-    expect(instances.length).toBe(1);
-    const ctx = instances[0];
+    expect(StubAudioContext.instances.length).toBe(1);
+    const ctx = StubAudioContext.instances[0];
     if (!ctx) throw new Error('unreachable');
     expect(ctx.oscillators.length).toBe(2);
     const freqs = ctx.oscillators.map((o) => o.frequency.value).sort();
@@ -104,32 +98,30 @@ describe('Ringtone', () => {
   });
 
   test('start() is idempotent — a second call does not open a new context', () => {
-    const { ctor, instances } = makeStubCtor();
-    const r = new Ringtone({ audioContextCtor: ctor });
+    const r = new Ringtone();
     r.start();
     r.start();
-    expect(instances.length).toBe(1);
+    expect(StubAudioContext.instances.length).toBe(1);
   });
 
   test('stop() closes the AudioContext and marks oscillators stopped', async () => {
-    const { ctor, instances } = makeStubCtor();
-    const r = new Ringtone({ audioContextCtor: ctor });
+    const r = new Ringtone();
     r.start();
     await r.stop();
-    const ctx = instances[0];
+    const ctx = StubAudioContext.instances[0];
     if (!ctx) throw new Error('unreachable');
     expect(ctx.closed).toBe(true);
     for (const o of ctx.oscillators) expect(o.stopped).toBe(true);
   });
 
   test('stop() before start() is a safe no-op', async () => {
-    const r = new Ringtone({ audioContextCtor: makeStubCtor().ctor });
+    const r = new Ringtone();
     await r.stop();
     expect(r.isPlaying()).toBe(false);
   });
 
   test('isPlaying() reflects start/stop transitions', async () => {
-    const r = new Ringtone({ audioContextCtor: makeStubCtor().ctor });
+    const r = new Ringtone();
     expect(r.isPlaying()).toBe(false);
     r.start();
     expect(r.isPlaying()).toBe(true);
@@ -138,15 +130,27 @@ describe('Ringtone', () => {
   });
 
   test('start() schedules a gain envelope (ring-on for ~2s, ramps applied)', async () => {
-    const { ctor, instances } = makeStubCtor();
-    const r = new Ringtone({ audioContextCtor: ctor });
+    const r = new Ringtone();
     r.start();
     // The first cycle is scheduled via setTimeout(_, 0); let it land.
     await delay(5);
-    const ctx = instances[0];
+    const ctx = StubAudioContext.instances[0];
     if (!ctx) throw new Error('unreachable');
     const gain = ctx.gains[0];
     expect(gain?.ramps.length).toBeGreaterThanOrEqual(2);
     await r.stop();
+  });
+
+  test('stop() during an active cycle clears the scheduled callback', async () => {
+    const r = new Ringtone();
+    r.start();
+    await delay(5);
+    await r.stop();
+    const ramps = StubAudioContext.instances[0]?.gains[0]?.ramps.length ?? 0;
+    // Wait past one full cycle window — no new ramps should be added
+    // because the schedule timer was cleared by stop().
+    await delay(50);
+    const after = StubAudioContext.instances[0]?.gains[0]?.ramps.length ?? 0;
+    expect(after).toBe(ramps);
   });
 });

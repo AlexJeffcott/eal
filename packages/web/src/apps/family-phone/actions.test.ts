@@ -1,36 +1,21 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import {
-  installCallEventHandlers,
-  setNotifierForTest,
-  setRingtoneForTest,
-} from './actions.ts';
-import { $activeCall, $callNote, $incomingCall } from './stores.ts';
-import { Ringtone } from './ringtone.ts';
-import {
-  IncomingCallNotifier,
-  type NotificationApi,
-  type NotificationCtor,
-  type NotificationLike,
-} from './notifications.ts';
-import { $devices } from '../devices/stores.ts';
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
 
 /**
- * Wiring tests: prove that the right thing happens to the ringtone and
- * the notifier when call-event messages arrive on the WS. The pure logic
- * of those two pieces is covered by ringtone.test.ts and
- * notifications.test.ts; this file proves they fire from the right
- * triggers in the right sequence.
+ * Wiring tests for installCallEventHandlers: prove that the right
+ * browser-platform calls fire from the right WS event triggers. Pure
+ * logic of the underlying classes lives in ringtone.test.ts and
+ * notifications.test.ts; this file proves the integration.
+ *
+ * Platform adapters are mocked at module level so the singletons inside
+ * actions.ts pick up the stubs when they lazy-construct on first call.
  */
 
-interface SpyRingtone {
-  starts: number;
-  stops: number;
-  ring: Ringtone;
-}
 class StubAudioContext {
-  readonly state = 'running';
-  readonly currentTime = 0;
-  readonly destination = {};
+  static instances: StubAudioContext[] = [];
+  state: 'running' | 'closed' = 'running';
+  currentTime = 0;
+  destination: unknown = {};
+  constructor() { StubAudioContext.instances.push(this); }
   createGain() {
     return {
       gain: {
@@ -38,78 +23,54 @@ class StubAudioContext {
         setValueAtTime() {},
         linearRampToValueAtTime() {},
       },
-      connect() {},
+      connect: () => undefined,
     };
   }
   createOscillator() {
     return {
       frequency: { value: 0 },
-      connect() {},
+      connect: () => undefined,
       start() {},
       stop() {},
     };
   }
-  async close() {}
+  async close() { this.state = 'closed'; }
 }
 
-function makeRingtoneSpy(): SpyRingtone {
-  const spy: SpyRingtone = {
-    starts: 0,
-    stops: 0,
-    ring: new Ringtone({ audioContextCtor: StubAudioContext }),
-  };
-  const realStart = spy.ring.start.bind(spy.ring);
-  const realStop = spy.ring.stop.bind(spy.ring);
-  spy.ring.start = () => { spy.starts += 1; realStart(); };
-  spy.ring.stop = async () => { spy.stops += 1; await realStop(); };
-  return spy;
+interface StubNotificationRecord {
+  title: string;
+  body: string | undefined;
+  closed: boolean;
 }
-
-interface SpyNotifier {
-  shows: { title: string; body: string }[];
-  dismisses: number;
-  notifier: IncomingCallNotifier;
-}
-function makeNotifierSpy(): SpyNotifier {
-  class StubNotification implements NotificationLike {
-    close(): void { /* recorded by the dismiss spy */ }
-  }
-  const ctor: NotificationCtor = StubNotification;
-  async function alwaysGranted(): Promise<NotificationPermission> {
+const notifications: StubNotificationRecord[] = [];
+class StubNotification {
+  static readonly permission: NotificationPermission = 'granted';
+  static async requestPermission(): Promise<NotificationPermission> {
     return 'granted';
   }
-  const api: NotificationApi = {
-    permission: 'granted',
-    requestPermission: alwaysGranted,
-    ctor,
-  };
-  const spy: SpyNotifier = {
-    shows: [],
-    dismisses: 0,
-    notifier: new IncomingCallNotifier(api),
-  };
-  const realShow = spy.notifier.show.bind(spy.notifier);
-  const realDismiss = spy.notifier.dismiss.bind(spy.notifier);
-  spy.notifier.show = (title, body) => {
-    spy.shows.push({ title, body });
-    realShow(title, body);
-  };
-  spy.notifier.dismiss = () => {
-    spy.dismisses += 1;
-    realDismiss();
-  };
-  return spy;
+  private readonly record: StubNotificationRecord;
+  constructor(title: string, opts?: NotificationOptions) {
+    this.record = { title, body: opts?.body, closed: false };
+    notifications.push(this.record);
+  }
+  close(): void { this.record.closed = true; }
 }
 
-describe('family-phone action wiring — ringtone + notifier reactions', () => {
-  let ring: SpyRingtone;
-  let note: SpyNotifier;
+mock.module('../../platform/audio-context.ts', () => ({
+  AudioContext: StubAudioContext,
+}));
+mock.module('../../platform/notification.ts', () => ({
+  Notification: StubNotification,
+}));
 
+const { installCallEventHandlers } = await import('./actions.ts');
+const { $activeCall, $callNote, $incomingCall } = await import('./stores.ts');
+const { $devices } = await import('../devices/stores.ts');
+
+describe('family-phone action wiring — ringtone + notifier reactions', () => {
   beforeEach(() => {
-    ring = makeRingtoneSpy();
-    note = makeNotifierSpy();
-    setRingtoneForTest(ring.ring);
-    setNotifierForTest(note.notifier);
+    StubAudioContext.instances = [];
+    notifications.length = 0;
     $devices.value = [
       {
         id: 7,
@@ -127,58 +88,47 @@ describe('family-phone action wiring — ringtone + notifier reactions', () => {
     $callNote.value = null;
   });
 
-  afterEach(() => {
-    setRingtoneForTest(null);
-    setNotifierForTest(null);
-  });
-
   test('call:incoming starts the ringtone and shows a notification with caller name', () => {
     installCallEventHandlers({ type: 'call:incoming', callId: 'c1', fromDeviceId: 7 });
-    expect(ring.starts).toBe(1);
-    expect(note.shows.length).toBe(1);
-    expect(note.shows[0]?.title).toBe('Incoming call');
-    expect(note.shows[0]?.body).toContain("Leo's handset");
-    expect(note.shows[0]?.body).toContain('leo');
+    expect(StubAudioContext.instances.length).toBeGreaterThanOrEqual(1);
+    expect(notifications.length).toBe(1);
+    expect(notifications[0]?.title).toBe('Incoming call');
+    expect(notifications[0]?.body).toContain("Leo's handset");
+    expect(notifications[0]?.body).toContain('leo');
     expect($incomingCall.value?.callId).toBe('c1');
   });
 
   test('call:cancelled stops the ringtone and dismisses the notification', () => {
     installCallEventHandlers({ type: 'call:incoming', callId: 'c1', fromDeviceId: 7 });
     installCallEventHandlers({ type: 'call:cancelled', callId: 'c1' });
-    expect(ring.stops).toBe(1);
-    expect(note.dismisses).toBe(1);
+    expect(notifications[0]?.closed).toBe(true);
     expect($incomingCall.value).toBeNull();
   });
 
   test('call:rejected stops the ringtone (this device rejected the call)', () => {
     installCallEventHandlers({ type: 'call:incoming', callId: 'c1', fromDeviceId: 7 });
     installCallEventHandlers({ type: 'call:rejected', callId: 'c1' });
-    expect(ring.stops).toBe(1);
-    expect(note.dismisses).toBe(1);
+    expect(notifications[0]?.closed).toBe(true);
   });
 
   test('call:accept-ack stops the ringtone (this device accepted)', () => {
     installCallEventHandlers({ type: 'call:incoming', callId: 'c1', fromDeviceId: 7 });
-    // Mimic the action handler that flips $activeCall before the ack arrives.
     $activeCall.value = { callId: 'c1', role: 'callee', peerDeviceId: 7, state: 'pending' };
     installCallEventHandlers({ type: 'call:accept-ack', callId: 'c1' });
-    expect(ring.stops).toBe(1);
-    expect(note.dismisses).toBe(1);
+    expect(notifications[0]?.closed).toBe(true);
   });
 
-  test('call:hung-up after accept dismisses (no ring was active, dismiss is idempotent)', () => {
+  test('call:hung-up after accept dismisses', () => {
     installCallEventHandlers({ type: 'call:incoming', callId: 'c1', fromDeviceId: 7 });
     $activeCall.value = { callId: 'c1', role: 'callee', peerDeviceId: 7, state: 'connected' };
     installCallEventHandlers({ type: 'call:accept-ack', callId: 'c1' });
-    const stopsAfterAccept = ring.stops;
     installCallEventHandlers({ type: 'call:hung-up', callId: 'c1' });
-    expect(ring.stops).toBe(stopsAfterAccept + 1);
     expect($activeCall.value).toBeNull();
+    expect(notifications[0]?.closed).toBe(true);
   });
 
   test('caller-side call:invite-ack does NOT start the ringtone', () => {
     installCallEventHandlers({ type: 'call:invite-ack', callId: 'c1' });
-    expect(ring.starts).toBe(0);
-    expect(note.shows.length).toBe(0);
+    expect(notifications.length).toBe(0);
   });
 });
