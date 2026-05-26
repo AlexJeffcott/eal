@@ -49,6 +49,7 @@ function readDeviceAuth(
 export function createFamilyPhoneWsHandler(
   ctx: WsAppContext,
   onlineDevices: Set<number>,
+  broadcastTopic: string,
 ): WsMessageHandler {
   const challenges = createFamilyPhoneChallengesRepo(ctx.db);
   const deviceKeys = createFamilyPhoneDeviceKeysRepo(ctx.db);
@@ -95,6 +96,16 @@ export function createFamilyPhoneWsHandler(
       wsDevices.set(ws.id, fields.deviceId);
       deviceToWs.set(fields.deviceId, ws.id);
       onlineDevices.add(fields.deviceId);
+      // Every authed device joins the broadcast topic so each one receives
+      // presence and directory updates as they happen. The presence event
+      // goes out *after* subscribe so the newly-online device sees itself
+      // in the broadcast and other devices learn about it.
+      ctx.ws.subscribe(ws, broadcastTopic);
+      ctx.ws.broadcast(broadcastTopic, {
+        type: 'presence:changed',
+        device_id: fields.deviceId,
+        online: true,
+      });
       return true;
     },
 
@@ -212,9 +223,15 @@ export function createFamilyPhoneWsHandler(
     onClose(ws: WsLike): void {
       const deviceId = wsDevices.get(ws.id);
       wsDevices.delete(ws.id);
+      ctx.ws.unsubscribe(ws, broadcastTopic);
       if (deviceId !== undefined) {
         deviceToWs.delete(deviceId);
         onlineDevices.delete(deviceId);
+        ctx.ws.broadcast(broadcastTopic, {
+          type: 'presence:changed',
+          device_id: deviceId,
+          online: false,
+        });
       }
       // Tear down any call this connection was party to. The peer learns
       // via call:hung-up with reason 'peer-disconnect' so the UI can

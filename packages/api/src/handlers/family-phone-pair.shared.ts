@@ -127,6 +127,13 @@ export function completeCore(
     alg: string;
     label: string;
     kind: DeviceKind;
+    /**
+     * Optional owner override: when the joining browser is signed in as a
+     * household member, the new device should be owned by that member —
+     * not the inviter who minted the code. Falls back to the inviter's
+     * user_id from the pair request when the joiner is anonymous.
+     */
+    overrideOwnerUserId?: number;
   },
 ): CompleteResult {
   if (input.publicKey.length === 0) {
@@ -170,7 +177,7 @@ export function completeCore(
       throw new AuthError(409, 'user_code already consumed');
     }
     const device = deps.devices.insert({
-      userId: row.user_id,
+      userId: input.overrideOwnerUserId ?? row.user_id,
       label,
       kind: input.kind,
       pairedAt: formatSqliteDateTime(current),

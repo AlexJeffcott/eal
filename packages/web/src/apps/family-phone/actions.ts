@@ -6,6 +6,8 @@ import {
   $callNote,
   $deviceConnection,
   $incomingCall,
+  $pairStartCode,
+  $pairStartSecondsLeft,
   type PairedThisSession,
 } from './stores.ts';
 import { clearPairedDevice, loadPairedDevice, savePairedDevice } from './keystore.ts';
@@ -14,6 +16,33 @@ import { startAudioCapture, startAudioPlayback, type AudioCapture, type AudioPla
 function describeError(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+/**
+ * Live countdown ticker for the displayed invite code. One per module —
+ * minting a new code stops any running interval and starts a fresh one,
+ * so two rapid mints don't race to clear each other's code.
+ */
+const PAIR_TTL_SECONDS = 60;
+let pairCountdownInterval: ReturnType<typeof setInterval> | null = null;
+
+function startPairCountdown(code: string): void {
+  if (pairCountdownInterval !== null) clearInterval(pairCountdownInterval);
+  $pairStartCode.value = code;
+  $pairStartSecondsLeft.value = PAIR_TTL_SECONDS;
+  pairCountdownInterval = setInterval(() => {
+    const next = $pairStartSecondsLeft.value - 1;
+    if (next <= 0) {
+      $pairStartSecondsLeft.value = 0;
+      $pairStartCode.value = null;
+      if (pairCountdownInterval !== null) {
+        clearInterval(pairCountdownInterval);
+        pairCountdownInterval = null;
+      }
+      return;
+    }
+    $pairStartSecondsLeft.value = next;
+  }, 1000);
 }
 
 /**
@@ -80,6 +109,22 @@ function toBase64Url(bytes: Uint8Array): string {
  * the audio capture/playback pipeline as the call enters and leaves
  * `connected`.
  */
+/**
+ * The store bundle is available to action handlers, but the call-event
+ * subscriber is registered at WS-open time without a stores argument.
+ * Capturing the AppStores ref here lets the subscriber refresh the
+ * devices list when the server broadcasts a presence or directory
+ * change. The ref is set the first time openDeviceConnection runs.
+ */
+let storesRef: AppStores | null = null;
+
+async function refreshDevicesQuietly(): Promise<void> {
+  if (!storesRef) return;
+  try {
+    storesRef.$familyPhoneDevices.value = await storesRef.client.listFamilyPhoneDevices();
+  } catch { /* keep stale list */ }
+}
+
 function installCallEventHandlers(event: FamilyPhoneCallEvent): void {
   switch (event.type) {
     case 'call:invite-ack': {
@@ -142,13 +187,23 @@ function installCallEventHandlers(event: FamilyPhoneCallEvent): void {
       void stopAudio();
       return;
     }
+    case 'presence:changed':
+    case 'directory:changed': {
+      // Either kind of change invalidates the local cached list. Refetch
+      // rather than patch — the directory is small and a single GET keeps
+      // the source of truth on the server.
+      void refreshDevicesQuietly();
+      return;
+    }
   }
 }
 
 async function openDeviceConnection(
   client: EalClient,
   paired: PairedThisSession,
+  stores?: AppStores,
 ): Promise<void> {
+  if (stores) storesRef = stores;
   const existing = $deviceConnection.value;
   if (existing && existing.deviceId === paired.deviceId) return;
   existing?.close();
@@ -184,7 +239,7 @@ export async function bootstrapFamilyPhonePairedDevice(
   };
   stores.$pairedThisSession.value = paired;
   try {
-    await openDeviceConnection(stores.client, paired);
+    await openDeviceConnection(stores.client, paired, stores);
   } catch (err) {
     // Stale persisted device — the server no longer knows it (server
     // wipe, key revocation). Clear the row so the user can pair fresh.
@@ -219,7 +274,7 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
     stores.$familyPhoneError.value = null;
     try {
       const result = await stores.client.startFamilyPhonePair();
-      stores.$pairStartCode.value = result.userCode;
+      startPairCountdown(result.userCode);
     } catch (err) {
       stores.$familyPhoneError.value = describeError(err);
     }
@@ -288,7 +343,7 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
       }
       // Immediately open the device WS so the new device can place and
       // receive calls without an extra explicit step.
-      await openDeviceConnection(stores.client, paired);
+      await openDeviceConnection(stores.client, paired, stores);
     } catch (err) {
       stores.$familyPhoneError.value = describeError(err);
     }

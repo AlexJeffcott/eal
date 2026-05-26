@@ -12,6 +12,12 @@ export interface FamilyPhoneRoutesContext {
    * presence without an extra round-trip.
    */
   onlineDevices: Set<number>;
+  /**
+   * Called after any mutation that changes the directory's shape — a row
+   * deleted, in future a row inserted. Implementation broadcasts to
+   * connected family-phone WS clients so their panels can re-fetch.
+   */
+  onDirectoryChanged: () => void;
 }
 
 export function familyPhoneHttpRoutes(ctx: FamilyPhoneRoutesContext) {
@@ -59,6 +65,7 @@ export function familyPhoneHttpRoutes(ctx: FamilyPhoneRoutesContext) {
       // closes. We also forget it eagerly so the next directory read does
       // not paint a stale online dot.
       ctx.onlineDevices.delete(id);
+      if (removed) ctx.onDirectoryChanged();
       return { deleted: removed };
     });
 }

@@ -51,7 +51,9 @@ export type FamilyPhoneCallEvent =
   | { type: 'call:accept-ack'; callId: string }
   | { type: 'call:rejected'; callId: string }
   | { type: 'call:cancelled'; callId: string }
-  | { type: 'call:hung-up'; callId: string; reason?: string };
+  | { type: 'call:hung-up'; callId: string; reason?: string }
+  | { type: 'presence:changed'; deviceId: number; online: boolean }
+  | { type: 'directory:changed' };
 
 /**
  * A live device-authenticated WebSocket. Returned by

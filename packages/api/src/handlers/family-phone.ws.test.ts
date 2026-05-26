@@ -152,21 +152,21 @@ describe('family-phone.ws — authenticate', () => {
 
   test('an envelope missing device_id is declined (false)', async () => {
     const harness = makeHarness();
-    const handler = createFamilyPhoneWsHandler({ db, ws: harness.service }, new Set());
+    const handler = createFamilyPhoneWsHandler({ db, ws: harness.service }, new Set(), "test-topic");
     const ok = await handler.authenticate?.(harness.ws('a'), { type: 'auth' });
     expect(ok).toBe(false);
   });
 
   test('a valid challenge/signature pair is accepted', async () => {
     const harness = makeHarness();
-    const handler = createFamilyPhoneWsHandler({ db, ws: harness.service }, new Set());
+    const handler = createFamilyPhoneWsHandler({ db, ws: harness.service }, new Set(), "test-topic");
     const device = await pairDeviceDirect(db, userId);
     await authConnect(handler, harness.ws('a'), db, device);
   });
 
   test('a bad signature is declined (false), no exception', async () => {
     const harness = makeHarness();
-    const handler = createFamilyPhoneWsHandler({ db, ws: harness.service }, new Set());
+    const handler = createFamilyPhoneWsHandler({ db, ws: harness.service }, new Set(), "test-topic");
     const device = await pairDeviceDirect(db, userId);
     const { nonce } = await mintAndSign(db, device);
 
@@ -205,7 +205,7 @@ describe('family-phone.ws — call state machine, two authed peers', () => {
 
   async function setup() {
     const harness = makeHarness();
-    const handler = createFamilyPhoneWsHandler({ db, ws: harness.service }, new Set());
+    const handler = createFamilyPhoneWsHandler({ db, ws: harness.service }, new Set(), "test-topic");
     const alex = await pairDeviceDirect(db, alexId);
     const elisa = await pairDeviceDirect(db, elisaId);
     const wsA = harness.ws('alex-ws');

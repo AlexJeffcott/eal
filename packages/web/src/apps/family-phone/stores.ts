@@ -14,6 +14,8 @@ export const $familyPhoneError = $state<string | null>(null);
 
 /** The minted code, displayed on the inviting browser for the joiner to type in. */
 export const $pairStartCode = $state<string | null>(null);
+/** Seconds remaining before the minted code expires; 0 when none in flight. */
+export const $pairStartSecondsLeft = $state<number>(0);
 
 /** Form state for the joining device: code + its own label + its own kind. */
 export const $pairCompleteCode = $state<string>('');
@@ -64,6 +66,7 @@ export interface FamilyPhoneStores {
   $familyPhoneDevices: typeof $familyPhoneDevices;
   $familyPhoneError: typeof $familyPhoneError;
   $pairStartCode: typeof $pairStartCode;
+  $pairStartSecondsLeft: typeof $pairStartSecondsLeft;
   $pairCompleteCode: typeof $pairCompleteCode;
   $pairCompleteLabel: typeof $pairCompleteLabel;
   $pairCompleteKind: typeof $pairCompleteKind;
@@ -79,6 +82,7 @@ export function createFamilyPhoneStores(): FamilyPhoneStores {
     $familyPhoneDevices,
     $familyPhoneError,
     $pairStartCode,
+    $pairStartSecondsLeft,
     $pairCompleteCode,
     $pairCompleteLabel,
     $pairCompleteKind,
@@ -94,6 +98,7 @@ export function resetFamilyPhoneStores(): void {
   $familyPhoneDevices.value = [];
   $familyPhoneError.value = null;
   $pairStartCode.value = null;
+  $pairStartSecondsLeft.value = 0;
   $pairCompleteCode.value = '';
   $pairCompleteLabel.value = '';
   $pairCompleteKind.value = 'pwa';

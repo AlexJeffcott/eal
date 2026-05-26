@@ -88,14 +88,19 @@ export const familyPhoneApp: ApiApp = {
     );
   },
   routes: (ctx) => {
+    const broadcastDirectoryChanged = (): void => {
+      ctx.ws.broadcast(FAMILY_PHONE_TOPIC, { type: 'directory:changed' });
+    };
     const devices = familyPhoneHttpRoutes({
       db: ctx.db,
       getPrincipal: ctx.getPrincipal,
       onlineDevices: ONLINE_DEVICES,
+      onDirectoryChanged: broadcastDirectoryChanged,
     });
     const pair = familyPhonePairHttpRoutes({
       db: ctx.db,
       getPrincipal: ctx.getPrincipal,
+      onDirectoryChanged: broadcastDirectoryChanged,
     });
     const deviceAuth = familyPhoneDeviceAuthHttpRoutes({ db: ctx.db });
     return new Elysia().use(devices).use(pair).use(deviceAuth);
@@ -103,9 +108,17 @@ export const familyPhoneApp: ApiApp = {
   ws: {
     prefix: 'call',
     binaryTag: 0x10,
-    handler: (ctx) => createFamilyPhoneWsHandler(ctx, ONLINE_DEVICES),
+    handler: (ctx) =>
+      createFamilyPhoneWsHandler(ctx, ONLINE_DEVICES, FAMILY_PHONE_TOPIC),
   },
 };
+
+/**
+ * Topic every authenticated family-phone WS subscribes to. The server
+ * publishes presence and directory changes to it so each device's panel
+ * can re-fetch its devices list without manual refresh.
+ */
+const FAMILY_PHONE_TOPIC = 'family-phone';
 
 /**
  * Per-process presence set, shared between the WS handler (which mutates it

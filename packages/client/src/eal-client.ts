@@ -836,5 +836,15 @@ function parseFamilyPhoneCallEvent(raw: string): FamilyPhoneCallEvent | null {
     }
     return { type: t, ...base };
   }
+  if (
+    t === 'presence:changed' &&
+    'device_id' in parsed && typeof parsed.device_id === 'number' &&
+    'online' in parsed && typeof parsed.online === 'boolean'
+  ) {
+    return { type: 'presence:changed', deviceId: parsed.device_id, online: parsed.online };
+  }
+  if (t === 'directory:changed') {
+    return { type: 'directory:changed' };
+  }
   return null;
 }

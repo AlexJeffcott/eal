@@ -15,6 +15,8 @@ import { AuthError } from './auth.shared.ts';
 export interface FamilyPhonePairRoutesContext {
   db: DatabaseClient;
   getPrincipal: (request: Request) => Principal | null;
+  /** Notify connected family-phone WS clients that the directory grew. */
+  onDirectoryChanged: () => void;
 }
 
 function decodeBase64Url(value: string): Uint8Array | null {
@@ -61,19 +63,27 @@ export function familyPhonePairHttpRoutes(ctx: FamilyPhonePairRoutesContext) {
     )
     .post(
       '/complete',
-      ({ body, set }) => {
+      ({ body, request, set }) => {
         const publicKey = decodeBase64Url(body.public_key);
         if (!publicKey) {
           set.status = 400;
           return { error: 'public_key must be base64url-encoded' };
         }
+        // The route is ownsAuthFor-exempt so an unauthed joiner can pair,
+        // but if the joiner *is* signed in (which is the usual case — they
+        // had to register via WebAuthn before navigating here) the new
+        // device should be owned by them, not by the inviter who minted
+        // the code.
+        const joiner = ctx.getPrincipal(request);
         const result = completeCore(deps, {
           userCode: body.user_code,
           publicKey,
           alg: body.alg,
           label: body.label,
           kind: body.kind,
+          ...(joiner ? { overrideOwnerUserId: joiner.userId } : {}),
         });
+        ctx.onDirectoryChanged();
         return { device_id: result.deviceId };
       },
       {

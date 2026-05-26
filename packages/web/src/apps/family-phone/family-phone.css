@@ -10,6 +10,12 @@
   letter-spacing: 0.1em;
 }
 
+.family-phone-countdown {
+  opacity: 0.7;
+  font-size: 0.85em;
+  margin-left: 0.5em;
+}
+
 .family-phone-paired {
   font-family: var(--polly-font-mono, ui-monospace, monospace);
 }
