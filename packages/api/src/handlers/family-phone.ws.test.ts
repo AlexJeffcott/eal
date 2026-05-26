@@ -94,7 +94,11 @@ interface PairedDevice {
   privateKey: CryptoKey;
 }
 
-async function pairDeviceDirect(db: DatabaseClient, userId: number): Promise<PairedDevice> {
+async function pairDeviceDirect(
+  db: DatabaseClient,
+  userId: number,
+  kind: 'handset' | 'pwa' | 'agent' = 'pwa',
+): Promise<PairedDevice> {
   const kp = await crypto.subtle.generateKey(
     { name: 'ECDSA', namedCurve: 'P-256' },
     true,
@@ -103,7 +107,7 @@ async function pairDeviceDirect(db: DatabaseClient, userId: number): Promise<Pai
   const spki = new Uint8Array(await crypto.subtle.exportKey('spki', kp.publicKey));
   const devices = createFamilyPhoneDevicesRepo(db);
   const keys = createFamilyPhoneDeviceKeysRepo(db);
-  const device = devices.insert({ userId, label: 'd', kind: 'pwa' });
+  const device = devices.insert({ userId, label: 'd', kind });
   keys.insert({ deviceId: device.id, publicKey: spki, alg: 'ES256' });
   return { deviceId: device.id, privateKey: kp.privateKey };
 }
@@ -414,6 +418,52 @@ describe('family-phone.ws — call state machine, two authed peers', () => {
     );
     expect(find(harness.send, 'alex-ws', 'push:unsubscribed')).not.toBeNull();
     expect(createFamilyPhonePushSubscriptionsRepo(db).listByDevice(alex.deviceId)).toEqual([]);
+  });
+
+  test('a kind:"agent" device participates in the call path identically to a pwa', async () => {
+    // Regression guard for the audio-first plan: the family-phone handler
+    // is identity-agnostic about device kind. An agent paired into the
+    // directory should authenticate, receive call:incoming on invite, and
+    // be able to reject with the same machinery as any other peer.
+    const harness = makeHarness();
+    const handler = createFamilyPhoneWsHandler({ db, ws: harness.service }, new Set(), 'test-topic');
+    const alex = await pairDeviceDirect(db, alexId, 'pwa');
+    const agent = await pairDeviceDirect(db, elisaId, 'agent');
+    const wsA = harness.ws('alex-ws');
+    const wsAgent = harness.ws('agent-ws');
+    await authConnect(handler, wsA, db, alex);
+    await authConnect(handler, wsAgent, db, agent);
+    harness.send.length = 0;
+
+    handler.onMessage(wsA, { type: 'call:invite', target_device_id: agent.deviceId }, null);
+    const incoming = harness.send.find(
+      (c) =>
+        c.wsId === 'agent-ws' &&
+        typeof c.payload === 'object' &&
+        c.payload !== null &&
+        'type' in c.payload &&
+        c.payload.type === 'call:incoming',
+    );
+    expect(incoming).toBeDefined();
+    const callId =
+      incoming &&
+      typeof incoming.payload === 'object' &&
+      incoming.payload !== null &&
+      'call_id' in incoming.payload
+        ? incoming.payload.call_id
+        : undefined;
+    expect(typeof callId).toBe('string');
+
+    handler.onMessage(wsAgent, { type: 'call:reject', call_id: callId }, null);
+    const rejected = harness.send.find(
+      (c) =>
+        c.wsId === 'alex-ws' &&
+        typeof c.payload === 'object' &&
+        c.payload !== null &&
+        'type' in c.payload &&
+        c.payload.type === 'call:rejected',
+    );
+    expect(rejected).toBeDefined();
   });
 
   test('peer disconnect mid-call surfaces call:hung-up with reason=peer-disconnect', async () => {
