@@ -16,6 +16,9 @@
  * and the bytes that travel over the wire, and is left for a follow-up
  * where a live browser session can verify the encoder/decoder timing.
  */
+import { AudioContext } from '../../platform/audio-context.ts';
+import { AudioWorkletNode } from '../../platform/audio-worklet-node.ts';
+import { mediaDevices } from '../../platform/media-devices.ts';
 
 const SAMPLE_RATE = 24_000;
 const FRAME_SAMPLES = 480; // 20 ms at 24 kHz
@@ -131,7 +134,10 @@ export interface AudioCapture {
 export async function startAudioCapture(
   onFrame: (payload: Uint8Array) => void,
 ): Promise<AudioCapture> {
-  const stream = await navigator.mediaDevices.getUserMedia({
+  if (mediaDevices === null) throw new Error('mediaDevices unavailable on this platform');
+  if (AudioContext === null) throw new Error('AudioContext unavailable on this platform');
+  if (AudioWorkletNode === null) throw new Error('AudioWorkletNode unavailable on this platform');
+  const stream = await mediaDevices.getUserMedia({
     audio: {
       channelCount: 1,
       sampleRate: SAMPLE_RATE,
@@ -176,6 +182,8 @@ export interface AudioPlayback {
 
 /** Start a playback pipeline whose `push` feeds frames into the speaker. */
 export async function startAudioPlayback(): Promise<AudioPlayback> {
+  if (AudioContext === null) throw new Error('AudioContext unavailable on this platform');
+  if (AudioWorkletNode === null) throw new Error('AudioWorkletNode unavailable on this platform');
   const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
   const url = workletUrl(PLAYBACK_WORKLET_SRC);
   await ctx.audioWorklet.addModule(url);

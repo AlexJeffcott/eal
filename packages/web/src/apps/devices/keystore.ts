@@ -13,6 +13,7 @@
  * The database name `eal-family-phone` is preserved from the previous
  * location of this file so existing paired browsers keep working.
  */
+import { indexedDB } from '../../platform/indexed-db.ts';
 
 const DB_NAME = 'eal-family-phone';
 const DB_VERSION = 1;
@@ -28,6 +29,10 @@ export interface PersistedDevice {
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
+    if (indexedDB === null) {
+      reject(new Error('indexedDB is not supported on this platform'));
+      return;
+    }
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;

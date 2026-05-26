@@ -13,6 +13,7 @@ import {
   type PairedThisSession,
 } from './stores.ts';
 import { clearPairedDevice, loadPairedDevice, savePairedDevice } from './keystore.ts';
+import { subtleCrypto } from '../../platform/subtle-crypto.ts';
 // Family-phone subscribes its own call:* handler to the same WS connection
 // once it is open; the import lives here because the devices layer owns the
 // connection lifecycle, and a one-way dependency (devices → family-phone)
@@ -194,15 +195,19 @@ export const DEVICES_ACTIONS: ActionRegistry<AppStores> = {
     }
     stores.$devicesError.value = null;
     try {
+      if (subtleCrypto === null) {
+        stores.$devicesError.value = 'Web Crypto is not available on this browser.';
+        return;
+      }
       // `extractable: false` prevents JavaScript from ever reading the raw
       // key bytes — and IndexedDB can still structured-clone the CryptoKey
       // across reloads.
-      const kp = await crypto.subtle.generateKey(
+      const kp = await subtleCrypto.generateKey(
         { name: 'ECDSA', namedCurve: 'P-256' },
         false,
         ['sign', 'verify'],
       );
-      const spki = new Uint8Array(await crypto.subtle.exportKey('spki', kp.publicKey));
+      const spki = new Uint8Array(await subtleCrypto.exportKey('spki', kp.publicKey));
       const publicKeyB64 = toBase64Url(spki);
       const result = await stores.client.completeFamilyPhonePair({
         userCode: code,
