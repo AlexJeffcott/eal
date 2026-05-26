@@ -360,6 +360,37 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
     conn.rejectCall(callId);
   },
 
+  'family-phone:delete-device': async ({ data, stores }) => {
+    const raw = data['deviceId'];
+    if (typeof raw !== 'string') return;
+    const id = Number(raw);
+    if (!Number.isInteger(id) || id <= 0) return;
+    stores.$familyPhoneError.value = null;
+    try {
+      await stores.client.deleteFamilyPhoneDevice(id);
+    } catch (err) {
+      stores.$familyPhoneError.value = describeError(err);
+      return;
+    }
+    // If we just deleted the device this tab was paired as, the local key
+    // is now useless. Tear it down so the UI returns to the pair card and
+    // IndexedDB doesn't try to reconnect with a dead device on next load.
+    const paired = stores.$pairedThisSession.value;
+    if (paired && paired.deviceId === id) {
+      await stopAudio();
+      stores.$deviceConnection.value?.close();
+      stores.$deviceConnection.value = null;
+      stores.$pairedThisSession.value = null;
+      stores.$activeCall.value = null;
+      stores.$incomingCall.value = null;
+      try { await clearPairedDevice(); } catch { /* best-effort */ }
+    }
+    try {
+      stores.$familyPhoneDevices.value = await stores.client.listFamilyPhoneDevices();
+    } catch { /* keep stale list */ }
+    stores.$callNote.value = 'Device deleted.';
+  },
+
   'family-phone:unpair': async ({ stores }) => {
     // Close any active call and the WS first, then clear in-memory state,
     // then the persisted row. Order matters — IndexedDB errors must not

@@ -27,6 +27,9 @@ export interface FamilyPhoneDevicesRepo {
   }): FamilyPhoneDeviceRow;
   /** Every device in the household, ordered by owner name then device id. */
   listAllWithOwner(): FamilyPhoneDeviceWithOwner[];
+  findById(id: number): FamilyPhoneDeviceRow | null;
+  /** Removes the device. ON DELETE CASCADE clears its key, challenges, sessions. */
+  deleteById(id: number): boolean;
 }
 
 export function createFamilyPhoneDevicesRepo(db: DatabaseClient): FamilyPhoneDevicesRepo {
@@ -42,6 +45,13 @@ export function createFamilyPhoneDevicesRepo(db: DatabaseClient): FamilyPhoneDev
      JOIN users u ON u.id = d.user_id
      ORDER BY u.display_name COLLATE NOCASE, d.id`,
   );
+  const findByIdStmt = db.prepare<FamilyPhoneDeviceRow, [number]>(
+    `SELECT id, user_id, label, kind, created_at, paired_at
+     FROM family_phone_devices WHERE id = ?`,
+  );
+  const deleteByIdStmt = db.prepare<unknown, [number]>(
+    'DELETE FROM family_phone_devices WHERE id = ?',
+  );
 
   return {
     insert(input): FamilyPhoneDeviceRow {
@@ -56,6 +66,12 @@ export function createFamilyPhoneDevicesRepo(db: DatabaseClient): FamilyPhoneDev
     },
     listAllWithOwner(): FamilyPhoneDeviceWithOwner[] {
       return listAllStmt.all();
+    },
+    findById(id): FamilyPhoneDeviceRow | null {
+      return findByIdStmt.get(id) ?? null;
+    },
+    deleteById(id): boolean {
+      return deleteByIdStmt.run(id).changes > 0;
     },
   };
 }

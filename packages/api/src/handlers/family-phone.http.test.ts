@@ -62,6 +62,14 @@ async function fetchJson(
   return { status: res.status, body };
 }
 
+function deviceIdsInDb(db: DatabaseClient): number[] {
+  interface Row { id: number }
+  return db
+    .prepare<Row, []>('SELECT id FROM family_phone_devices ORDER BY id')
+    .all()
+    .map((r) => r.id);
+}
+
 describe('family-phone http wire contract', () => {
   let db: DatabaseClient;
   let alex: Principal;
@@ -105,6 +113,53 @@ describe('family-phone http wire contract', () => {
   test('GET /api/family-phone/devices: 401 when unauthenticated', async () => {
     const app = await createTestApp(db, { principalOverride: null });
     const res = await fetchJson(app, 'GET', '/api/family-phone/devices');
+    expect(res.status).toBe(401);
+  });
+
+  test('DELETE /api/family-phone/devices/:id: owner can delete their own device', async () => {
+    interface InsertedRow { id: number }
+    const inserted = db
+      .prepare<InsertedRow, [number]>(
+        "INSERT INTO family_phone_devices (user_id, label, kind) VALUES (?, 'mine', 'pwa') RETURNING id",
+      )
+      .get(alex.userId);
+    if (!inserted) throw new Error('insert returned no row');
+    const app = await createTestApp(db, { principalOverride: alex });
+    const res = await fetchJson(app, 'DELETE', `/api/family-phone/devices/${inserted.id}`);
+    expect(res.status).toBe(200);
+    expect(deviceIdsInDb(db)).not.toContain(inserted.id);
+  });
+
+  test('DELETE /api/family-phone/devices/:id: 403 when caller does not own the device', async () => {
+    const elisa = createUsersRepo(db).insert({ displayName: 'elisa' });
+    interface InsertedRow { id: number }
+    const inserted = db
+      .prepare<InsertedRow, [number]>(
+        "INSERT INTO family_phone_devices (user_id, label, kind) VALUES (?, 'elisas', 'handset') RETURNING id",
+      )
+      .get(elisa.id);
+    if (!inserted) throw new Error('insert returned no row');
+    const app = await createTestApp(db, { principalOverride: alex });
+    const res = await fetchJson(app, 'DELETE', `/api/family-phone/devices/${inserted.id}`);
+    expect(res.status).toBe(403);
+    expect(deviceIdsInDb(db)).toContain(inserted.id);
+  });
+
+  test('DELETE /api/family-phone/devices/:id: 404 for an unknown device', async () => {
+    const app = await createTestApp(db, { principalOverride: alex });
+    const res = await fetchJson(app, 'DELETE', '/api/family-phone/devices/9999');
+    expect(res.status).toBe(404);
+  });
+
+  test('DELETE /api/family-phone/devices/:id: 400 for a malformed id', async () => {
+    const app = await createTestApp(db, { principalOverride: alex });
+    const res = await fetchJson(app, 'DELETE', '/api/family-phone/devices/abc');
+    expect(res.status).toBe(400);
+  });
+
+  test('DELETE /api/family-phone/devices/:id: 401 when unauthenticated', async () => {
+    const app = await createTestApp(db, { principalOverride: null });
+    const res = await fetchJson(app, 'DELETE', '/api/family-phone/devices/1');
     expect(res.status).toBe(401);
   });
 

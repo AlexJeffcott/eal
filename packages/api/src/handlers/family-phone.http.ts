@@ -31,5 +31,34 @@ export function familyPhoneHttpRoutes(ctx: FamilyPhoneRoutesContext) {
         online: ctx.onlineDevices.has(d.id),
       }));
       return { devices: rows };
+    })
+    .delete('/devices/:id', ({ params, request, set }) => {
+      const principal = ctx.getPrincipal(request);
+      if (!principal) {
+        set.status = 401;
+        return { error: 'unauthenticated' };
+      }
+      const id = Number(params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        set.status = 400;
+        return { error: 'device id must be a positive integer' };
+      }
+      const device = devices.findById(id);
+      if (!device) {
+        set.status = 404;
+        return { error: 'device not found' };
+      }
+      // Only the owning user may delete their own device. A future household-
+      // admin model could lift this; for now ownership equals delete rights.
+      if (device.user_id !== principal.userId) {
+        set.status = 403;
+        return { error: 'you do not own this device' };
+      }
+      const removed = devices.deleteById(id);
+      // The presence set forgets a deleted device on its own when the WS
+      // closes. We also forget it eagerly so the next directory read does
+      // not paint a stale online dot.
+      ctx.onlineDevices.delete(id);
+      return { deleted: removed };
     });
 }

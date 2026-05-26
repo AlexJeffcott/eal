@@ -260,6 +260,10 @@ export function createMockEalClient(): MockEalClient {
       return { deviceId: 1 };
     },
 
+    async deleteFamilyPhoneDevice() {
+      /* mock: no-op */
+    },
+
     async connectFamilyPhoneDevice(input) {
       // Mock: returns a no-op handle. Tests that need to exercise the call
       // signalling pump should spin up the real api against an in-memory db.

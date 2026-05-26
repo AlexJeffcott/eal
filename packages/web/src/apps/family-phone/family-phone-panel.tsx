@@ -9,6 +9,7 @@ import {
   Text,
 } from '@fairfox/polly/ui';
 import type { FamilyPhoneDevice, FamilyPhoneDeviceKind } from '@eal/client';
+import { $currentUser } from '../../shell/stores.ts';
 import {
   $activeCall,
   $callNote,
@@ -131,6 +132,7 @@ export function FamilyPhonePanel() {
   const incoming = $incomingCall.value;
   const active = $activeCall.value;
   const note = $callNote.value;
+  const currentUser = $currentUser.value;
 
   return (
     <Layout gap="var(--polly-space-lg)" className="family-phone-panel">
@@ -162,7 +164,11 @@ export function FamilyPhonePanel() {
 
       <Surface variant="callout" padding="var(--polly-space-md)">
         <Layout gap="var(--polly-space-md)">
-          <Text as="h2" weight="bold">Add a device</Text>
+          <Text as="h2" weight="bold">Invite a new device</Text>
+          <Text tone="muted">
+            Hands a one-time code to a phone or laptop that should join the
+            household. Open eal there and enter the code.
+          </Text>
           <form data-action="family-phone:start-pair">
             <Layout gap="var(--polly-space-sm)">
               <ActionInput
@@ -193,7 +199,11 @@ export function FamilyPhonePanel() {
       {paired === null ? (
         <Surface variant="callout" padding="var(--polly-space-md)">
           <Layout gap="var(--polly-space-md)">
-            <Text as="h2" weight="bold">Pair this device</Text>
+            <Text as="h2" weight="bold">Join with a code</Text>
+            <Text tone="muted">
+              Add this browser to the household using a code minted on a
+              device that is already in.
+            </Text>
             <form data-action="family-phone:complete-pair">
               <Layout gap="var(--polly-space-sm)">
                 <ActionInput
@@ -238,7 +248,7 @@ export function FamilyPhonePanel() {
       <Surface variant="callout" padding="var(--polly-space-md)">
         <Layout gap="var(--polly-space-sm)">
           <Cluster gap="var(--polly-space-sm)" justify="space-between">
-            <Text as="h2" weight="bold">Your devices</Text>
+            <Text as="h2" weight="bold">Devices</Text>
             <Button
               tier="tertiary"
               label="Refresh"
@@ -251,6 +261,7 @@ export function FamilyPhonePanel() {
             <Layout gap="var(--polly-space-xs)">
               {devices.map((d) => {
                 const isSelf = paired !== null && paired.deviceId === d.id;
+                const ownedByMe = currentUser !== null && d.ownerUserId === currentUser.userId;
                 const canCall = connection !== null && !isSelf && active === null && d.online;
                 return (
                   <Cluster
@@ -276,6 +287,15 @@ export function FamilyPhonePanel() {
                         data-action="family-phone:place-call"
                         data-action-target-device-id={String(d.id)}
                       />
+                      {ownedByMe && (
+                        <Button
+                          tier="tertiary"
+                          color="danger"
+                          label="Delete"
+                          data-action="family-phone:delete-device"
+                          data-action-device-id={String(d.id)}
+                        />
+                      )}
                     </Cluster>
                   </Cluster>
                 );

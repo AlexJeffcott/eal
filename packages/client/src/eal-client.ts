@@ -203,6 +203,8 @@ export interface EalClient {
   completeFamilyPhonePair(
     input: FamilyPhonePairCompleteInput,
   ): Promise<FamilyPhonePairCompleteResult>;
+  /** Delete a device the caller owns; cascades to its key, challenges, sessions. */
+  deleteFamilyPhoneDevice(id: number): Promise<void>;
   /**
    * Open a device-authenticated WebSocket. The connection runs its own
    * challenge/sign handshake against the supplied keypair and is independent
@@ -670,6 +672,10 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
         },
       );
       return { deviceId: wire.device_id };
+    },
+
+    async deleteFamilyPhoneDevice(id: number): Promise<void> {
+      await deleteJson<{ deleted: boolean }>(`/api/family-phone/devices/${id}`);
     },
 
     async connectFamilyPhoneDevice(input): Promise<FamilyPhoneDeviceConnection> {
