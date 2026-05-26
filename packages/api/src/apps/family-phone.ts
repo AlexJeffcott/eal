@@ -22,12 +22,14 @@ CREATE TABLE IF NOT EXISTS family_phone_devices (
 );
 CREATE INDEX IF NOT EXISTS idx_family_phone_devices_user_id ON family_phone_devices (user_id);
 
+-- A pair request is a 60s-TTL invite minted by an in-household browser. The
+-- joining device supplies its own label and kind on /pair/complete, so this
+-- table carries neither — the one-time migration below drops the legacy
+-- label/kind columns by recreating the table if it exists with the old shape.
 CREATE TABLE IF NOT EXISTS family_phone_pair_requests (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   user_code    TEXT    NOT NULL UNIQUE,
   user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  label        TEXT    NOT NULL,
-  kind         TEXT    NOT NULL CHECK (kind IN ('handset','pwa','agent')),
   created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
   expires_at   TEXT    NOT NULL,
   consumed_at  TEXT

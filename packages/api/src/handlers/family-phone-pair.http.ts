@@ -49,20 +49,14 @@ export function familyPhonePairHttpRoutes(ctx: FamilyPhonePairRoutesContext) {
     })
     .post(
       '/start',
-      ({ body, request, set }) => {
+      ({ request, set }) => {
         const principal = ctx.getPrincipal(request);
         if (!principal) {
           set.status = 401;
           return { error: 'unauthenticated' };
         }
-        const result = startCore(deps, principal, { label: body.label, kind: body.kind });
+        const result = startCore(deps, principal);
         return { user_code: result.userCode, expires_at: result.expiresAt };
-      },
-      {
-        body: t.Object({
-          label: t.String(),
-          kind: t.Union([t.Literal('handset'), t.Literal('pwa'), t.Literal('agent')]),
-        }),
       },
     )
     .post(
@@ -77,6 +71,8 @@ export function familyPhonePairHttpRoutes(ctx: FamilyPhonePairRoutesContext) {
           userCode: body.user_code,
           publicKey,
           alg: body.alg,
+          label: body.label,
+          kind: body.kind,
         });
         return { device_id: result.deviceId };
       },
@@ -85,6 +81,8 @@ export function familyPhonePairHttpRoutes(ctx: FamilyPhonePairRoutesContext) {
           user_code: t.String(),
           public_key: t.String(),
           alg: t.String(),
+          label: t.String(),
+          kind: t.Union([t.Literal('handset'), t.Literal('pwa'), t.Literal('agent')]),
         }),
       },
     );

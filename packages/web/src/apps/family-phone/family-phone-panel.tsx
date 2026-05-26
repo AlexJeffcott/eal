@@ -18,9 +18,9 @@ import {
   $familyPhoneError,
   $incomingCall,
   $pairCompleteCode,
+  $pairCompleteKind,
+  $pairCompleteLabel,
   $pairStartCode,
-  $pairStartKind,
-  $pairStartLabel,
   $pairedThisSession,
 } from './stores.ts';
 
@@ -167,31 +167,17 @@ export function FamilyPhonePanel() {
           <Text as="h2" weight="bold">Invite a new device</Text>
           <Text tone="muted">
             Hands a one-time code to a phone or laptop that should join the
-            household. Open eal there and enter the code.
+            household. Open eal there and enter the code within 60 seconds.
           </Text>
           <form data-action="family-phone:start-pair">
-            <Layout gap="var(--polly-space-sm)">
-              <ActionInput
-                saveOn="input"
-                value={$pairStartLabel.value}
-                action="family-phone:set-pair-label"
-                placeholder="Label for the new device (e.g. Leo's handset)"
-                ariaLabel="New device label"
-              />
-              <ActionSelect
-                value={$pairStartKind.value}
-                action="family-phone:set-pair-kind"
-                options={KIND_OPTIONS}
-              />
-              <Cluster gap="var(--polly-space-sm)">
-                <Button type="submit" tier="primary" label="Mint code" />
-                {startCode !== null && (
-                  <Badge variant="info" className="family-phone-code">
-                    Code: <strong>{startCode}</strong>
-                  </Badge>
-                )}
-              </Cluster>
-            </Layout>
+            <Cluster gap="var(--polly-space-sm)">
+              <Button type="submit" tier="primary" label="Create invite code" />
+              {startCode !== null && (
+                <Badge variant="info" className="family-phone-code">
+                  Code: <strong>{startCode}</strong>
+                </Badge>
+              )}
+            </Cluster>
           </form>
         </Layout>
       </Surface>
@@ -201,20 +187,32 @@ export function FamilyPhonePanel() {
           <Layout gap="var(--polly-space-md)">
             <Text as="h2" weight="bold">Join with a code</Text>
             <Text tone="muted">
-              Add this browser to the household using a code minted on a
-              device that is already in.
+              Add this browser to the household using a code from a device
+              that is already in. Name the device whatever you'll call it.
             </Text>
             <form data-action="family-phone:complete-pair">
               <Layout gap="var(--polly-space-sm)">
                 <ActionInput
                   saveOn="input"
+                  value={$pairCompleteLabel.value}
+                  action="family-phone:set-complete-label"
+                  placeholder="Name (e.g. Alex's phone)"
+                  ariaLabel="Device name"
+                />
+                <ActionSelect
+                  value={$pairCompleteKind.value}
+                  action="family-phone:set-complete-kind"
+                  options={KIND_OPTIONS}
+                />
+                <ActionInput
+                  saveOn="input"
                   value={$pairCompleteCode.value}
                   action="family-phone:set-complete-code"
-                  placeholder="Pairing code"
-                  ariaLabel="Pairing code"
+                  placeholder="Invite code"
+                  ariaLabel="Invite code"
                 />
                 <Cluster gap="var(--polly-space-sm)">
-                  <Button type="submit" tier="primary" label="Pair" />
+                  <Button type="submit" tier="primary" label="Join" />
                 </Cluster>
               </Layout>
             </form>

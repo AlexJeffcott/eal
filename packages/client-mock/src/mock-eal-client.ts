@@ -246,9 +246,8 @@ export function createMockEalClient(): MockEalClient {
       return [];
     },
 
-    async startFamilyPhonePair(input) {
+    async startFamilyPhonePair() {
       requireSignedIn();
-      if (input.label.trim().length === 0) throw new Error('label is required');
       return {
         userCode: 'TST-001',
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
@@ -257,6 +256,7 @@ export function createMockEalClient(): MockEalClient {
 
     async completeFamilyPhonePair(input) {
       if (input.publicKey.length === 0) throw new Error('public_key is required');
+      if (input.label.trim().length === 0) throw new Error('label is required');
       return { deviceId: 1 };
     },
 

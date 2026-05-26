@@ -75,10 +75,7 @@ async function pairDeviceWithKey(
 ): Promise<{ deviceId: number; privateKey: CryptoKey; publicKeySpki: Uint8Array }> {
   // 1. Trusted device calls /pair/start as the authenticated user.
   const trusted = await createTestApp(db, { principalOverride: principal });
-  const startRes = await postJson(trusted, '/api/family-phone/pair/start', {
-    label: "Alex's PWA",
-    kind: 'pwa',
-  });
+  const startRes = await postJson(trusted, '/api/family-phone/pair/start', {});
   if (
     typeof startRes.body !== 'object' ||
     startRes.body === null ||
@@ -102,6 +99,8 @@ async function pairDeviceWithKey(
     user_code: userCode,
     public_key: toBase64Url(spki),
     alg: 'ES256',
+    label: "Alex's PWA",
+    kind: 'pwa',
   });
   if (!isPair(completeRes.body)) throw new Error('pair complete did not return device_id');
 

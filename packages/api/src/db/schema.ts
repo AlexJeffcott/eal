@@ -84,10 +84,35 @@ function ensureColumn(db: DatabaseClient, table: string, column: string, decl: s
 
 /** Apply the global schema, then every installed app's schema fragment. */
 export function applySchema(db: DatabaseClient): void {
+  // The family_phone_pair_requests table once carried `label` and `kind`
+  // columns chosen at code-mint time. Those moved to /pair/complete so the
+  // joining device supplies its own identity. The next app.schema run
+  // creates the table in its new shape; the column check below catches a
+  // pre-migration database and drops the stale table first.
+  pruneLegacyPairColumns(db);
+
   db.exec(GLOBAL_SCHEMA);
   for (const app of API_APPS) {
     db.exec(app.schema);
   }
   // conversations.cleared_before_id was added after the table first shipped.
   ensureColumn(db, 'conversations', 'cleared_before_id', 'INTEGER NOT NULL DEFAULT 0');
+}
+
+interface TableNameRow { name: string }
+
+function pruneLegacyPairColumns(db: DatabaseClient): void {
+  const exists = db
+    .prepare<TableNameRow, []>(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='family_phone_pair_requests'",
+    )
+    .get();
+  if (!exists) return;
+  const cols = db
+    .prepare<PragmaColumnRow, []>('PRAGMA table_info(family_phone_pair_requests)')
+    .all();
+  const hasLegacy = cols.some((c) => c.name === 'label' || c.name === 'kind');
+  if (hasLegacy) {
+    db.exec('DROP TABLE family_phone_pair_requests');
+  }
 }

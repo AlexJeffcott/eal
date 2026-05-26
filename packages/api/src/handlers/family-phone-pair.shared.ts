@@ -84,22 +84,12 @@ function isExpired(row: FamilyPhonePairingRow, now: Date): boolean {
 }
 
 /**
- * Called by a trusted (already-authenticated) device that wants to add a new
- * device to the caller's family-phone roster. Mints a short-lived user_code
- * that the caller reads aloud to the new device.
+ * Called by a trusted (already-authenticated) browser that wants to admit
+ * another device to the household. The minted user_code is opaque: nothing
+ * about the eventual device is decided here. The joining device supplies
+ * its own label and kind on `complete`.
  */
-export function startCore(
-  deps: FamilyPhonePairDeps,
-  principal: Principal,
-  input: { label: string; kind: DeviceKind },
-): StartResult {
-  const label = input.label.trim();
-  if (label.length === 0) {
-    throw new AuthError(400, 'label is required');
-  }
-  if (!ALLOWED_KINDS.has(input.kind)) {
-    throw new AuthError(400, `kind must be one of: ${[...ALLOWED_KINDS].join(', ')}`);
-  }
+export function startCore(deps: FamilyPhonePairDeps, principal: Principal): StartResult {
   // The collision space is 32^6 = ~1B; the TTL is 60s; the active set is
   // bounded by family size. Four retries handle the practically-impossible
   // case while keeping the loop bounded.
@@ -111,13 +101,7 @@ export function startCore(
       new Date(current.getTime() + FAMILY_PHONE_PAIR_TTL_MS),
     );
     try {
-      deps.pairings.insert({
-        userCode,
-        userId: principal.userId,
-        label,
-        kind: input.kind,
-        expiresAt,
-      });
+      deps.pairings.insert({ userCode, userId: principal.userId, expiresAt });
       return { userCode, expiresAt };
     } catch (err) {
       lastError = err;
@@ -130,19 +114,33 @@ export function startCore(
 }
 
 /**
- * Called by the new device with the user_code its user typed in and the
- * public half of a freshly-generated keypair. Consumes the pair request,
- * creates the device row, and records the public key — all atomically.
+ * Called by the new device with the user_code its user typed in, the
+ * label and kind for the new device, and the public half of a freshly-
+ * generated keypair. Consumes the pair request, creates the device row
+ * under the inviter's user_id, and records the public key — all atomically.
  */
 export function completeCore(
   deps: FamilyPhonePairDeps,
-  input: { userCode: string; publicKey: Uint8Array; alg: string },
+  input: {
+    userCode: string;
+    publicKey: Uint8Array;
+    alg: string;
+    label: string;
+    kind: DeviceKind;
+  },
 ): CompleteResult {
   if (input.publicKey.length === 0) {
     throw new AuthError(400, 'public_key is required');
   }
   if (input.alg.trim().length === 0) {
     throw new AuthError(400, 'alg is required');
+  }
+  const label = input.label.trim();
+  if (label.length === 0) {
+    throw new AuthError(400, 'label is required');
+  }
+  if (!ALLOWED_KINDS.has(input.kind)) {
+    throw new AuthError(400, `kind must be one of: ${[...ALLOWED_KINDS].join(', ')}`);
   }
   const normalised = normaliseUserCode(input.userCode);
   if (!normalised) {
@@ -173,8 +171,8 @@ export function completeCore(
     }
     const device = deps.devices.insert({
       userId: row.user_id,
-      label: row.label,
-      kind: row.kind,
+      label,
+      kind: input.kind,
       pairedAt: formatSqliteDateTime(current),
     });
     deps.deviceKeys.insert({

@@ -18,11 +18,6 @@ export interface FamilyPhoneDevice {
   online: boolean;
 }
 
-export interface FamilyPhonePairStartInput {
-  label: string;
-  kind: FamilyPhoneDeviceKind;
-}
-
 export interface FamilyPhonePairStartResult {
   userCode: string;
   expiresAt: string;
@@ -34,6 +29,10 @@ export interface FamilyPhonePairCompleteInput {
   publicKey: string;
   /** ES256 today; future expansion when we support more curves. */
   alg: 'ES256';
+  /** The joining device's self-chosen label, e.g. "Alex's phone". */
+  label: string;
+  /** The joining device's self-declared kind. */
+  kind: FamilyPhoneDeviceKind;
 }
 
 export interface FamilyPhonePairCompleteResult {

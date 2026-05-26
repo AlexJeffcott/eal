@@ -53,12 +53,6 @@ function isCompleteEnvelope(value: unknown): value is CompleteEnvelope {
   return typeof value.device_id === 'number';
 }
 
-function isErrorEnvelope(value: unknown): value is { error: string } {
-  if (typeof value !== 'object' || value === null) return false;
-  if (!('error' in value)) return false;
-  return typeof value.error === 'string';
-}
-
 function fakePublicKey(): string {
   // 33 bytes — the shape of a P-256 compressed point. The pair-complete
   // handler stores whatever it gets and the wire layer only checks
@@ -82,34 +76,17 @@ describe('family-phone pair — start (authenticated)', () => {
 
   test('POST /api/family-phone/pair/start: returns a user_code envelope', async () => {
     const app = await createTestApp(db, { principalOverride: alex });
-    const res = await postJson(app, '/api/family-phone/pair/start', {
-      label: "Alex's handset",
-      kind: 'handset',
-    });
+    const res = await postJson(app, '/api/family-phone/pair/start', {});
     expect(res.status).toBe(200);
     expect(isStartEnvelope(res.body)).toBe(true);
     if (!isStartEnvelope(res.body)) throw new Error('unreachable');
-    // 3-3 Crockford-base32 with a separating dash.
     expect(res.body.user_code).toMatch(/^[0-9A-HJKMNP-TV-Z]{3}-[0-9A-HJKMNP-TV-Z]{3}$/);
   });
 
   test('POST /api/family-phone/pair/start: 401 when unauthenticated', async () => {
     const app = await createTestApp(db, { principalOverride: null });
-    const res = await postJson(app, '/api/family-phone/pair/start', {
-      label: 'x',
-      kind: 'pwa',
-    });
+    const res = await postJson(app, '/api/family-phone/pair/start', {});
     expect(res.status).toBe(401);
-  });
-
-  test('POST /api/family-phone/pair/start: 400 with empty label', async () => {
-    const app = await createTestApp(db, { principalOverride: alex });
-    const res = await postJson(app, '/api/family-phone/pair/start', {
-      label: '   ',
-      kind: 'pwa',
-    });
-    expect(res.status).toBe(400);
-    expect(isErrorEnvelope(res.body)).toBe(true);
   });
 });
 
@@ -126,13 +103,12 @@ describe('family-phone pair — complete (app-authenticated)', () => {
 
   async function mintCode(): Promise<string> {
     const app = await createTestApp(db, { principalOverride: alex });
-    const res = await postJson(app, '/api/family-phone/pair/start', {
-      label: "Alex's PWA",
-      kind: 'pwa',
-    });
+    const res = await postJson(app, '/api/family-phone/pair/start', {});
     if (!isStartEnvelope(res.body)) throw new Error('start did not return user_code');
     return res.body.user_code;
   }
+
+  const COMPLETE_BASE = { label: "Alex's PWA", kind: 'pwa' as const };
 
   test('happy path: complete consumes code, returns device_id, persists key', async () => {
     const code = await mintCode();
@@ -140,7 +116,7 @@ describe('family-phone pair — complete (app-authenticated)', () => {
     const res = await postJson(app, '/api/family-phone/pair/complete', {
       user_code: code,
       public_key: fakePublicKey(),
-      alg: 'ES256',
+      alg: 'ES256', ...COMPLETE_BASE,
     });
     expect(res.status).toBe(200);
     expect(isCompleteEnvelope(res.body)).toBe(true);
@@ -177,7 +153,7 @@ describe('family-phone pair — complete (app-authenticated)', () => {
     const res = await postJson(app, '/api/family-phone/pair/complete', {
       user_code: 'XXX-XXX',
       public_key: fakePublicKey(),
-      alg: 'ES256',
+      alg: 'ES256', ...COMPLETE_BASE,
     });
     expect(res.status).toBe(404);
   });
@@ -188,13 +164,13 @@ describe('family-phone pair — complete (app-authenticated)', () => {
     const first = await postJson(app, '/api/family-phone/pair/complete', {
       user_code: code,
       public_key: fakePublicKey(),
-      alg: 'ES256',
+      alg: 'ES256', ...COMPLETE_BASE,
     });
     expect(first.status).toBe(200);
     const second = await postJson(app, '/api/family-phone/pair/complete', {
       user_code: code,
       public_key: fakePublicKey(),
-      alg: 'ES256',
+      alg: 'ES256', ...COMPLETE_BASE,
     });
     expect(second.status).toBe(409);
   });
@@ -209,7 +185,7 @@ describe('family-phone pair — complete (app-authenticated)', () => {
     const res = await postJson(app, '/api/family-phone/pair/complete', {
       user_code: code,
       public_key: fakePublicKey(),
-      alg: 'ES256',
+      alg: 'ES256', ...COMPLETE_BASE,
     });
     expect(res.status).toBe(410);
   });
@@ -219,7 +195,7 @@ describe('family-phone pair — complete (app-authenticated)', () => {
     const res = await postJson(app, '/api/family-phone/pair/complete', {
       user_code: 'nope',
       public_key: fakePublicKey(),
-      alg: 'ES256',
+      alg: 'ES256', ...COMPLETE_BASE,
     });
     expect(res.status).toBe(400);
   });
@@ -230,7 +206,7 @@ describe('family-phone pair — complete (app-authenticated)', () => {
     const res = await postJson(app, '/api/family-phone/pair/complete', {
       user_code: code,
       public_key: '',
-      alg: 'ES256',
+      alg: 'ES256', ...COMPLETE_BASE,
     });
     expect(res.status).toBe(400);
   });
@@ -243,7 +219,7 @@ describe('family-phone pair — complete (app-authenticated)', () => {
     const res = await postJson(app, '/api/family-phone/pair/complete', {
       user_code: munged,
       public_key: fakePublicKey(),
-      alg: 'ES256',
+      alg: 'ES256', ...COMPLETE_BASE,
     });
     expect(res.status).toBe(200);
   });

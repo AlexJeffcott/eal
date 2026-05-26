@@ -31,7 +31,6 @@ import type {
   FamilyPhoneDeviceConnection,
   FamilyPhonePairCompleteInput,
   FamilyPhonePairCompleteResult,
-  FamilyPhonePairStartInput,
   FamilyPhonePairStartResult,
 } from './family-phone-types.ts';
 
@@ -197,8 +196,8 @@ export interface EalClient {
   // ── Family-phone ─────────────────────────────────────────────────────────
   /** The signed-in user's family-phone devices. */
   listFamilyPhoneDevices(): Promise<FamilyPhoneDevice[]>;
-  /** Trusted-device side of the pair flow — mints a short code to read aloud. */
-  startFamilyPhonePair(input: FamilyPhonePairStartInput): Promise<FamilyPhonePairStartResult>;
+  /** In-household browser mints a short opaque invite code to hand to a new device. */
+  startFamilyPhonePair(): Promise<FamilyPhonePairStartResult>;
   /** New-device side — submits the spoken code and its freshly-generated public key. */
   completeFamilyPhonePair(
     input: FamilyPhonePairCompleteInput,
@@ -650,12 +649,10 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
       }));
     },
 
-    async startFamilyPhonePair(
-      input: FamilyPhonePairStartInput,
-    ): Promise<FamilyPhonePairStartResult> {
+    async startFamilyPhonePair(): Promise<FamilyPhonePairStartResult> {
       const wire = await postJson<{ user_code: string; expires_at: string }>(
         '/api/family-phone/pair/start',
-        { label: input.label, kind: input.kind },
+        {},
       );
       return { userCode: wire.user_code, expiresAt: wire.expires_at };
     },
@@ -669,6 +666,8 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
           user_code: input.userCode,
           public_key: input.publicKey,
           alg: input.alg,
+          label: input.label,
+          kind: input.kind,
         },
       );
       return { deviceId: wire.device_id };

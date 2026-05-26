@@ -12,14 +12,13 @@ export const $familyPhoneDevices = $state<FamilyPhoneDevice[]>([]);
 /** Surfaced to the user when an action handler caught an error. */
 export const $familyPhoneError = $state<string | null>(null);
 
-/** Form state for the trusted-device side of pairing (mints the user_code). */
-export const $pairStartLabel = $state<string>('');
-export const $pairStartKind = $state<FamilyPhoneDeviceKind>('pwa');
-/** The minted code, shown for the trusted-device user to read aloud. */
+/** The minted code, displayed on the inviting browser for the joiner to type in. */
 export const $pairStartCode = $state<string | null>(null);
 
-/** Form state for the new-device side of pairing (submits the code + key). */
+/** Form state for the joining device: code + its own label + its own kind. */
 export const $pairCompleteCode = $state<string>('');
+export const $pairCompleteLabel = $state<string>('');
+export const $pairCompleteKind = $state<FamilyPhoneDeviceKind>('pwa');
 /**
  * The result of completing pair on this device: the issued device_id plus the
  * generated keypair. Phase G keeps this in memory only — the private key is
@@ -64,10 +63,10 @@ export const $callNote = $state<string | null>(null);
 export interface FamilyPhoneStores {
   $familyPhoneDevices: typeof $familyPhoneDevices;
   $familyPhoneError: typeof $familyPhoneError;
-  $pairStartLabel: typeof $pairStartLabel;
-  $pairStartKind: typeof $pairStartKind;
   $pairStartCode: typeof $pairStartCode;
   $pairCompleteCode: typeof $pairCompleteCode;
+  $pairCompleteLabel: typeof $pairCompleteLabel;
+  $pairCompleteKind: typeof $pairCompleteKind;
   $pairedThisSession: typeof $pairedThisSession;
   $deviceConnection: typeof $deviceConnection;
   $incomingCall: typeof $incomingCall;
@@ -79,10 +78,10 @@ export function createFamilyPhoneStores(): FamilyPhoneStores {
   return {
     $familyPhoneDevices,
     $familyPhoneError,
-    $pairStartLabel,
-    $pairStartKind,
     $pairStartCode,
     $pairCompleteCode,
+    $pairCompleteLabel,
+    $pairCompleteKind,
     $pairedThisSession,
     $deviceConnection,
     $incomingCall,
@@ -94,10 +93,10 @@ export function createFamilyPhoneStores(): FamilyPhoneStores {
 export function resetFamilyPhoneStores(): void {
   $familyPhoneDevices.value = [];
   $familyPhoneError.value = null;
-  $pairStartLabel.value = '';
-  $pairStartKind.value = 'pwa';
   $pairStartCode.value = null;
   $pairCompleteCode.value = '';
+  $pairCompleteLabel.value = '';
+  $pairCompleteKind.value = 'pwa';
   $pairedThisSession.value = null;
   $deviceConnection.value?.close();
   $deviceConnection.value = null;

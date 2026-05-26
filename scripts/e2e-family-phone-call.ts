@@ -52,7 +52,7 @@ async function pairAndConnect(
 ): Promise<PairedClient> {
   const client = createEalClient(apiUrl, { token });
   // Trusted-device side: mint a code.
-  const { userCode } = await client.startFamilyPhonePair({ label, kind: 'pwa' });
+  const { userCode } = await client.startFamilyPhonePair();
   // New-device side: generate a keypair, submit the code + public key.
   const kp = await crypto.subtle.generateKey(
     { name: 'ECDSA', namedCurve: 'P-256' },
@@ -64,6 +64,8 @@ async function pairAndConnect(
     userCode,
     publicKey: toBase64Url(spki),
     alg: 'ES256',
+    label,
+    kind: 'pwa',
   });
   // Open the device WS using the freshly-generated private key.
   const conn = await client.connectFamilyPhoneDevice({ deviceId, privateKey: kp.privateKey });

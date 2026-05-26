@@ -30,6 +30,5 @@ export type {
   FamilyPhoneDeviceKind,
   FamilyPhonePairCompleteInput,
   FamilyPhonePairCompleteResult,
-  FamilyPhonePairStartInput,
   FamilyPhonePairStartResult,
 } from './family-phone-types.ts';

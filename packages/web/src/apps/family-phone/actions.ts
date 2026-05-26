@@ -196,37 +196,29 @@ export async function bootstrapFamilyPhonePairedDevice(
 }
 
 export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
-  'family-phone:set-pair-label': ({ data, stores }) => {
-    const value = data['value'];
-    if (typeof value !== 'string') return;
-    stores.$pairStartLabel.value = value;
-  },
-
-  'family-phone:set-pair-kind': ({ data, stores }) => {
-    const value = data['value'];
-    if (!isKind(value)) return;
-    stores.$pairStartKind.value = value;
-  },
-
   'family-phone:set-complete-code': ({ data, stores }) => {
     const value = data['value'];
     if (typeof value !== 'string') return;
     stores.$pairCompleteCode.value = value;
   },
 
+  'family-phone:set-complete-label': ({ data, stores }) => {
+    const value = data['value'];
+    if (typeof value !== 'string') return;
+    stores.$pairCompleteLabel.value = value;
+  },
+
+  'family-phone:set-complete-kind': ({ data, stores }) => {
+    const value = data['value'];
+    if (!isKind(value)) return;
+    stores.$pairCompleteKind.value = value;
+  },
+
   'family-phone:start-pair': async ({ event, stores }) => {
     event.preventDefault();
-    const label = stores.$pairStartLabel.value.trim();
-    if (label.length === 0) {
-      stores.$familyPhoneError.value = 'Give the new device a label.';
-      return;
-    }
     stores.$familyPhoneError.value = null;
     try {
-      const result = await stores.client.startFamilyPhonePair({
-        label,
-        kind: stores.$pairStartKind.value,
-      });
+      const result = await stores.client.startFamilyPhonePair();
       stores.$pairStartCode.value = result.userCode;
     } catch (err) {
       stores.$familyPhoneError.value = describeError(err);
@@ -244,8 +236,13 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
       return;
     }
     const code = stores.$pairCompleteCode.value.trim();
+    const label = stores.$pairCompleteLabel.value.trim();
     if (code.length === 0) {
-      stores.$familyPhoneError.value = 'Enter the spoken code first.';
+      stores.$familyPhoneError.value = 'Enter the invite code first.';
+      return;
+    }
+    if (label.length === 0) {
+      stores.$familyPhoneError.value = 'Give this device a name.';
       return;
     }
     stores.$familyPhoneError.value = null;
@@ -264,6 +261,8 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
         userCode: code,
         publicKey: publicKeyB64,
         alg: 'ES256',
+        label,
+        kind: stores.$pairCompleteKind.value,
       });
       const paired: PairedThisSession = {
         deviceId: result.deviceId,
@@ -272,6 +271,7 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
       };
       stores.$pairedThisSession.value = paired;
       stores.$pairCompleteCode.value = '';
+      stores.$pairCompleteLabel.value = '';
       stores.$familyPhoneDevices.value = await stores.client.listFamilyPhoneDevices();
       // Persist before opening the WS so a crash mid-handshake still
       // leaves the pairing usable on next load.
