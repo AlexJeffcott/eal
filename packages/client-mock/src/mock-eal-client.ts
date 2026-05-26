@@ -271,6 +271,8 @@ export function createMockEalClient(): MockEalClient {
         cancelCall() {},
         hangup() {},
         subscribe() { return () => {}; },
+        sendAudio() {},
+        subscribeAudio() { return () => {}; },
         close() {},
       };
     },

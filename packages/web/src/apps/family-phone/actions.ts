@@ -8,6 +8,7 @@ import {
   $incomingCall,
   type PairedThisSession,
 } from './stores.ts';
+import { clearPairedDevice, loadPairedDevice, savePairedDevice } from './keystore.ts';
 
 function describeError(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -102,6 +103,41 @@ async function openDeviceConnection(
   $deviceConnection.value = conn;
 }
 
+/**
+ * Rehydrate a previously-paired device from IndexedDB and open its WS
+ * connection. Called from the central session seeder in main.tsx whenever
+ * auth completes; on first load with no paired device this returns
+ * silently. Errors clear the stale row rather than getting stuck.
+ */
+export async function bootstrapFamilyPhonePairedDevice(
+  stores: AppStores,
+): Promise<void> {
+  let persisted;
+  try {
+    persisted = await loadPairedDevice();
+  } catch (err) {
+    stores.$familyPhoneError.value = describeError(err);
+    return;
+  }
+  if (!persisted) return;
+  const paired: PairedThisSession = {
+    deviceId: persisted.deviceId,
+    privateKey: persisted.privateKey,
+    publicKeyB64: persisted.publicKeyB64,
+  };
+  stores.$pairedThisSession.value = paired;
+  try {
+    await openDeviceConnection(stores.client, paired);
+  } catch (err) {
+    // Stale persisted device — the server no longer knows it (server
+    // wipe, key revocation). Clear the row so the user can pair fresh.
+    stores.$familyPhoneError.value =
+      `Saved device could not reconnect (${describeError(err)}). Pair again.`;
+    stores.$pairedThisSession.value = null;
+    try { await clearPairedDevice(); } catch { /* ignore */ }
+  }
+}
+
 export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
   'family-phone:set-pair-label': ({ data, stores }) => {
     const value = data['value'];
@@ -149,9 +185,12 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
     }
     stores.$familyPhoneError.value = null;
     try {
+      // `extractable: false` on the private key prevents JavaScript from
+      // ever reading the raw bytes — and IndexedDB can still structured-
+      // clone the CryptoKey object across reloads.
       const kp = await crypto.subtle.generateKey(
         { name: 'ECDSA', namedCurve: 'P-256' },
-        true,
+        false,
         ['sign', 'verify'],
       );
       const spki = new Uint8Array(await crypto.subtle.exportKey('spki', kp.publicKey));
@@ -169,6 +208,19 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
       stores.$pairedThisSession.value = paired;
       stores.$pairCompleteCode.value = '';
       stores.$familyPhoneDevices.value = await stores.client.listFamilyPhoneDevices();
+      // Persist before opening the WS so a crash mid-handshake still
+      // leaves the pairing usable on next load.
+      try {
+        await savePairedDevice({
+          deviceId: paired.deviceId,
+          privateKey: kp.privateKey,
+          publicKey: kp.publicKey,
+          publicKeyB64,
+        });
+      } catch (err) {
+        stores.$familyPhoneError.value =
+          `Paired, but persistence failed (${describeError(err)}). Will not survive reload.`;
+      }
       // Immediately open the device WS so the new device can place and
       // receive calls without an extra explicit step.
       await openDeviceConnection(stores.client, paired);

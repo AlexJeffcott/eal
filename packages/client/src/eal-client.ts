@@ -686,11 +686,23 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
 
       // 3. Open the WS and send the device-auth handshake.
       const ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
       const subscribers = new Set<(event: FamilyPhoneCallEvent) => void>();
+      const audioSubscribers = new Set<(callId: string, payload: Uint8Array) => void>();
       ws.addEventListener('message', (e: MessageEvent) => {
-        if (typeof e.data !== 'string') return;
-        const event = parseFamilyPhoneCallEvent(e.data);
-        if (event) for (const h of subscribers) h(event);
+        if (typeof e.data === 'string') {
+          const event = parseFamilyPhoneCallEvent(e.data);
+          if (event) for (const h of subscribers) h(event);
+          return;
+        }
+        if (e.data instanceof ArrayBuffer) {
+          const view = new Uint8Array(e.data);
+          if (view.length < 17 || view[0] !== AUDIO_TAG) return;
+          const callIdBytes = view.slice(1, 17);
+          const callId = new TextDecoder().decode(callIdBytes).replace(/\0+$/, '');
+          const payload = view.slice(17);
+          for (const h of audioSubscribers) h(callId, payload);
+        }
       });
       await new Promise<void>((resolveOpen, rejectOpen) => {
         ws.addEventListener('open', () => resolveOpen(), { once: true });
@@ -745,14 +757,30 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
           subscribers.add(handler);
           return () => subscribers.delete(handler);
         },
+        sendAudio(callId, payload) {
+          const frame = new Uint8Array(new ArrayBuffer(1 + 16 + payload.byteLength));
+          frame[0] = AUDIO_TAG;
+          const idBytes = new TextEncoder().encode(callId).slice(0, 16);
+          frame.set(idBytes, 1);
+          frame.set(payload, 17);
+          ws.send(frame);
+        },
+        subscribeAudio(handler) {
+          audioSubscribers.add(handler);
+          return () => audioSubscribers.delete(handler);
+        },
         close() {
           subscribers.clear();
+          audioSubscribers.clear();
           ws.close();
         },
       };
     },
   };
 }
+
+/** Binary tag claimed by family-phone for audio frames; mirrors the server. */
+const AUDIO_TAG = 0x10;
 
 function fromBase64UrlBytes(value: string): Uint8Array<ArrayBuffer> {
   const padded = value.replace(/-/g, '+').replace(/_/g, '/');

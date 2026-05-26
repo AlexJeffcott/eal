@@ -17,6 +17,7 @@ import {
 import { $tasksById } from './apps/tasks/stores.ts';
 import { bindShowcaseForm } from './apps/showcase/stores.ts';
 import { ACTION_REGISTRY } from './actions/registry.ts';
+import { bootstrapFamilyPhonePairedDevice } from './apps/family-phone/actions.ts';
 import { installTaskUrlSync } from './apps/tasks/url-sync.ts';
 import { installRouter } from './shell/router.ts';
 
@@ -144,6 +145,9 @@ async function seedSessionData(stores: AppStores): Promise<void> {
   } catch (err) {
     stores.$familyPhoneError.value = err instanceof Error ? err.message : String(err);
   }
+  // Rehydrate a previously-paired device on this tab — if IndexedDB has one,
+  // its WS reconnects automatically and the user is ready to call.
+  await bootstrapFamilyPhonePairedDevice(stores);
 }
 
 /**

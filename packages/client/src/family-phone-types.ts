@@ -66,6 +66,18 @@ export interface FamilyPhoneDeviceConnection {
   hangup(callId: string): void;
   /** Register an event handler; returns an unsubscribe. */
   subscribe(handler: (event: FamilyPhoneCallEvent) => void): () => void;
+  /**
+   * Send an audio frame for an active call. The client wraps the payload in
+   * the on-wire framing (1-byte tag + 16-byte ASCII call id + payload) so
+   * callers can stay codec-agnostic.
+   */
+  sendAudio(callId: string, payload: Uint8Array): void;
+  /**
+   * Subscribe to audio frames arriving for any active call; returns an
+   * unsubscribe. The handler receives the call id and the codec payload —
+   * the wire framing is parsed out by the connection.
+   */
+  subscribeAudio(handler: (callId: string, payload: Uint8Array) => void): () => void;
   /** Tear down the connection. */
   close(): void;
 }
