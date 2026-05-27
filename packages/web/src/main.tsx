@@ -18,7 +18,9 @@ import { $tasksById } from './apps/tasks/stores.ts';
 import { bindShowcaseForm } from './apps/showcase/stores.ts';
 import { ACTION_REGISTRY } from './actions/registry.ts';
 import { bootstrapDevices } from './apps/devices/actions.ts';
+import { refreshAgentRules } from './apps/agent-rules/actions.ts';
 import { installTaskUrlSync } from './apps/tasks/url-sync.ts';
+import { $route } from './shell/router.ts';
 import { installServiceWorker } from './platform/service-worker.ts';
 import { installRouter } from './shell/router.ts';
 
@@ -153,6 +155,20 @@ async function seedSessionData(stores: AppStores): Promise<void> {
 }
 
 /**
+ * Refresh the agent-rules panel data when the user navigates to it.
+ * The list is small; refetching on every visit keeps the UI honest
+ * against scheduler ticks that happened while the user was on
+ * another page.
+ */
+function installAgentRulesRouteSync(stores: AppStores): void {
+  $route.subscribe((path) => {
+    if (path === '/agent-rules' && stores.$currentUser.value !== null) {
+      void refreshAgentRules(stores);
+    }
+  });
+}
+
+/**
  * Seed the signed-in user's data whenever authentication completes — at boot
  * for an existing session, and after an in-session register or sign-in. Keying
  * off `$currentUser` keeps the auth actions ignorant of seeding, and means a
@@ -196,6 +212,7 @@ async function bootstrap(): Promise<void> {
   // `?code=` query untouched.
   installRouter();
   installTaskUrlSync();
+  installAgentRulesRouteSync(stores);
 
   // Register the notifications service worker. Best-effort — failures
   // are logged and notifications stay disabled for the session.

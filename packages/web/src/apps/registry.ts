@@ -3,6 +3,7 @@ import { TasksPanel } from './tasks/tasks-panel.tsx';
 import { ShowcasePanel } from './showcase/showcase-panel.tsx';
 import { DevicesPanel } from './devices/devices-panel.tsx';
 import { FamilyPhonePanel } from './family-phone/family-phone-panel.tsx';
+import { AgentRulesPanel } from './agent-rules/agent-rules-panel.tsx';
 
 /**
  * A web app — a feature mounted into the shell at its own path. The shell
@@ -62,6 +63,14 @@ export const WEB_APPS: readonly WebApp[] = [
     description: 'Voice calls between paired household devices.',
     access: 'authed',
     root: FamilyPhonePanel,
+  },
+  {
+    id: 'agent-rules',
+    path: '/agent-rules',
+    label: 'Proactivity',
+    description: "Rules for when the assistant calls or messages someone in the household.",
+    access: 'authed',
+    root: AgentRulesPanel,
   },
 ];
 

@@ -91,16 +91,8 @@ export const config: CoverageConfig = {
       reason: 'core start/stop/isPlaying unit-tested; the catch branches around oscillator.stop and AudioContext.close fire only on browser implementation quirks and are exercised by the e2e ringtone harness',
       claimedBy: 'scripts/e2e-family-phone-ringtone.ts',
     },
-    'packages/web/src/apps/family-phone/stores.ts': {
-      reason: 'call-only signals; reads exercised by actions.test.ts, createFamilyPhoneStores/reset by the shell composition root',
-      claimedBy: 'packages/web/src/apps/family-phone/actions.test.ts',
-    },
     'packages/web/src/apps/family-phone/actions.ts': {
       reason: 'installCallEventHandlers wiring unit-tested; place-call/accept/etc dispatchers run in the polly browser tier and against the live api',
-      claimedBy: 'packages/web/src/apps/family-phone/actions.test.ts',
-    },
-    'packages/web/src/apps/devices/stores.ts': {
-      reason: 'devices signals; reads exercised by actions.test.ts, factory/reset by the shell composition root',
       claimedBy: 'packages/web/src/apps/family-phone/actions.test.ts',
     },
     'packages/web/src/shell/router.ts': {
