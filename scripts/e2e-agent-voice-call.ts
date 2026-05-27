@@ -178,6 +178,8 @@ async function spawnAgentWorker(opts: {
   apiUrl: string;
   tokenPath: string;
   agentDevicePath: string;
+  /** Override the scheduler tick. Defaults are too slow for an e2e. */
+  schedulerTickMs?: number;
 }): Promise<SpawnedAgent> {
   const workdir = mkdtempSync(resolve(tmpdir(), 'eal-agent-e2e-'));
   const proc = spawn(
@@ -190,6 +192,9 @@ async function spawnAgentWorker(opts: {
         EAL_TTS_PROVIDER: 'fixture',
         EAL_CLAUDE_FAKE_REPLY: CLAUDE_FAKE_REPLY,
         NODE_TLS_REJECT_UNAUTHORIZED: '0',
+        ...(opts.schedulerTickMs !== undefined
+          ? { EAL_SCHEDULER_TICK_MS: String(opts.schedulerTickMs) }
+          : {}),
       },
       stdout: 'pipe',
       stderr: 'inherit',
@@ -240,7 +245,137 @@ async function spawnAgentWorker(opts: {
   throw new Error('agent worker did not reach "voice loop active" within timeout');
 }
 
+async function userInitiatedScenario(opts: {
+  alice: PairedClient;
+  agentDevice: { id: number };
+}): Promise<void> {
+  const { alice, agentDevice } = opts;
+
+  // Place a call from Alice → agent.
+  alice.events.length = 0;
+  alice.audio.length = 0;
+  alice.conn.placeCall(agentDevice.id);
+  const ack = await waitForEvent(alice.events, (e) => e.type === 'call:invite-ack', 5_000);
+  if (ack.type !== 'call:invite-ack') throw new Error('unreachable');
+  const callId = ack.callId;
+  console.log(`[e2e] call ${callId} invited`);
+
+  const accepted = await waitForEvent(
+    alice.events,
+    (e) => e.type === 'call:accepted' && e.callId === callId,
+    10_000,
+  );
+  if (accepted.type !== 'call:accepted') throw new Error('unreachable');
+  console.log(`[e2e] agent accepted call ${callId}`);
+
+  // Pump speech then silence. The fixture STT resolves any non-empty
+  // input to "hello"; the fake Claude returns the canned reply with
+  // two sentences; the fixture TTS emits one frame per character per
+  // sentence — comfortably above the 5-frame minimum the assertion
+  // checks for.
+  for (let i = 0; i < SPEECH_FRAMES; i++) {
+    alice.conn.sendAudio(callId, speechFrame());
+    await delay(20);
+  }
+  for (let i = 0; i < SILENCE_FRAMES; i++) {
+    alice.conn.sendAudio(callId, silenceFrame());
+    await delay(20);
+  }
+  console.log(`[e2e] streamed ${SPEECH_FRAMES} speech + ${SILENCE_FRAMES} silence frames`);
+
+  const received = await waitForAudioBytes(alice.audio, callId, MIN_REPLY_BYTES, AUDIO_TIMEOUT_MS);
+  console.log(`[e2e] received ${received} bytes of synthesised reply audio`);
+
+  alice.conn.hangup(callId);
+  console.log(`[e2e] hangup sent`);
+
+  console.log(`[e2e] OK — user-initiated voice path roundtripped`);
+}
+
+async function scheduledScenario(opts: {
+  alice: PairedClient;
+  agentDevice: { id: number };
+}): Promise<void> {
+  const { alice, agentDevice } = opts;
+
+  // The agent's scheduler tick is overridden via env to ~200 ms for the
+  // e2e (see spawnAgentWorker). A rule with `nextFireAt` in the past
+  // fires on the very next tick.
+  const pastIso = new Date(Date.now() - 60_000).toISOString();
+
+  // -- place_call rule: agent dials Alice. ---------------------------
+  const callRule = await alice.client.upsertAgentRule({
+    name: 'e2e ring alice',
+    enabled: true,
+    targetDeviceId: alice.deviceId,
+    kind: 'place_call',
+    body: 'e2e scheduled ring',
+    nextFireAt: pastIso,
+    intervalSec: null,
+    cooldownSec: 0,
+  });
+  console.log(`[e2e] seeded place_call rule #${callRule.id}`);
+
+  alice.events.length = 0;
+  const incoming = await waitForEvent(
+    alice.events,
+    (e) => e.type === 'call:incoming' && e.fromDeviceId === agentDevice.id,
+    15_000,
+  );
+  if (incoming.type !== 'call:incoming') throw new Error('unreachable');
+  console.log(`[e2e] scheduled rule rang alice as call ${incoming.callId}`);
+  // Accept and hang up so the action audit row settles to 'answered'
+  // and the phone lock releases for the voicemail rule below.
+  alice.conn.acceptCall(incoming.callId);
+  await delay(200);
+  alice.conn.hangup(incoming.callId);
+  await delay(500);
+
+  // -- voice_message rule: agent synthesises and POSTs a voicemail. --
+  const voiceRule = await alice.client.upsertAgentRule({
+    name: 'e2e voicemail',
+    enabled: true,
+    targetDeviceId: alice.deviceId,
+    kind: 'voice_message',
+    body: 'e2e scheduled message',
+    nextFireAt: new Date(Date.now() - 60_000).toISOString(),
+    intervalSec: null,
+    cooldownSec: 0,
+  });
+  console.log(`[e2e] seeded voice_message rule #${voiceRule.id}`);
+
+  // Poll the voicemail list until the worker's next tick has synthed.
+  const deadline = Date.now() + 20_000;
+  let voicemails = await alice.client.listVoiceMessages({ deviceId: alice.deviceId });
+  while (voicemails.length === 0 && Date.now() < deadline) {
+    await delay(250);
+    voicemails = await alice.client.listVoiceMessages({ deviceId: alice.deviceId });
+  }
+  if (voicemails.length === 0) {
+    throw new Error('voice_message rule did not produce a voicemail row');
+  }
+  const vm = voicemails[0];
+  if (vm === undefined) throw new Error('unreachable empty voicemails');
+  if (vm.fromDeviceId !== agentDevice.id) {
+    throw new Error(`voicemail attributed to ${vm.fromDeviceId}, expected agent ${agentDevice.id}`);
+  }
+  if (vm.body !== 'e2e scheduled message') {
+    throw new Error(`voicemail body was "${vm.body}", expected "e2e scheduled message"`);
+  }
+  console.log(`[e2e] voicemail #${vm.id} stored (${vm.durationMs} ms)`);
+
+  // Fetch the audio — proves the WAV wrap path works end-to-end.
+  const audio = await alice.client.getVoiceMessageAudio(vm.id);
+  if (audio.byteLength < 44 + 2) {
+    throw new Error(`voicemail audio was ${audio.byteLength} bytes; expected ≥ 46`);
+  }
+  console.log(`[e2e] voicemail audio served — ${audio.byteLength} bytes`);
+
+  console.log(`[e2e] OK — scheduled paths roundtripped (ring + voicemail)`);
+}
+
 async function main(): Promise<void> {
+  const scenario = process.argv.includes('--scheduled') ? 'scheduled' : 'user-initiated';
   rmSync(ARTIFACTS, { recursive: true, force: true });
   mkdirSync(ARTIFACTS, { recursive: true });
   process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';
@@ -250,7 +385,6 @@ async function main(): Promise<void> {
   const seed = seedCliToken({ dbPath: DB_PATH, displayName: 'alex', label: 'agent-voice-e2e' });
   console.log(`[e2e] seeded user #${seed.userId}`);
 
-  // Write the CLI token where the worker subprocess will read it.
   const tokenPath = resolve(ARTIFACTS, 'cli-token');
   writeFileSync(tokenPath, seed.token, { mode: 0o600 });
   const agentDevicePath = resolve(ARTIFACTS, 'agent-device.json');
@@ -258,76 +392,37 @@ async function main(): Promise<void> {
   let agent: SpawnedAgent | null = null;
   let alice: PairedClient | null = null;
   try {
-    // Pair Alice (the PWA stand-in) first so we have a client that can
-    // mint family-phone user codes.
     alice = await pairCallerClient(api.url, seed.token, "Alex's laptop");
     console.log(`[e2e] paired caller device #${alice.deviceId}`);
 
     const { userCode } = await alice.client.startFamilyPhonePair();
     console.log(`[e2e] minted user code ${userCode} for the agent`);
 
-    await runPairPhoneSubprocess({
+    await runPairPhoneSubprocess({ apiUrl: api.url, tokenPath, agentDevicePath, userCode });
+    console.log(`[e2e] agent device record written to ${agentDevicePath}`);
+
+    agent = await spawnAgentWorker({
       apiUrl: api.url,
       tokenPath,
       agentDevicePath,
-      userCode,
+      // Scheduled mode ticks the worker every 200 ms so a rule with
+      // nextFireAt in the past fires near-instantly. The user-initiated
+      // scenario does not depend on the scheduler at all.
+      ...(scenario === 'scheduled' ? { schedulerTickMs: 200 } : {}),
     });
-    console.log(`[e2e] agent device record written to ${agentDevicePath}`);
-
-    agent = await spawnAgentWorker({ apiUrl: api.url, tokenPath, agentDevicePath });
     console.log(`[e2e] agent worker reached "voice loop active"`);
 
-    // Find the agent's deviceId from the directory.
     const devices = await alice.client.listFamilyPhoneDevices();
     const agentDevice = devices.find((d) => d.kind === 'agent');
     if (!agentDevice) throw new Error('agent device did not appear in the directory');
-    if (!agentDevice.online) {
-      // Give presence a moment to flip — broadcast is fire-and-forget.
-      await delay(250);
-    }
+    if (!agentDevice.online) await delay(250);
     console.log(`[e2e] agent device #${agentDevice.id} listed in directory`);
 
-    // Place a call from Alice → agent.
-    alice.events.length = 0;
-    alice.audio.length = 0;
-    alice.conn.placeCall(agentDevice.id);
-    const ack = await waitForEvent(alice.events, (e) => e.type === 'call:invite-ack', 5_000);
-    if (ack.type !== 'call:invite-ack') throw new Error('unreachable');
-    const callId = ack.callId;
-    console.log(`[e2e] call ${callId} invited`);
-
-    const accepted = await waitForEvent(
-      alice.events,
-      (e) => e.type === 'call:accepted' && e.callId === callId,
-      10_000,
-    );
-    if (accepted.type !== 'call:accepted') throw new Error('unreachable');
-    console.log(`[e2e] agent accepted call ${callId}`);
-
-    // Pump speech then silence. The fixture STT resolves any non-empty
-    // input to "hello"; the fake Claude returns the canned reply with
-    // two sentences; the fixture TTS emits one frame per character per
-    // sentence — comfortably above the 5-frame minimum the assertion
-    // checks for.
-    for (let i = 0; i < SPEECH_FRAMES; i++) {
-      alice.conn.sendAudio(callId, speechFrame());
-      // Pace so the receive side actually sees frames in order — the
-      // worker's VAD reads each frame as it arrives.
-      await delay(20);
+    if (scenario === 'user-initiated') {
+      await userInitiatedScenario({ alice, agentDevice });
+    } else {
+      await scheduledScenario({ alice, agentDevice });
     }
-    for (let i = 0; i < SILENCE_FRAMES; i++) {
-      alice.conn.sendAudio(callId, silenceFrame());
-      await delay(20);
-    }
-    console.log(`[e2e] streamed ${SPEECH_FRAMES} speech + ${SILENCE_FRAMES} silence frames`);
-
-    const received = await waitForAudioBytes(alice.audio, callId, MIN_REPLY_BYTES, AUDIO_TIMEOUT_MS);
-    console.log(`[e2e] received ${received} bytes of synthesised reply audio`);
-
-    alice.conn.hangup(callId);
-    console.log(`[e2e] hangup sent`);
-
-    console.log(`[e2e] OK — pair-phone, accept, speech→reply→hangup all roundtripped`);
   } finally {
     if (alice) alice.conn.close();
     if (agent) await agent.kill();

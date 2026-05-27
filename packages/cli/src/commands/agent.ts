@@ -130,6 +130,8 @@ async function runAgentWorker(global: GlobalOptions): Promise<number> {
       // manages WS reconnects internally. Pass the TTS provider through
       // so voice_message rules can synth and POST in-tick.
       const dialer = createAgentOutboundDialer({ client, connection, log });
+      const tickMsEnv = process.env['EAL_SCHEDULER_TICK_MS'];
+      const tickMs = tickMsEnv !== undefined ? Number(tickMsEnv) : undefined;
       startAgentScheduler({
         client,
         now: () => new Date(),
@@ -138,6 +140,9 @@ async function runAgentWorker(global: GlobalOptions): Promise<number> {
         agentDeviceId: phoneRecord.deviceId,
         ...(providers ? { tts: providers.tts } : {}),
         claudeRunner: runClaude,
+        ...(tickMs !== undefined && Number.isFinite(tickMs) && tickMs > 0
+          ? { tickMs }
+          : {}),
       });
       log('eal agent: proactivity scheduler running.');
     });
