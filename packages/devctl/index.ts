@@ -1,3 +1,4 @@
+import { agentCmd } from './commands/agent.ts';
 import { checkCmd } from './commands/check.ts';
 import { devCmd } from './commands/dev.ts';
 import { installHooksCmd } from './commands/install-hooks.ts';
@@ -15,6 +16,10 @@ interface Command {
 }
 
 const COMMANDS: Record<string, Command> = {
+  agent: {
+    description: 'Run `eal agent` against the deployed app with local voice providers pre-wired',
+    handler: agentCmd,
+  },
   check: {
     description: 'Run all quality checks (tsc, lint scripts) in parallel',
     handler: checkCmd,
