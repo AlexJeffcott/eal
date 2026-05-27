@@ -1,4 +1,8 @@
 import type {
+  AgentAction,
+  AgentActionResult,
+  AgentActionTrigger,
+  AgentRule,
   ChatAgentReply,
   ChatAgentRequest,
   ChatBrowserEvent,
@@ -15,6 +19,7 @@ import type {
   Task,
   TaskDetail,
   TaskEvent,
+  UpsertAgentRuleInput,
 } from '@eal/client';
 
 export interface MockEalClient extends EalClient {
@@ -285,6 +290,99 @@ export function createMockEalClient(): MockEalClient {
         unsubscribePush() {},
         close() {},
       };
+    },
+
+    async listAgentRules(): Promise<AgentRule[]> {
+      requireSignedIn();
+      return [];
+    },
+
+    async upsertAgentRule(input: UpsertAgentRuleInput): Promise<AgentRule> {
+      requireSignedIn();
+      const now = isoNow();
+      return {
+        id: input.id ?? 1,
+        name: input.name,
+        enabled: input.enabled,
+        targetDeviceId: input.targetDeviceId,
+        kind: input.kind,
+        body: input.body ?? null,
+        systemPrompt: input.systemPrompt ?? null,
+        nextFireAt: input.nextFireAt,
+        intervalSec: input.intervalSec ?? null,
+        cooldownSec: input.cooldownSec ?? 0,
+        lastFiredAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+    },
+
+    async deleteAgentRule(): Promise<void> {
+      /* mock: no-op */
+    },
+
+    async createAgentPlaceCallAction(input: {
+      targetDeviceId: number;
+      trigger: AgentActionTrigger;
+      ruleId?: number | null;
+    }): Promise<AgentAction | null> {
+      requireSignedIn();
+      return {
+        id: 1,
+        ruleId: input.ruleId ?? null,
+        kind: 'place_call',
+        targetDeviceId: input.targetDeviceId,
+        trigger: input.trigger,
+        result: 'pending',
+        callId: null,
+        error: null,
+        createdAt: isoNow(),
+        finishedAt: null,
+      };
+    },
+
+    async attachAgentCall(actionId: number, callId: string): Promise<AgentAction> {
+      requireSignedIn();
+      return {
+        id: actionId,
+        ruleId: null,
+        kind: 'place_call',
+        targetDeviceId: 1,
+        trigger: 'tool',
+        result: 'pending',
+        callId,
+        error: null,
+        createdAt: isoNow(),
+        finishedAt: null,
+      };
+    },
+
+    async finishAgentAction(
+      actionId: number,
+      input: {
+        result: Exclude<AgentActionResult, 'pending'>;
+        callId?: string | null;
+        error?: string | null;
+      },
+    ): Promise<AgentAction> {
+      requireSignedIn();
+      return {
+        id: actionId,
+        ruleId: null,
+        kind: 'place_call',
+        targetDeviceId: 1,
+        trigger: 'tool',
+        result: input.result,
+        callId: input.callId ?? null,
+        error: input.error ?? null,
+        createdAt: isoNow(),
+        finishedAt: isoNow(),
+      };
+    },
+
+    async listAgentActions(): Promise<AgentAction[]> {
+      requireSignedIn();
+      return [];
     },
 
     async createTask(input): Promise<Task> {

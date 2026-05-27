@@ -59,6 +59,68 @@ export type FamilyPhoneCallEvent =
   | { type: 'push:unsubscribed' };
 
 /**
+ * Agent proactivity rule — one row per scheduled or repeating action the
+ * `eal agent` worker should perform. `kind === 'place_call'` rings a
+ * target device; `kind === 'voice_message'` stores a voicemail. The
+ * worker reads rules on every scheduler tick and posts the resulting
+ * action to /api/agent/actions/*.
+ */
+export type AgentRuleKind = 'place_call' | 'voice_message';
+
+export interface AgentRule {
+  id: number;
+  name: string;
+  enabled: boolean;
+  targetDeviceId: number;
+  kind: AgentRuleKind;
+  body: string | null;
+  systemPrompt: string | null;
+  nextFireAt: string;
+  intervalSec: number | null;
+  cooldownSec: number;
+  lastFiredAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpsertAgentRuleInput {
+  /** Set to update an existing rule; omit to insert. */
+  id?: number;
+  name: string;
+  enabled: boolean;
+  targetDeviceId: number;
+  kind: AgentRuleKind;
+  /** Either `body` or `systemPrompt` must be set (server enforces this). */
+  body?: string | null;
+  systemPrompt?: string | null;
+  nextFireAt: string;
+  intervalSec?: number | null;
+  cooldownSec?: number;
+}
+
+export type AgentActionTrigger = 'scheduled' | 'tool';
+export type AgentActionResult =
+  | 'pending'
+  | 'answered'
+  | 'unanswered'
+  | 'rejected'
+  | 'failed'
+  | 'sent';
+
+export interface AgentAction {
+  id: number;
+  ruleId: number | null;
+  kind: AgentRuleKind;
+  targetDeviceId: number;
+  trigger: AgentActionTrigger;
+  result: AgentActionResult;
+  callId: string | null;
+  error: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
+/**
  * A live device-authenticated WebSocket. Returned by
  * `EalClient.connectFamilyPhoneDevice`; the caller subscribes to events,
  * places calls, accepts/rejects/hangups, and closes when the device leaves

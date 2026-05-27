@@ -23,6 +23,7 @@ describe('eal mcp tools', () => {
       'create_task',
       'get_task',
       'list_tasks',
+      'place_call',
       'reopen_task',
       'update_task',
     ]);

@@ -24,6 +24,11 @@ export type {
   Message,
 } from './chat-types.ts';
 export type {
+  AgentAction,
+  AgentActionResult,
+  AgentActionTrigger,
+  AgentRule,
+  AgentRuleKind,
   FamilyPhoneCallEvent,
   FamilyPhoneDevice,
   FamilyPhoneDeviceConnection,
@@ -31,4 +36,5 @@ export type {
   FamilyPhonePairCompleteInput,
   FamilyPhonePairCompleteResult,
   FamilyPhonePairStartResult,
+  UpsertAgentRuleInput,
 } from './family-phone-types.ts';

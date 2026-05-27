@@ -26,12 +26,17 @@ import type {
   Message,
 } from './chat-types.ts';
 import type {
+  AgentAction,
+  AgentActionResult,
+  AgentActionTrigger,
+  AgentRule,
   FamilyPhoneCallEvent,
   FamilyPhoneDevice,
   FamilyPhoneDeviceConnection,
   FamilyPhonePairCompleteInput,
   FamilyPhonePairCompleteResult,
   FamilyPhonePairStartResult,
+  UpsertAgentRuleInput,
 } from './family-phone-types.ts';
 
 const TOKEN_STORAGE_KEY = 'eal-token';
@@ -218,6 +223,40 @@ export interface EalClient {
     privateKey: CryptoKey;
   }): Promise<FamilyPhoneDeviceConnection>;
 
+  // ── Agent proactivity ────────────────────────────────────────────────────
+  /** Read every proactivity rule. Admin UI listing. */
+  listAgentRules(): Promise<AgentRule[]>;
+  /** Insert when `id` is omitted, update otherwise. */
+  upsertAgentRule(input: UpsertAgentRuleInput): Promise<AgentRule>;
+  /** Delete a rule. The audit log entries that referenced it survive. */
+  deleteAgentRule(id: number): Promise<void>;
+
+  // ── Agent actions (audit + lock) ─────────────────────────────────────────
+  /**
+   * Claim the agent's phone lock and insert a pending audit row. Returns
+   * the new action on success, or `null` if the agent is already on a
+   * call (server returned 409). Used by the scheduler before placing the
+   * actual `call:invite` over the agent's family-phone WS.
+   */
+  createAgentPlaceCallAction(input: {
+    targetDeviceId: number;
+    trigger: AgentActionTrigger;
+    ruleId?: number | null;
+  }): Promise<AgentAction | null>;
+  /** Stamp the freshly-minted family-phone call_id onto a pending action. */
+  attachAgentCall(actionId: number, callId: string): Promise<AgentAction>;
+  /** Finish a pending action and release the lock. */
+  finishAgentAction(
+    actionId: number,
+    input: {
+      result: Exclude<AgentActionResult, 'pending'>;
+      callId?: string | null;
+      error?: string | null;
+    },
+  ): Promise<AgentAction>;
+  /** Most-recent-first audit log, optionally filtered to one rule. */
+  listAgentActions(input?: { limit?: number; ruleId?: number }): Promise<AgentAction[]>;
+
   // ── Chat (browser side) ──────────────────────────────────────────────────
   /** Load the signed-in user's current assistant conversation, oldest first. */
   listMessages(): Promise<Message[]>;
@@ -392,6 +431,35 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
     if (input.deferUntil !== undefined) body['defer_until'] = input.deferUntil;
     if (input.dueAt !== undefined) body['due_at'] = input.dueAt;
     if (input.position !== undefined) body['position'] = input.position;
+    return body;
+  }
+
+  function toUpsertAgentRuleWire(input: UpsertAgentRuleInput): Record<string, unknown> {
+    const body: Record<string, unknown> = {
+      name: input.name,
+      enabled: input.enabled,
+      target_device_id: input.targetDeviceId,
+      kind: input.kind,
+      next_fire_at: input.nextFireAt,
+    };
+    if (input.id !== undefined) body['id'] = input.id;
+    if (input.body !== undefined) body['body'] = input.body;
+    if (input.systemPrompt !== undefined) body['system_prompt'] = input.systemPrompt;
+    if (input.intervalSec !== undefined) body['interval_sec'] = input.intervalSec;
+    if (input.cooldownSec !== undefined) body['cooldown_sec'] = input.cooldownSec;
+    return body;
+  }
+
+  function toCreatePlaceCallWire(input: {
+    targetDeviceId: number;
+    trigger: AgentActionTrigger;
+    ruleId?: number | null;
+  }): Record<string, unknown> {
+    const body: Record<string, unknown> = {
+      target_device_id: input.targetDeviceId,
+      trigger: input.trigger,
+    };
+    if (input.ruleId !== undefined) body['rule_id'] = input.ruleId;
     return body;
   }
 
@@ -828,6 +896,71 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
           ws = null;
         },
       };
+    },
+
+    async listAgentRules(): Promise<AgentRule[]> {
+      const { rules } = await getJsonOrThrow<{ rules: AgentRule[] }>('/api/agent/rules');
+      return rules;
+    },
+
+    async upsertAgentRule(input): Promise<AgentRule> {
+      const { rule } = await postJson<{ rule: AgentRule }>(
+        '/api/agent/rules',
+        toUpsertAgentRuleWire(input),
+      );
+      return rule;
+    },
+
+    async deleteAgentRule(id): Promise<void> {
+      await deleteJson<{ deleted: true }>(`/api/agent/rules/${id}`);
+    },
+
+    async createAgentPlaceCallAction(input): Promise<AgentAction | null> {
+      const body = toCreatePlaceCallWire(input);
+      const response = await fetch(`${apiUrl}/api/agent/actions/place-call`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(body),
+      });
+      // The lock is held; the server still recorded the audit row as
+      // failed, but we report "busy" to the caller as `null` so the
+      // scheduler can back off and try again on the next tick.
+      if (response.status === 409) return null;
+      if (!response.ok) {
+        throw new Error(extractServerError(await response.text()));
+      }
+      const parsed: { action: AgentAction } = await response.json();
+      return parsed.action;
+    },
+
+    async attachAgentCall(actionId, callId): Promise<AgentAction> {
+      const { action } = await postJson<{ action: AgentAction }>(
+        `/api/agent/actions/${actionId}/attach-call`,
+        { call_id: callId },
+      );
+      return action;
+    },
+
+    async finishAgentAction(actionId, input): Promise<AgentAction> {
+      const { action } = await postJson<{ action: AgentAction }>(
+        `/api/agent/actions/${actionId}/finish`,
+        {
+          result: input.result,
+          call_id: input.callId ?? null,
+          error: input.error ?? null,
+        },
+      );
+      return action;
+    },
+
+    async listAgentActions(input): Promise<AgentAction[]> {
+      const params = new URLSearchParams();
+      if (input?.limit !== undefined) params.set('limit', String(input.limit));
+      if (input?.ruleId !== undefined) params.set('rule_id', String(input.ruleId));
+      const query = params.toString();
+      const path = `/api/agent/actions${query.length === 0 ? '' : `?${query}`}`;
+      const { actions } = await getJsonOrThrow<{ actions: AgentAction[] }>(path);
+      return actions;
     },
   };
 }
