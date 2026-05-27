@@ -1,9 +1,11 @@
 import type {
+  AgentAction,
   AgentRule,
   EalClient,
   UpsertAgentRuleInput,
 } from '@eal/client';
 import { assertNever, delay } from '@eal/shared';
+import type { AgentOutboundDialer } from './agent-outbound-dialer.ts';
 
 /**
  * The agent worker's scheduler tick. Every TICK_MS the worker pulls
@@ -32,6 +34,20 @@ export interface AgentSchedulerDeps {
   /** Current time, injected for testability. */
   now: () => Date;
   log: (line: string) => void;
+  /**
+   * Optional outbound dialer. When present, every tick sweeps the
+   * server-side audit log for pending actions without a `callId` and
+   * dials each one. Without a dialer the tick only creates actions —
+   * useful for the unit-test layer that exercises rule firing in
+   * isolation.
+   */
+  dialer?: AgentOutboundDialer;
+  /**
+   * How many recent actions to scan per tick. The pending-action sweep
+   * only needs to look at the head of the log because actions move to
+   * a terminal result on completion; the default of 50 is generous.
+   */
+  pendingActionScanLimit?: number;
 }
 
 export interface TickResult {
@@ -45,6 +61,10 @@ export interface TickResult {
   notImplemented: number[];
   /** Errors swallowed during the tick, paired with the rule id that caused them. */
   errors: Array<{ ruleId: number; message: string }>;
+  /** Action ids successfully dialed by the outbound sweep this tick. */
+  dialed: number[];
+  /** Action ids the dialer surfaced an error on. */
+  dialErrors: Array<{ actionId: number; message: string }>;
 }
 
 export async function tickOnce(deps: AgentSchedulerDeps): Promise<TickResult> {
@@ -54,6 +74,8 @@ export async function tickOnce(deps: AgentSchedulerDeps): Promise<TickResult> {
     advanced: [],
     notImplemented: [],
     errors: [],
+    dialed: [],
+    dialErrors: [],
   };
   const now = deps.now();
   const nowIso = now.toISOString();
@@ -113,12 +135,49 @@ export async function tickOnce(deps: AgentSchedulerDeps): Promise<TickResult> {
     }
   }
 
-  // Sweeping the rules can be slow if listAgentRules is large; clamp
-  // the per-tick processing to the time the call has had so far. The
-  // worker still ticks every TICK_MS regardless of how long the prior
-  // tick took, because we don't `setInterval` — see `startAgentScheduler`.
+  // Now sweep the audit log for pending actions that have not yet
+  // been dialed. The rule pass above just inserted some of them; the
+  // MCP `place_call` tool inserts others on demand. Either way the
+  // worker is the only thing that can drive the actual call:invite.
   void nowIso;
+  if (deps.dialer !== undefined) {
+    await sweepPendingDials(deps, deps.dialer, result);
+  }
   return result;
+}
+
+async function sweepPendingDials(
+  deps: AgentSchedulerDeps,
+  dialer: AgentOutboundDialer,
+  result: TickResult,
+): Promise<void> {
+  const limit = deps.pendingActionScanLimit ?? 50;
+  let actions: AgentAction[];
+  try {
+    actions = await deps.client.listAgentActions({ limit });
+  } catch (err) {
+    deps.log(`scheduler: listAgentActions failed: ${describeError(err)}`);
+    return;
+  }
+  // listAgentActions returns most-recent first; reverse so oldest pending
+  // dials in this tick window. With the server's single-active-action lock
+  // this loop normally has at most one row to drive.
+  for (const action of [...actions].reverse()) {
+    if (action.result !== 'pending') continue;
+    if (action.callId !== null) continue;
+    if (action.kind !== 'place_call') continue;
+    try {
+      await dialer.dial({
+        id: action.id,
+        targetDeviceId: action.targetDeviceId,
+      });
+      result.dialed.push(action.id);
+    } catch (err) {
+      const message = describeError(err);
+      deps.log(`scheduler: action #${action.id} dial failed: ${message}`);
+      result.dialErrors.push({ actionId: action.id, message });
+    }
+  }
 }
 
 export function startAgentScheduler(deps: AgentSchedulerDeps & {

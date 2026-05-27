@@ -322,6 +322,117 @@ describe('agent scheduler — tickOnce', () => {
     expect(logs.some((l) => l.includes('boom'))).toBe(true);
   });
 
+  test('dialer sweep dials a pending action that has no callId yet', async () => {
+    const state = newState([]);
+    const action: AgentAction = {
+      id: 99,
+      ruleId: null,
+      kind: 'place_call',
+      targetDeviceId: 42,
+      trigger: 'tool',
+      result: 'pending',
+      callId: null,
+      error: null,
+      createdAt: '2025-01-01T00:00:00.000Z',
+      finishedAt: null,
+    };
+    const client = makeFakeClient(state);
+    client.listAgentActions = async () => [action];
+
+    const dialed: number[] = [];
+    const dialer = {
+      async dial(input: { id: number; targetDeviceId: number }) {
+        dialed.push(input.id);
+      },
+      close() {},
+    };
+
+    const r = await tickOnce({
+      client,
+      now: () => T('2025-01-01T00:00:00.000Z'),
+      log: () => {},
+      dialer,
+    });
+    expect(dialed).toEqual([99]);
+    expect(r.dialed).toEqual([99]);
+  });
+
+  test('dialer sweep skips actions that already have a callId or are not pending', async () => {
+    const state = newState([]);
+    const client = makeFakeClient(state);
+    client.listAgentActions = async () => [
+      {
+        id: 1,
+        ruleId: null,
+        kind: 'place_call',
+        targetDeviceId: 42,
+        trigger: 'tool',
+        result: 'pending',
+        callId: 'already-dialed',
+        error: null,
+        createdAt: '2025-01-01T00:00:00.000Z',
+        finishedAt: null,
+      },
+      {
+        id: 2,
+        ruleId: null,
+        kind: 'place_call',
+        targetDeviceId: 42,
+        trigger: 'tool',
+        result: 'answered',
+        callId: 'done',
+        error: null,
+        createdAt: '2025-01-01T00:00:00.000Z',
+        finishedAt: '2025-01-01T00:00:00.000Z',
+      },
+    ];
+    const dialed: number[] = [];
+    const r = await tickOnce({
+      client,
+      now: () => T('2025-01-01T00:00:00.000Z'),
+      log: () => {},
+      dialer: {
+        async dial(input: { id: number; targetDeviceId: number }) {
+          dialed.push(input.id);
+        },
+        close() {},
+      },
+    });
+    expect(dialed).toEqual([]);
+    expect(r.dialed).toEqual([]);
+  });
+
+  test('dial errors land on dialErrors without aborting the tick', async () => {
+    const state = newState([]);
+    const client = makeFakeClient(state);
+    client.listAgentActions = async () => [
+      {
+        id: 7,
+        ruleId: null,
+        kind: 'place_call',
+        targetDeviceId: 42,
+        trigger: 'tool',
+        result: 'pending',
+        callId: null,
+        error: null,
+        createdAt: '2025-01-01T00:00:00.000Z',
+        finishedAt: null,
+      },
+    ];
+    const r = await tickOnce({
+      client,
+      now: () => T('2025-01-01T00:00:00.000Z'),
+      log: () => {},
+      dialer: {
+        async dial() {
+          throw new Error('target-offline');
+        },
+        close() {},
+      },
+    });
+    expect(r.dialErrors).toEqual([{ actionId: 7, message: 'target-offline' }]);
+  });
+
   test('per-rule errors are captured without aborting the tick', async () => {
     const state = newState(
       [

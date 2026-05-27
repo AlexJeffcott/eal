@@ -1,4 +1,10 @@
-import { createEalClient, type ChatAgentReply, type ChatAgentRequest, type EalClient } from '@eal/client';
+import {
+  createEalClient,
+  type ChatAgentReply,
+  type ChatAgentRequest,
+  type EalClient,
+  type FamilyPhoneDeviceConnection,
+} from '@eal/client';
 import { delay } from '@eal/shared';
 import { readToken, tokenPath } from '../lib/token-store.ts';
 import { readAgentDevice, type AgentDeviceRecord } from '../lib/agent-device-store.ts';
@@ -7,6 +13,8 @@ import { log, logError } from '../lib/process.ts';
 import type { GlobalOptions } from '../types.ts';
 import { createClaudeRunner, type ClaudeRunner } from './claude-runner.ts';
 import { DEFAULT_REJECT_REASON, installAgentPhoneHandler } from './agent-phone-loop.ts';
+import { createAgentOutboundDialer } from './agent-outbound-dialer.ts';
+import { startAgentScheduler } from './agent-scheduler.ts';
 import { createVoiceLoop } from './voice-loop.ts';
 import type { SttProvider, TtsProvider } from './voice-providers.ts';
 import { createFixtureStt, createFixtureTts } from './voice-providers-fixture.ts';
@@ -107,6 +115,7 @@ async function runAgentWorker(global: GlobalOptions): Promise<number> {
   const phoneRecord = readAgentDevice();
   if (phoneRecord === null) {
     log('eal agent: voice disabled — run `eal agent pair-phone --code=<user-code>` to register on family-phone.');
+    log('eal agent: proactivity disabled — register on family-phone first.');
   } else {
     const providers = selectVoiceProviders();
     if (providers === null) {
@@ -114,7 +123,20 @@ async function runAgentWorker(global: GlobalOptions): Promise<number> {
         'eal agent: family-phone identity present but voice providers not selected — set EAL_STT_PROVIDER=fixture and EAL_TTS_PROVIDER=fixture to enable the fixture voice loop. Incoming calls will be rejected.',
       );
     }
-    void startPhoneLoop(client, phoneRecord, runClaude, providers);
+    void startPhoneLoop(client, phoneRecord, runClaude, providers, (connection) => {
+      // Family-phone is up — install the outbound dialer and start the
+      // proactivity scheduler against this same connection. Both keep
+      // running for the worker's lifetime; the connection itself
+      // manages WS reconnects internally.
+      const dialer = createAgentOutboundDialer({ client, connection, log });
+      startAgentScheduler({
+        client,
+        now: () => new Date(),
+        log,
+        dialer,
+      });
+      log('eal agent: proactivity scheduler running.');
+    });
   }
 
   // A dropped socket triggers `onClose`, which resolves the per-attempt
@@ -172,6 +194,7 @@ async function startPhoneLoop(
   record: AgentDeviceRecord,
   runClaude: ClaudeRunner,
   providers: { stt: SttProvider; tts: TtsProvider } | null,
+  onConnected?: (connection: FamilyPhoneDeviceConnection) => void,
 ): Promise<void> {
   let privateKey: CryptoKey;
   try {
@@ -210,6 +233,7 @@ async function startPhoneLoop(
           ? `eal agent: family-phone device ${record.deviceId} ("${record.label}") online — voice loop active.`
           : `eal agent: family-phone device ${record.deviceId} ("${record.label}") online — incoming calls will be politely rejected.`,
       );
+      onConnected?.(connection);
       return;
     } catch (err) {
       logError(

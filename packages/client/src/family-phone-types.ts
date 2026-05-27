@@ -52,6 +52,7 @@ export type FamilyPhoneCallEvent =
   | { type: 'call:rejected'; callId: string }
   | { type: 'call:cancelled'; callId: string }
   | { type: 'call:hung-up'; callId: string; reason?: string }
+  | { type: 'call:unanswered'; callId: string }
   | { type: 'presence:changed'; deviceId: number; online: boolean }
   | { type: 'directory:changed' }
   | { type: 'push:subscribed' }

@@ -1003,7 +1003,7 @@ function parseFamilyPhoneCallEvent(raw: string): FamilyPhoneCallEvent | null {
   }
   if (
     (t === 'call:accepted' || t === 'call:accept-ack' || t === 'call:rejected' ||
-     t === 'call:cancelled' || t === 'call:hung-up') &&
+     t === 'call:cancelled' || t === 'call:hung-up' || t === 'call:unanswered') &&
     'call_id' in parsed && typeof parsed.call_id === 'string'
   ) {
     const base = { callId: parsed.call_id };
