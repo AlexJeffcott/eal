@@ -262,6 +262,23 @@ function speakText(text: string): void {
   speechSynthesis.speak(utterance);
 }
 
+/**
+ * iOS Safari (and iOS PWAs in standalone mode in particular) silently
+ * drop any `speechSynthesis.speak()` call that is not preceded by a
+ * speak() invoked from within a user gesture. The agent's replies
+ * arrive over the WebSocket — no gesture — so without priming the
+ * very first utterance, and every utterance after it, plays nothing
+ * on iOS. Call this from the click handlers that already exist
+ * (place-call, accept-call); a zero-volume blank utterance is enough
+ * to unlock the API for the rest of the page's lifetime.
+ */
+function primeSpeechSynthesis(): void {
+  if (speechSynthesis === null || SpeechSynthesisUtterance === null) return;
+  const u = new SpeechSynthesisUtterance(' ');
+  u.volume = 0;
+  speechSynthesis.speak(u);
+}
+
 function stopSpeaking(): void {
   if (speechSynthesis === null) return;
   speechSynthesis.cancel();
@@ -308,6 +325,7 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
       peerDeviceId: target,
       state: 'pending',
     };
+    primeSpeechSynthesis();
     conn.placeCall(target);
   },
 
@@ -325,6 +343,7 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
       state: 'pending',
     };
     stores.$incomingCall.value = null;
+    primeSpeechSynthesis();
     conn.acceptCall(callId);
   },
 
