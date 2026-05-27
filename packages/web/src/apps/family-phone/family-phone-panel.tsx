@@ -7,8 +7,17 @@ import {
   Text,
 } from '@fairfox/polly/ui';
 import { Show } from '@preact/signals/utils';
-import type { FamilyPhoneDevice } from '@eal/client';
-import { $activeCall, $callNote, $incomingCall, type ActiveCall } from './stores.ts';
+import type { FamilyPhoneDevice, VoiceMessage } from '@eal/client';
+import {
+  $activeCall,
+  $callNote,
+  $incomingCall,
+  $playingVoiceMessageId,
+  $voiceMessageAudioUrl,
+  $voiceMessages,
+  $voiceMessagesError,
+  type ActiveCall,
+} from './stores.ts';
 import {
   $deviceConnection,
   $devices,
@@ -212,6 +221,112 @@ function AssistantCallout(props: {
   );
 }
 
+function formatLocal(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+
+function voiceMessageFromLabel(
+  vm: VoiceMessage,
+  devices: FamilyPhoneDevice[],
+): string {
+  if (vm.fromDeviceId !== null) {
+    const from = devices.find((d) => d.id === vm.fromDeviceId);
+    if (from) return `${from.label} (${from.ownerDisplayName})`;
+    return `device #${vm.fromDeviceId}`;
+  }
+  if (vm.fromExternal !== null) return vm.fromExternal;
+  return 'Unknown';
+}
+
+function VoicemailRow(props: { vm: VoiceMessage; devices: FamilyPhoneDevice[] }) {
+  const { vm } = props;
+  const isPlaying = $playingVoiceMessageId.value === vm.id;
+  const audioUrl = $voiceMessageAudioUrl.value;
+  return (
+    <Surface variant="plain" padding="var(--polly-space-sm)">
+      <Layout gap="var(--polly-space-xs)">
+        <Cluster gap="var(--polly-space-sm)" justify="space-between">
+          <Cluster gap="var(--polly-space-sm)">
+            <Text weight="medium">{voiceMessageFromLabel(vm, props.devices)}</Text>
+            {vm.readAt === null && <Badge variant="info">new</Badge>}
+          </Cluster>
+          <Cluster gap="var(--polly-space-xs)">
+            <Button
+              tier={vm.readAt === null ? 'primary' : 'tertiary'}
+              label="Play"
+              data-action="family-phone:play-voicemail"
+              data-action-voicemail-id={String(vm.id)}
+            />
+          </Cluster>
+        </Cluster>
+        <Text tone="muted">{vm.body}</Text>
+        <Text tone="muted">
+          {formatLocal(vm.createdAt)} • {Math.round(vm.durationMs / 100) / 10}s
+        </Text>
+        {isPlaying && audioUrl !== null && (
+          <audio src={audioUrl} controls autoplay />
+        )}
+      </Layout>
+    </Surface>
+  );
+}
+
+function VoicemailError(props: { error: string }) {
+  return (
+    <Cluster gap="var(--polly-space-sm)" justify="space-between">
+      <Badge variant="danger">{props.error}</Badge>
+      <Button
+        tier="tertiary"
+        label="Dismiss"
+        data-action="family-phone:dismiss-voicemail-error"
+      />
+    </Cluster>
+  );
+}
+
+function VoicemailsCard(props: {
+  voicemails: VoiceMessage[];
+  devices: FamilyPhoneDevice[];
+}) {
+  const unreadCount = props.voicemails.filter((vm) => vm.readAt === null).length;
+  return (
+    <Surface variant="callout" padding="var(--polly-space-md)">
+      <Layout gap="var(--polly-space-sm)">
+        <Cluster gap="var(--polly-space-sm)" justify="space-between">
+          <Cluster gap="var(--polly-space-sm)">
+            <Text as="h2" weight="bold">Voicemails</Text>
+            {unreadCount > 0 && (
+              <Badge variant="info">{unreadCount} new</Badge>
+            )}
+          </Cluster>
+          <Button
+            tier="tertiary"
+            label="Refresh"
+            data-action="family-phone:load-voicemails"
+          />
+        </Cluster>
+        <Show when={$voiceMessagesError}>
+          {(err) => <VoicemailError error={err} />}
+        </Show>
+        <Show
+          when={() => props.voicemails.length > 0}
+          fallback={<Text tone="muted">No voicemails yet.</Text>}
+        >
+          <Layout gap="var(--polly-space-xs)">
+            {props.voicemails.map((vm) => (
+              <VoicemailRow key={vm.id} vm={vm} devices={props.devices} />
+            ))}
+          </Layout>
+        </Show>
+      </Layout>
+    </Surface>
+  );
+}
+
 function CallDirectory(props: {
   devices: FamilyPhoneDevice[];
   paired: PairedThisSession | null;
@@ -283,6 +398,10 @@ export function FamilyPhonePanel() {
         hasConnection={hasConnection}
         hasActiveCall={hasActiveCall}
       />
+
+      <Show when={() => $pairedThisSession.value !== null}>
+        <VoicemailsCard voicemails={$voiceMessages.value} devices={devices} />
+      </Show>
 
       <CallDirectory
         devices={devices}

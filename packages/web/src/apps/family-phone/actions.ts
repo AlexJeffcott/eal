@@ -280,4 +280,71 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
     stores.$callNote.value = 'Call ended.';
     void stopAudio();
   },
+
+  'family-phone:load-voicemails': async ({ stores }) => {
+    stores.$voiceMessagesError.value = null;
+    const paired = stores.$pairedThisSession.value;
+    if (paired === null) {
+      stores.$voiceMessages.value = [];
+      return;
+    }
+    try {
+      stores.$voiceMessages.value = await stores.client.listVoiceMessages({
+        deviceId: paired.deviceId,
+      });
+    } catch (err) {
+      stores.$voiceMessagesError.value = describeError(err);
+    }
+  },
+
+  'family-phone:play-voicemail': async ({ data, stores }) => {
+    const raw = data['voicemailId'];
+    if (typeof raw !== 'string') return;
+    const id = Number(raw);
+    if (!Number.isInteger(id) || id <= 0) return;
+    stores.$voiceMessagesError.value = null;
+    stores.$playingVoiceMessageId.value = id;
+    // Revoke any previous blob URL before swapping; otherwise the
+    // page accumulates them until the tab is closed.
+    if (stores.$voiceMessageAudioUrl.value !== null) {
+      try {
+        URL.revokeObjectURL(stores.$voiceMessageAudioUrl.value);
+      } catch {
+        /* best-effort */
+      }
+      stores.$voiceMessageAudioUrl.value = null;
+    }
+    try {
+      const bytes = await stores.client.getVoiceMessageAudio(id);
+      const blob = new Blob([bytes], { type: 'audio/wav' });
+      stores.$voiceMessageAudioUrl.value = URL.createObjectURL(blob);
+      await stores.client.markVoiceMessageRead(id);
+      // Reflect the freshly-read row locally so the badge updates
+      // without a round-trip.
+      stores.$voiceMessages.value = stores.$voiceMessages.value.map((vm) =>
+        vm.id === id && vm.readAt === null
+          ? { ...vm, readAt: new Date().toISOString() }
+          : vm,
+      );
+    } catch (err) {
+      stores.$voiceMessagesError.value = describeError(err);
+      stores.$playingVoiceMessageId.value = null;
+    }
+  },
+
+  'family-phone:close-voicemail-player': ({ stores }) => {
+    if (stores.$voiceMessageAudioUrl.value !== null) {
+      try {
+        URL.revokeObjectURL(stores.$voiceMessageAudioUrl.value);
+      } catch {
+        /* best-effort */
+      }
+      stores.$voiceMessageAudioUrl.value = null;
+    }
+    stores.$playingVoiceMessageId.value = null;
+  },
+
+  'family-phone:dismiss-voicemail-error': ({ stores }) => {
+    stores.$voiceMessagesError.value = null;
+  },
 };

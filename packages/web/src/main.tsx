@@ -169,6 +169,32 @@ function installAgentRulesRouteSync(stores: AppStores): void {
 }
 
 /**
+ * Refresh voicemails when the user lands on the family-phone panel.
+ * The directory broadcast does not carry voicemail events, so a pure
+ * fetch on entry is the simplest source of truth. The action handler
+ * itself dispatches the load — keeps the orchestration in one place.
+ */
+function installFamilyPhoneRouteSync(stores: AppStores): void {
+  $route.subscribe((path) => {
+    if (
+      path === '/family-phone' &&
+      stores.$currentUser.value !== null &&
+      stores.$pairedThisSession.value !== null
+    ) {
+      const handler = ACTION_REGISTRY['family-phone:load-voicemails'];
+      if (handler) {
+        void handler({
+          stores,
+          event: new Event('route-change'),
+          data: {},
+          element: document.body,
+        });
+      }
+    }
+  });
+}
+
+/**
  * Seed the signed-in user's data whenever authentication completes — at boot
  * for an existing session, and after an in-session register or sign-in. Keying
  * off `$currentUser` keeps the auth actions ignorant of seeding, and means a
@@ -213,6 +239,7 @@ async function bootstrap(): Promise<void> {
   installRouter();
   installTaskUrlSync();
   installAgentRulesRouteSync(stores);
+  installFamilyPhoneRouteSync(stores);
 
   // Register the notifications service worker. Best-effort — failures
   // are logged and notifications stay disabled for the session.
