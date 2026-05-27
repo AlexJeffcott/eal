@@ -29,6 +29,7 @@ describe('applySchema', () => {
       .map((r) => r.name)
       .sort();
     expect(tables).toEqual([
+      'agent_rules',
       'cli_pair_requests',
       'conversations',
       'credentials',
@@ -128,6 +129,7 @@ describe('applySchema', () => {
       .map((r) => r.name)
       .sort();
     expect(indexes).toEqual([
+      'idx_agent_rules_due',
       'idx_cli_pair_expires_at',
       'idx_cli_pair_user_code',
       'idx_credentials_user_id',
