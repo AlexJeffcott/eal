@@ -2,12 +2,12 @@ import { agentRulesHttpRoutes } from '../handlers/agent-rules.http.ts';
 import type { ApiApp } from './types.ts';
 
 /**
- * The agent app — proactivity rules and (later) action audit + the phone
- * lock that serialises outbound calls. This first slice carries only the
- * rules table; the action handler + lock row arrive with the scheduler.
+ * The agent app — proactivity rules, action audit, and the phone lock
+ * that serialises outbound calls from the agent's WS.
  *
- * Rules reference `family_phone_devices(id)`, so this app's schema must
- * run after family-phone's in `API_APPS` order.
+ * Every table here references `family_phone_devices(id)`, so this app's
+ * schema must run after family-phone's in `API_APPS` order. The action
+ * handler that uses these tables arrives in a later commit.
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS agent_rules (
@@ -28,6 +28,39 @@ CREATE TABLE IF NOT EXISTS agent_rules (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_rules_due
   ON agent_rules (enabled, next_fire_at);
+
+-- One row per intended user-visible action. The scheduler and the MCP
+-- tool both POST to /api/agent/actions/* which inserts a row here, claims
+-- the agent_phone_lock, drives the family-phone WS, and updates the row
+-- with the outcome. The history of attempts and their results is the
+-- audit log the admin UI shows.
+CREATE TABLE IF NOT EXISTS agent_actions (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  rule_id           INTEGER REFERENCES agent_rules(id) ON DELETE SET NULL,
+  kind              TEXT    NOT NULL CHECK (kind IN ('place_call','voice_message')),
+  target_device_id  INTEGER NOT NULL REFERENCES family_phone_devices(id) ON DELETE CASCADE,
+  trigger           TEXT    NOT NULL CHECK (trigger IN ('scheduled','tool')),
+  result            TEXT    NOT NULL DEFAULT 'pending'
+                      CHECK (result IN ('pending','answered','unanswered','rejected','failed','sent')),
+  call_id           TEXT,
+  error             TEXT,
+  created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+  finished_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_actions_rule_id  ON agent_actions (rule_id);
+CREATE INDEX IF NOT EXISTS idx_agent_actions_pending
+  ON agent_actions (result) WHERE result = 'pending';
+
+-- Serialises outbound calls placed by the agent. A row exists for at
+-- most one in-flight call per agent device; the action handler claims
+-- the row with INSERT OR FAIL, releases it on the outcome event, and
+-- the next scheduler tick sweeps expired claims for crash safety.
+CREATE TABLE IF NOT EXISTS agent_phone_lock (
+  device_id    INTEGER PRIMARY KEY REFERENCES family_phone_devices(id) ON DELETE CASCADE,
+  call_id      TEXT    NOT NULL,
+  action_id    INTEGER NOT NULL REFERENCES agent_actions(id) ON DELETE CASCADE,
+  expires_at   TEXT    NOT NULL
+);
 `;
 
 export const agentApp: ApiApp = {
