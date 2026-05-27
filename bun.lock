@@ -21,6 +21,7 @@
       "name": "@eal/api",
       "version": "0.0.0",
       "dependencies": {
+        "@eal/shared": "workspace:*",
         "@simplewebauthn/server": "11.0.0",
         "@simplewebauthn/types": "11.0.0",
         "elysia": "1.4.28",
