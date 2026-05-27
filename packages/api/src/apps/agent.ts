@@ -1,3 +1,5 @@
+import { Elysia } from 'elysia';
+import { agentActionsHttpRoutes } from '../handlers/agent-actions.http.ts';
 import { agentRulesHttpRoutes } from '../handlers/agent-rules.http.ts';
 import type { ApiApp } from './types.ts';
 
@@ -66,9 +68,15 @@ CREATE TABLE IF NOT EXISTS agent_phone_lock (
 export const agentApp: ApiApp = {
   id: 'agent',
   schema: SCHEMA,
-  routes: (ctx) =>
-    agentRulesHttpRoutes({
+  routes: (ctx) => {
+    const rules = agentRulesHttpRoutes({
       db: ctx.db,
       getPrincipal: ctx.getPrincipal,
-    }),
+    });
+    const actions = agentActionsHttpRoutes({
+      db: ctx.db,
+      getPrincipal: ctx.getPrincipal,
+    });
+    return new Elysia().use(rules).use(actions);
+  },
 };
