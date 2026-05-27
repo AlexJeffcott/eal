@@ -89,6 +89,13 @@ async function startAudioForCall(
   });
   try {
     const capture = await startAudioCapture((payload) => {
+      // Don't ship mic frames while the browser is speaking the agent's
+      // reply — the speaker bleeds into the mic and the agent ends up
+      // transcribing its own voice on the next turn. The `speaking`
+      // flag covers active utterances; the trailing gate adds a small
+      // grace period after the last word so the speaker's tail does
+      // not sneak through on the very next frame.
+      if (isAgentSpeaking()) return;
       conn.sendAudio(callId, payload);
     });
     activeAudio = { callId, capture, playback, unsubscribeAudio };
@@ -216,6 +223,24 @@ export function installCallEventHandlers(event: FamilyPhoneCallEvent): void {
 }
 
 /**
+ * Tracks whether the local speaker is rendering an agent reply right
+ * now (or has rendered one within the recent trailing window). The
+ * call-capture path consults this so a frame the mic picks up off the
+ * speaker is not sent back over the wire as fresh user speech. The
+ * window survives the last utterance by ~400 ms — enough to cover the
+ * speaker's physical decay and the audio system's buffered tail.
+ */
+const SPEECH_TAIL_MS = 400;
+let lastAgentSpeechAt = 0;
+
+export function isAgentSpeaking(): boolean {
+  if (speechSynthesis !== null && (speechSynthesis.speaking || speechSynthesis.pending)) {
+    return true;
+  }
+  return Date.now() - lastAgentSpeechAt < SPEECH_TAIL_MS;
+}
+
+/**
  * Queue a sentence into the browser's SpeechSynthesis. Each call adds
  * one utterance to the system queue, so a long reply that lands as
  * several `call:text` frames plays sentence-by-sentence in order. A
@@ -227,12 +252,20 @@ function speakText(text: string): void {
   if (speechSynthesis === null || SpeechSynthesisUtterance === null) return;
   const trimmed = text.trim();
   if (trimmed.length === 0) return;
-  speechSynthesis.speak(new SpeechSynthesisUtterance(trimmed));
+  const utterance = new SpeechSynthesisUtterance(trimmed);
+  utterance.onend = (): void => {
+    lastAgentSpeechAt = Date.now();
+  };
+  utterance.onerror = (): void => {
+    lastAgentSpeechAt = Date.now();
+  };
+  speechSynthesis.speak(utterance);
 }
 
 function stopSpeaking(): void {
   if (speechSynthesis === null) return;
   speechSynthesis.cancel();
+  lastAgentSpeechAt = Date.now();
 }
 
 /**

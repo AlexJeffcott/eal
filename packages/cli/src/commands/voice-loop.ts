@@ -127,12 +127,13 @@ export function createVoiceLoop(
       return;
     }
     deps.log(`eal agent: heard "${transcript}"`);
+    const turn = oneTurn(`${VOICE_PROMPT_PREFIX}\n\nuser said: ${transcript}`);
 
     let pending = '';
     let claudeResult;
     try {
       claudeResult = await deps.runClaude(
-        { conversation: [oneTurn(transcript)], sessionId },
+        { conversation: [turn], sessionId },
         (delta) => {
           if (closed) return;
           pending += delta;
@@ -163,6 +164,7 @@ export function createVoiceLoop(
   async function speakSentence(sentence: string): Promise<void> {
     if (closed) return;
     setState('speaking');
+    deps.log(`eal agent: said "${sentence}"`);
     if (deps.sendText !== undefined) {
       try {
         deps.sendText(sentence);
@@ -288,6 +290,17 @@ function findSentenceBoundary(text: string): number {
   }
   return -1;
 }
+
+/**
+ * Brevity guidance prefixed to every voice turn before Claude sees it.
+ * The default chat persona is conversational — pleasantries, restating
+ * the request, offering options — which feels wrong over the phone.
+ * Voice replies are short and to the point: one sentence per turn,
+ * no greetings, no "let me know what you'd like to add", just the
+ * answer.
+ */
+const VOICE_PROMPT_PREFIX =
+  'You are on a live voice call with a household member. Reply in one short sentence — fifteen words or fewer. No greetings, no preamble, no offering what you can do; just answer the question or acknowledge directly. If you have nothing useful to say, reply "okay" and nothing else.';
 
 function oneTurn(content: string): Message {
   return {
