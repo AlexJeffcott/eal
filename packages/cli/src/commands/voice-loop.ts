@@ -1,4 +1,5 @@
 import type { Message } from '@eal/client';
+import { delay } from '@eal/shared';
 import type { ClaudeRunner } from './claude-runner.ts';
 import type { SttProvider, TtsProvider } from './voice-providers.ts';
 
@@ -47,6 +48,15 @@ export interface VoiceLoopOptions {
    * accepted. Filters tiny clicks and door slams.
    */
   minUtteranceFrames: number;
+  /**
+   * Sleep this many milliseconds between outbound TTS frames so the
+   * peer's playback queue does not overflow on a long reply (see the
+   * pacing comment in `speakSentence`). Default is one frame's worth
+   * (20 ms for 480 samples at 24 kHz); 0 disables pacing — useful in
+   * unit tests that drive synchronous TTS spies and want every frame
+   * to land before the next microtask flush.
+   */
+  outboundFramePaceMs: number;
 }
 
 export const DEFAULT_VOICE_LOOP_OPTIONS: VoiceLoopOptions = {
@@ -55,6 +65,7 @@ export const DEFAULT_VOICE_LOOP_OPTIONS: VoiceLoopOptions = {
   speechEnergyThreshold: 500,
   silenceHangoverFrames: 30,
   minUtteranceFrames: 5,
+  outboundFramePaceMs: 20,
 };
 
 export interface VoiceLoop {
@@ -145,9 +156,24 @@ export function createVoiceLoop(
     if (closed) return;
     setState('speaking');
     try {
+      // Piper writes the whole utterance to disk first and the
+      // chunker then yields ~30 frames in microseconds. The browser's
+      // playback worklet caps its queue at 50 frames and drops the
+      // oldest on overflow, so a long reply arrives garbled. Pace the
+      // sends to one frame per 20 ms — the wire's design rate — so
+      // the queue stays a steady jitter buffer instead of a burst-
+      // and-drop sink. Latency to first audio is unchanged; the loop
+      // just sends frame N+1 at the moment frame N is supposed to
+      // start playing.
+      let nextDeadline = performance.now();
       for await (const chunk of deps.tts.speak(sentence)) {
         if (closed) return;
         deps.sendAudio(pcm16Bytes(chunk));
+        if (options.outboundFramePaceMs > 0) {
+          nextDeadline += options.outboundFramePaceMs;
+          const wait = nextDeadline - performance.now();
+          if (wait > 0) await delay(wait);
+        }
       }
     } catch (err) {
       deps.log(`eal agent: TTS failed: ${describe(err)}`);

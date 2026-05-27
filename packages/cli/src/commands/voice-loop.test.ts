@@ -81,6 +81,9 @@ const FAST_OPTIONS: VoiceLoopOptions = {
   ...DEFAULT_VOICE_LOOP_OPTIONS,
   silenceHangoverFrames: 3,
   minUtteranceFrames: 2,
+  // Tests inspect sent frames synchronously after one microtask flush;
+  // a real 20 ms pacing wait would push every frame past the assertion.
+  outboundFramePaceMs: 0,
 };
 
 async function flush(): Promise<void> {
