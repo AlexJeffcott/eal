@@ -11,6 +11,7 @@ import {
   CHALLENGE_TTL_MS,
 } from './family-phone-device-auth.shared.ts';
 import { createFamilyPhoneWsHandler } from './family-phone.ws.ts';
+import { delay } from '@eal/shared';
 import type { WsLike, WsService } from '../apps/types.ts';
 
 /**
@@ -347,6 +348,121 @@ describe('family-phone.ws — call state machine, two authed peers', () => {
     expect(harness.binary.length).toBe(1);
     expect(harness.binary[0]?.wsId).toBe('elisa-ws');
     expect(harness.binary[0]?.frame).toEqual(frame);
+  });
+
+  test('an unanswered pending call closes after the timer fires and the caller sees call:unanswered', async () => {
+    const harness = makeHarness();
+    const handler = createFamilyPhoneWsHandler(
+      { db, ws: harness.service },
+      new Set(),
+      'test-topic',
+      { unansweredMs: 5 },
+    );
+    const alex = await pairDeviceDirect(db, alexId);
+    const elisa = await pairDeviceDirect(db, elisaId);
+    const wsA = harness.ws('alex-ws');
+    const wsE = harness.ws('elisa-ws');
+    await authConnect(handler, wsA, db, alex);
+    await authConnect(handler, wsE, db, elisa);
+    harness.send.length = 0;
+
+    handler.onMessage(wsA, { type: 'call:invite', target_device_id: elisa.deviceId }, null);
+    const callId = find(harness.send, 'alex-ws', 'call:invite-ack')?.['call_id'];
+    expect(typeof callId).toBe('string');
+
+    // Let the 5ms timer fire — `delay` is the cadence helper used across
+    // the codebase, so the wait survives the no-fixed-waits gate.
+    await delay(40);
+
+    const unanswered = find(harness.send, 'alex-ws', 'call:unanswered');
+    expect(unanswered?.['call_id']).toBe(callId);
+
+    // The call is now `closed`. A late accept finds no `pending` call and
+    // produces no further events — the FSM is collapsed.
+    harness.send.length = 0;
+    handler.onMessage(wsE, { type: 'call:accept', call_id: callId }, null);
+    expect(harness.send.length).toBe(0);
+  });
+
+  test('accept before the unanswered timer fires prevents the timeout event', async () => {
+    const harness = makeHarness();
+    const handler = createFamilyPhoneWsHandler(
+      { db, ws: harness.service },
+      new Set(),
+      'test-topic',
+      { unansweredMs: 5 },
+    );
+    const alex = await pairDeviceDirect(db, alexId);
+    const elisa = await pairDeviceDirect(db, elisaId);
+    const wsA = harness.ws('alex-ws');
+    const wsE = harness.ws('elisa-ws');
+    await authConnect(handler, wsA, db, alex);
+    await authConnect(handler, wsE, db, elisa);
+    harness.send.length = 0;
+
+    handler.onMessage(wsA, { type: 'call:invite', target_device_id: elisa.deviceId }, null);
+    const callId = find(harness.send, 'alex-ws', 'call:invite-ack')?.['call_id'];
+    if (typeof callId !== 'string') throw new Error('no call_id');
+    handler.onMessage(wsE, { type: 'call:accept', call_id: callId }, null);
+
+    await delay(40);
+
+    expect(find(harness.send, 'alex-ws', 'call:unanswered')).toBeNull();
+  });
+
+  test('reject cancels the unanswered timer', async () => {
+    const harness = makeHarness();
+    const handler = createFamilyPhoneWsHandler(
+      { db, ws: harness.service },
+      new Set(),
+      'test-topic',
+      { unansweredMs: 5 },
+    );
+    const alex = await pairDeviceDirect(db, alexId);
+    const elisa = await pairDeviceDirect(db, elisaId);
+    const wsA = harness.ws('alex-ws');
+    const wsE = harness.ws('elisa-ws');
+    await authConnect(handler, wsA, db, alex);
+    await authConnect(handler, wsE, db, elisa);
+    harness.send.length = 0;
+
+    handler.onMessage(wsA, { type: 'call:invite', target_device_id: elisa.deviceId }, null);
+    const callId = find(harness.send, 'alex-ws', 'call:invite-ack')?.['call_id'];
+    if (typeof callId !== 'string') throw new Error('no call_id');
+    handler.onMessage(wsE, { type: 'call:reject', call_id: callId }, null);
+
+    await delay(40);
+
+    expect(find(harness.send, 'alex-ws', 'call:unanswered')).toBeNull();
+  });
+
+  test('caller disconnect while pending cancels the unanswered timer', async () => {
+    const harness = makeHarness();
+    const handler = createFamilyPhoneWsHandler(
+      { db, ws: harness.service },
+      new Set(),
+      'test-topic',
+      { unansweredMs: 5 },
+    );
+    const alex = await pairDeviceDirect(db, alexId);
+    const elisa = await pairDeviceDirect(db, elisaId);
+    const wsA = harness.ws('alex-ws');
+    const wsE = harness.ws('elisa-ws');
+    await authConnect(handler, wsA, db, alex);
+    await authConnect(handler, wsE, db, elisa);
+    harness.send.length = 0;
+
+    handler.onMessage(wsA, { type: 'call:invite', target_device_id: elisa.deviceId }, null);
+
+    // Caller goes away. The peer learns via call:hung-up; importantly, the
+    // unanswered timer must not later fire against a closed call and
+    // attempt to send on a wsId no consumer is listening on.
+    handler.onClose?.(wsA);
+    harness.send.length = 0;
+
+    await delay(40);
+
+    expect(find(harness.send, 'alex-ws', 'call:unanswered')).toBeNull();
   });
 
   test('audio frame on a closed call is dropped, never forwarded', async () => {

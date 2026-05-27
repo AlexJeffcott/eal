@@ -88,11 +88,27 @@ function readDeviceAuth(
   return { deviceId: msg.device_id, nonce: msg.nonce, signature: msg.signature };
 }
 
+/**
+ * How long the server waits for `call:accept` (or `call:reject` /
+ * `call:cancel`) on a `pending` call before declaring it unanswered and
+ * collapsing the state to `closed`. Tuned for a worst-case Web Push
+ * round-trip on a cold-launched PWA — ~1-3s push, ~8-15s human
+ * reach-and-tap, ~2-4s app boot + WS reconnect.
+ */
+export const DEFAULT_UNANSWERED_MS = 25_000;
+
+export interface FamilyPhoneWsHandlerOptions {
+  /** Override the unanswered timeout. Tests pass a tiny value. */
+  unansweredMs?: number;
+}
+
 export function createFamilyPhoneWsHandler(
   ctx: WsAppContext,
   onlineDevices: Set<number>,
   broadcastTopic: string,
+  options: FamilyPhoneWsHandlerOptions = {},
 ): WsMessageHandler {
+  const unansweredMs = options.unansweredMs ?? DEFAULT_UNANSWERED_MS;
   const challenges = createFamilyPhoneChallengesRepo(ctx.db);
   const deviceKeys = createFamilyPhoneDeviceKeysRepo(ctx.db);
   const sessions = createFamilyPhoneDeviceSessionsRepo(ctx.db);
@@ -118,6 +134,38 @@ export function createFamilyPhoneWsHandler(
   const deviceToWs = new Map<number, string>();
   /** Active and recently-closed calls, keyed by server-minted call_id. */
   const calls = new Map<string, CallState>();
+  /**
+   * Per-call unanswered timer. Set on `call:invite`, cleared on every
+   * state transition out of `pending` (accept, reject, cancel, peer
+   * disconnect). Firing collapses the call to `closed` and notifies the
+   * caller with `call:unanswered`.
+   */
+  const unansweredTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function cancelUnansweredTimer(callId: string): void {
+    const handle = unansweredTimers.get(callId);
+    if (handle === undefined) return;
+    clearTimeout(handle);
+    unansweredTimers.delete(callId);
+  }
+
+  function scheduleUnansweredTimer(callId: string): void {
+    const handle = setTimeout(() => {
+      unansweredTimers.delete(callId);
+      const call = calls.get(callId);
+      // The call may have moved on (accepted, rejected, cancelled,
+      // hung-up, or its caller closed) between scheduling and firing;
+      // only act when it is still pending. Setting state='closed'
+      // before sending the event keeps the FSM atomic.
+      if (!call || call.state !== 'pending') return;
+      call.state = 'closed';
+      ctx.ws.sendTo(call.caller.wsId, {
+        type: 'call:unanswered',
+        call_id: callId,
+      });
+    }, unansweredMs);
+    unansweredTimers.set(callId, handle);
+  }
 
   function peerOf(call: CallState, wsId: string): { wsId: string; deviceId: number } | null {
     if (call.caller.wsId === wsId) return call.callee;
@@ -252,6 +300,7 @@ export function createFamilyPhoneWsHandler(
             call_id: callId,
             from_device_id: deviceId,
           });
+          scheduleUnansweredTimer(callId);
           return;
         }
 
@@ -261,6 +310,7 @@ export function createFamilyPhoneWsHandler(
           const call = calls.get(callId);
           if (!call || call.state !== 'pending') return;
           if (call.callee.wsId !== ws.id) return; // only the callee may accept
+          cancelUnansweredTimer(callId);
           call.state = 'connected';
           ctx.ws.sendTo(call.caller.wsId, { type: 'call:accepted', call_id: callId });
           ws.send(JSON.stringify({ type: 'call:accept-ack', call_id: callId }));
@@ -273,6 +323,7 @@ export function createFamilyPhoneWsHandler(
           const call = calls.get(callId);
           if (!call || call.state !== 'pending') return;
           if (call.callee.wsId !== ws.id) return; // only the callee may reject
+          cancelUnansweredTimer(callId);
           call.state = 'closed';
           ctx.ws.sendTo(call.caller.wsId, { type: 'call:rejected', call_id: callId });
           return;
@@ -284,6 +335,7 @@ export function createFamilyPhoneWsHandler(
           const call = calls.get(callId);
           if (!call || call.state !== 'pending') return;
           if (call.caller.wsId !== ws.id) return; // only the caller may cancel
+          cancelUnansweredTimer(callId);
           call.state = 'closed';
           ctx.ws.sendTo(call.callee.wsId, { type: 'call:cancelled', call_id: callId });
           return;
@@ -300,6 +352,10 @@ export function createFamilyPhoneWsHandler(
           if (call.state !== 'connected') return;
           const peer = peerOf(call, ws.id);
           if (!peer) return;
+          // The connected→closed path can't have a live unanswered timer
+          // (it was cleared on accept), but call defensively in case a
+          // future transition ever skips accept.
+          cancelUnansweredTimer(callId);
           call.state = 'closed';
           ctx.ws.sendTo(peer.wsId, { type: 'call:hung-up', call_id: callId });
           return;
@@ -388,6 +444,7 @@ export function createFamilyPhoneWsHandler(
         if (call.state === 'closed') continue;
         const peer = peerOf(call, ws.id);
         if (!peer) continue;
+        cancelUnansweredTimer(call.callId);
         call.state = 'closed';
         ctx.ws.sendTo(peer.wsId, {
           type: 'call:hung-up',
