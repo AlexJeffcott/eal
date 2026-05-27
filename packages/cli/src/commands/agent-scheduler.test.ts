@@ -294,7 +294,7 @@ describe('agent scheduler — tickOnce', () => {
     expect(r.advanced).toEqual([5]);
   });
 
-  test('voice_message rules are recognised but deferred (no action created, rule untouched)', async () => {
+  test('voice_message rules without tts wired stay on notImplemented', async () => {
     const state = newState([
       rule({
         id: 11,
@@ -310,6 +310,132 @@ describe('agent scheduler — tickOnce', () => {
     });
     expect(r.notImplemented).toEqual([11]);
     expect(state.recordedCreates).toEqual([]);
+    expect(state.recordedUpserts).toEqual([]);
+  });
+
+  test('voice_message rule with a body synthesises, posts, and advances', async () => {
+    const state = newState([
+      rule({
+        id: 17,
+        kind: 'voice_message',
+        targetDeviceId: 50,
+        body: 'time for bed',
+        systemPrompt: null,
+        nextFireAt: '2024-12-01T00:00:00.000Z',
+        intervalSec: 86_400,
+      }),
+    ]);
+    const postedTexts: string[] = [];
+    const postedSizes: number[] = [];
+    const client = makeFakeClient(state);
+    client.postVoiceMessage = async (input) => {
+      postedTexts.push(input.body);
+      postedSizes.push(input.audio.byteLength);
+      return {
+        id: 1,
+        toDeviceId: input.toDeviceId,
+        fromDeviceId: input.fromDeviceId ?? null,
+        fromExternal: null,
+        body: input.body,
+        sampleRate: input.sampleRate ?? 24000,
+        channels: input.channels ?? 1,
+        durationMs: 100,
+        readAt: null,
+        createdAt: '2025-01-01T00:00:00.000Z',
+      };
+    };
+    // Fake TTS: yield a single 480-sample frame regardless of input.
+    const fakeTts = {
+      async *speak(_text: string): AsyncIterable<Int16Array> {
+        yield new Int16Array(480);
+      },
+    };
+    const r = await tickOnce({
+      client,
+      now: () => T('2025-01-01T00:00:00.000Z'),
+      log: () => {},
+      tts: fakeTts,
+      agentDeviceId: 99,
+    });
+    expect(r.voiceMessagesSent).toEqual([17]);
+    expect(postedTexts).toEqual(['time for bed']);
+    // 480 samples × 2 bytes = 960 bytes of LE PCM
+    expect(postedSizes).toEqual([960]);
+    expect(state.recordedUpserts).toHaveLength(1);
+    expect(state.recordedUpserts[0]?.nextFireAt).toBe('2025-01-02T00:00:00.000Z');
+  });
+
+  test('voice_message rule with a systemPrompt asks claudeRunner for the text', async () => {
+    const state = newState([
+      rule({
+        id: 18,
+        kind: 'voice_message',
+        targetDeviceId: 50,
+        body: null,
+        systemPrompt: 'Compose a short reminder.',
+        nextFireAt: '2024-12-01T00:00:00.000Z',
+        intervalSec: null,
+      }),
+    ]);
+    const client = makeFakeClient(state);
+    const postedTexts: string[] = [];
+    client.postVoiceMessage = async (input) => {
+      postedTexts.push(input.body);
+      return {
+        id: 1,
+        toDeviceId: input.toDeviceId,
+        fromDeviceId: input.fromDeviceId ?? null,
+        fromExternal: null,
+        body: input.body,
+        sampleRate: input.sampleRate ?? 24000,
+        channels: input.channels ?? 1,
+        durationMs: 50,
+        readAt: null,
+        createdAt: '2025-01-01T00:00:00.000Z',
+      };
+    };
+    const fakeTts = {
+      async *speak(_text: string): AsyncIterable<Int16Array> {
+        yield new Int16Array(240);
+      },
+    };
+    const r = await tickOnce({
+      client,
+      now: () => T('2025-01-01T00:00:00.000Z'),
+      log: () => {},
+      tts: fakeTts,
+      agentDeviceId: 99,
+      claudeRunner: async () => ({ content: 'Generated reminder.', sessionId: 'fake' }),
+    });
+    expect(r.voiceMessagesSent).toEqual([18]);
+    expect(postedTexts).toEqual(['Generated reminder.']);
+  });
+
+  test('voice_message rule with systemPrompt and no claudeRunner is parked', async () => {
+    const state = newState([
+      rule({
+        id: 19,
+        kind: 'voice_message',
+        targetDeviceId: 50,
+        body: null,
+        systemPrompt: 'generate something',
+        nextFireAt: '2024-12-01T00:00:00.000Z',
+        intervalSec: null,
+      }),
+    ]);
+    const fakeTts = {
+      async *speak(_text: string): AsyncIterable<Int16Array> {
+        yield new Int16Array(0);
+      },
+    };
+    const r = await tickOnce({
+      client: makeFakeClient(state),
+      now: () => T('2025-01-01T00:00:00.000Z'),
+      log: () => {},
+      tts: fakeTts,
+      agentDeviceId: 99,
+    });
+    expect(r.notImplemented).toEqual([19]);
     expect(state.recordedUpserts).toEqual([]);
   });
 

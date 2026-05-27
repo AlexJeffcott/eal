@@ -6,6 +6,8 @@ import type {
 } from '@eal/client';
 import { assertNever, delay } from '@eal/shared';
 import type { AgentOutboundDialer } from './agent-outbound-dialer.ts';
+import type { ClaudeRunner } from './claude-runner.ts';
+import type { TtsProvider } from './voice-providers.ts';
 
 /**
  * The agent worker's scheduler tick. Every TICK_MS the worker pulls
@@ -48,6 +50,23 @@ export interface AgentSchedulerDeps {
    * a terminal result on completion; the default of 50 is generous.
    */
   pendingActionScanLimit?: number;
+  /**
+   * Voice synthesis seam for `voice_message` rules. Without it the
+   * tick still recognises the rule but parks it on `notImplemented`.
+   */
+  tts?: TtsProvider;
+  /**
+   * The agent's family-phone device id, stamped as `from_device_id`
+   * on every posted voicemail. Required to take the voice_message
+   * branch alongside `tts`.
+   */
+  agentDeviceId?: number;
+  /**
+   * Optional Claude runner. Used by `voice_message` rules that supply
+   * a `systemPrompt` rather than a literal `body` — the worker asks
+   * Claude to generate the spoken text before synthesis.
+   */
+  claudeRunner?: ClaudeRunner;
 }
 
 export interface TickResult {
@@ -59,6 +78,8 @@ export interface TickResult {
   advanced: number[];
   /** Rule ids whose `kind` is not yet implemented. */
   notImplemented: number[];
+  /** Voicemail rule ids whose synth-and-post completed this tick. */
+  voiceMessagesSent: number[];
   /** Errors swallowed during the tick, paired with the rule id that caused them. */
   errors: Array<{ ruleId: number; message: string }>;
   /** Action ids successfully dialed by the outbound sweep this tick. */
@@ -73,6 +94,7 @@ export async function tickOnce(deps: AgentSchedulerDeps): Promise<TickResult> {
     busySkipped: [],
     advanced: [],
     notImplemented: [],
+    voiceMessagesSent: [],
     errors: [],
     dialed: [],
     dialErrors: [],
@@ -115,14 +137,38 @@ export async function tickOnce(deps: AgentSchedulerDeps): Promise<TickResult> {
           break;
         }
         case 'voice_message': {
-          // Voicemail storage lands in a follow-up commit. For now the
-          // rule is recognised but its action is deferred — leave
-          // `nextFireAt` unchanged so the rule re-fires when the path
-          // is wired up. The admin notices via the log line.
+          // Voice messages need a TTS provider and the agent's own
+          // family-phone device id (to stamp `from_device_id` on the
+          // stored row). When either is missing the rule is parked
+          // on `notImplemented` so the admin sees an honest log line
+          // and the rule fires again once the worker is configured.
+          if (deps.tts === undefined || deps.agentDeviceId === undefined) {
+            deps.log(
+              `scheduler: rule #${rule.id} kind=voice_message — no tts or agent device, left untouched`,
+            );
+            result.notImplemented.push(rule.id);
+            break;
+          }
+          const text = await resolveVoiceMessageText(rule, deps);
+          if (text === null) {
+            deps.log(`scheduler: rule #${rule.id} produced no spoken text; left untouched`);
+            result.notImplemented.push(rule.id);
+            break;
+          }
+          const audio = await synthesise(deps.tts, text);
+          await deps.client.postVoiceMessage({
+            toDeviceId: rule.targetDeviceId,
+            fromDeviceId: deps.agentDeviceId,
+            body: text,
+            audio,
+            sampleRate: VOICE_MESSAGE_SAMPLE_RATE,
+            channels: 1,
+          });
+          await advanceRule(deps.client, rule, now);
           deps.log(
-            `scheduler: rule #${rule.id} kind=voice_message not yet implemented; left untouched`,
+            `scheduler: rule #${rule.id} sent voicemail (target ${rule.targetDeviceId}, ${audio.byteLength} bytes)`,
           );
-          result.notImplemented.push(rule.id);
+          result.voiceMessagesSent.push(rule.id);
           break;
         }
         default:
@@ -250,4 +296,87 @@ function computeNextFireAt(rule: AgentRule, now: Date): string {
 
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * 24 kHz mono is the TTS provider contract (see voice-providers.ts);
+ * the family-phone wire and the voicemail schema default to it too.
+ */
+const VOICE_MESSAGE_SAMPLE_RATE = 24_000;
+
+/** Cap the synthesis to a safe upper bound so a runaway prompt cannot
+ * fill SQLite with an hours-long blob. 60 seconds × 24 kHz × 2 bytes
+ * = 2.88 MB — generous for a household voicemail. */
+const VOICE_MESSAGE_MAX_BYTES = 60 * VOICE_MESSAGE_SAMPLE_RATE * 2;
+
+/**
+ * Decide what spoken text a voice_message rule should produce. A
+ * `body` rule speaks the literal string; a `systemPrompt` rule asks
+ * Claude to generate it. Returns null if the rule supplies neither
+ * (which the api also rejects, but the scheduler is defensive in case
+ * the row was edited under a future relaxed CHECK).
+ */
+async function resolveVoiceMessageText(
+  rule: AgentRule,
+  deps: AgentSchedulerDeps,
+): Promise<string | null> {
+  if (rule.body !== null && rule.body.trim().length > 0) return rule.body.trim();
+  if (rule.systemPrompt !== null && rule.systemPrompt.trim().length > 0) {
+    if (deps.claudeRunner === undefined) {
+      deps.log(`scheduler: rule #${rule.id} systemPrompt set but no claudeRunner; cannot generate`);
+      return null;
+    }
+    const nowIso = new Date().toISOString();
+    const { content } = await deps.claudeRunner(
+      {
+        conversation: [
+          {
+            id: 0,
+            role: 'user',
+            content: rule.systemPrompt,
+            createdBy: 0,
+            createdAt: nowIso,
+          },
+        ],
+        sessionId: null,
+      },
+      () => {
+        // Voice messages are one-shot; no streaming consumer.
+      },
+    );
+    const trimmed = content.trim();
+    return trimmed.length === 0 ? null : trimmed;
+  }
+  return null;
+}
+
+/**
+ * Collect every Int16Array chunk a TtsProvider yields into a single
+ * 16-bit signed little-endian byte buffer suitable for posting to
+ * `/api/family-phone/voice-messages`. The cap protects the SQLite
+ * blob column from a misbehaving synthesiser.
+ */
+async function synthesise(
+  tts: TtsProvider,
+  text: string,
+): Promise<Uint8Array<ArrayBuffer>> {
+  const chunks: Int16Array[] = [];
+  let total = 0;
+  for await (const chunk of tts.speak(text)) {
+    chunks.push(chunk);
+    total += chunk.byteLength;
+    if (total > VOICE_MESSAGE_MAX_BYTES) {
+      throw new Error(`voice message synthesis exceeded ${VOICE_MESSAGE_MAX_BYTES} bytes`);
+    }
+  }
+  const out = new Uint8Array(new ArrayBuffer(total));
+  const view = new DataView(out.buffer);
+  let offset = 0;
+  for (const chunk of chunks) {
+    for (let i = 0; i < chunk.length; i++) {
+      view.setInt16(offset, chunk[i] ?? 0, true);
+      offset += 2;
+    }
+  }
+  return out;
 }

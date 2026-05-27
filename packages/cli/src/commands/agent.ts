@@ -127,13 +127,17 @@ async function runAgentWorker(global: GlobalOptions): Promise<number> {
       // Family-phone is up — install the outbound dialer and start the
       // proactivity scheduler against this same connection. Both keep
       // running for the worker's lifetime; the connection itself
-      // manages WS reconnects internally.
+      // manages WS reconnects internally. Pass the TTS provider through
+      // so voice_message rules can synth and POST in-tick.
       const dialer = createAgentOutboundDialer({ client, connection, log });
       startAgentScheduler({
         client,
         now: () => new Date(),
         log,
         dialer,
+        agentDeviceId: phoneRecord.deviceId,
+        ...(providers ? { tts: providers.tts } : {}),
+        claudeRunner: runClaude,
       });
       log('eal agent: proactivity scheduler running.');
     });
