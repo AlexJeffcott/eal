@@ -1,6 +1,7 @@
-import { Elysia } from 'elysia';
+import { Elysia, t } from 'elysia';
 import type { DatabaseClient } from '../db/client.ts';
 import type { Principal } from '../auth/principals.ts';
+import { createConversationsRepo } from '../db/repos/conversations.ts';
 import { AuthError } from './auth.shared.ts';
 import { clearConversationCore, listConversationCore } from './messages.shared.ts';
 
@@ -33,5 +34,24 @@ export function messagesHttpRoutes(ctx: MessagesRoutesContext) {
       if (!principal) throw new AuthError(401, 'unauthenticated');
       clearConversationCore(ctx.db, principal);
       return { ok: true as const };
-    });
+    })
+    .get('/conversation-session', ({ request }) => {
+      const principal = ctx.getPrincipal(request);
+      if (!principal) throw new AuthError(401, 'unauthenticated');
+      const repo = createConversationsRepo(ctx.db);
+      return { sessionId: repo.getSessionId(principal.userId) };
+    })
+    .post(
+      '/conversation-session',
+      ({ request, body }) => {
+        const principal = ctx.getPrincipal(request);
+        if (!principal) throw new AuthError(401, 'unauthenticated');
+        const repo = createConversationsRepo(ctx.db);
+        repo.setSessionId(principal.userId, body.session_id);
+        return { ok: true as const };
+      },
+      {
+        body: t.Object({ session_id: t.String() }),
+      },
+    );
 }

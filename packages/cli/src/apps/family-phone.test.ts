@@ -93,6 +93,8 @@ function makeFakeClient(opts: {
     listVoiceMessages: notImplemented('listVoiceMessages'),
     getVoiceMessageAudio: notImplemented('getVoiceMessageAudio'),
     markVoiceMessageRead: notImplemented('markVoiceMessageRead'),
+    getConversationSessionId: notImplemented('getConversationSessionId'),
+    setConversationSessionId: notImplemented('setConversationSessionId'),
   };
 }
 

@@ -137,6 +137,8 @@ function makeClient(): FakeClient {
     listVoiceMessages: notImplemented('listVoiceMessages'),
     getVoiceMessageAudio: notImplemented('getVoiceMessageAudio'),
     markVoiceMessageRead: notImplemented('markVoiceMessageRead'),
+    getConversationSessionId: notImplemented('getConversationSessionId'),
+    setConversationSessionId: notImplemented('setConversationSessionId'),
   };
   return {
     client,

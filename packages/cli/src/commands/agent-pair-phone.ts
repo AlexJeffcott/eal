@@ -46,18 +46,30 @@ export async function agentPairPhoneCore(
   deps: PairPhoneDeps,
   input: { code: string | undefined; label: string | undefined },
 ): Promise<PairPhoneResult> {
-  const code = input.code?.trim() ?? '';
-  if (code.length === 0) {
-    return {
-      code: 1,
-      isError: true,
-      message:
-        'eal agent pair-phone: --code=<user-code> is required (mint one from the devices panel)',
-    };
-  }
+  let code = input.code?.trim() ?? '';
   const label = input.label?.trim() && input.label.trim().length > 0
     ? input.label.trim()
     : DEFAULT_LABEL;
+  if (code.length === 0) {
+    // The CLI already holds a user-session token (the caller checked
+    // that before invoking us). It can self-mint a family-phone
+    // user-code as the signed-in user and consume it in the same
+    // command — no browser hop needed. The trust boundary is
+    // unchanged: the user_code is bound to the user the token
+    // represents, exactly as if a browser tab had clicked
+    // "Create invite code".
+    try {
+      const minted = await deps.client.startFamilyPhonePair();
+      code = minted.userCode;
+      deps.log(`eal agent pair-phone: minted self-pair code ${code}`);
+    } catch (err) {
+      return {
+        code: 1,
+        isError: true,
+        message: `eal agent pair-phone: could not mint pair code: ${describe(err)}`,
+      };
+    }
+  }
 
   let keyPair;
   try {

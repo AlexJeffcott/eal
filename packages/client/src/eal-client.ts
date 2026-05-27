@@ -274,6 +274,12 @@ export interface EalClient {
   listMessages(): Promise<Message[]>;
   /** Reset the conversation — hide the history and drop the assistant's memory. */
   clearChat(): Promise<void>;
+  /** Read the principal's persisted Claude session id (the chat + voice
+   * conversation key). Null when no session has been seeded yet. */
+  getConversationSessionId(): Promise<string | null>;
+  /** Persist a fresh Claude session id for the principal. Both surfaces
+   * (chat and voice) resume from the same value. */
+  setConversationSessionId(sessionId: string): Promise<void>;
   /** Send a chat message to the assistant. Requires an open browser WS. */
   sendChat(text: string): void;
   /** Fires for chat:user, chat:chunk, chat:done, chat:error. */
@@ -541,6 +547,20 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
 
     async clearChat(): Promise<void> {
       await postJson<{ ok: true }>('/api/v1/messages/clear', {});
+    },
+
+    async getConversationSessionId(): Promise<string | null> {
+      const result = await getJsonOrThrow<{ sessionId: string | null }>(
+        '/api/v1/messages/conversation-session',
+      );
+      return result.sessionId;
+    },
+
+    async setConversationSessionId(sessionId: string): Promise<void> {
+      await postJson<{ ok: true }>(
+        '/api/v1/messages/conversation-session',
+        { session_id: sessionId },
+      );
     },
 
     sendChat(text: string): void {

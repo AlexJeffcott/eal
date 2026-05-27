@@ -38,22 +38,24 @@ describe('agentPairPhoneCore', () => {
     client.setCurrentUser({ userId: 1, displayName: 'alex' });
   });
 
-  test('rejects a missing code without generating a key or writing anything', async () => {
+  test('missing code self-mints from startFamilyPhonePair and pairs end-to-end', async () => {
     const { deps, spies } = makeDeps(client);
     const result = await agentPairPhoneCore(deps, { code: undefined, label: undefined });
-    expect(result.code).toBe(1);
-    expect(result.isError).toBe(true);
-    expect(result.message).toMatch(/--code/);
-    expect(spies.generated).toBe(0);
-    expect(spies.written).toEqual([]);
+    expect(result.isError).toBe(false);
+    expect(result.code).toBe(0);
+    // The mock returns "TST-001" from startFamilyPhonePair; the self-mint
+    // log line surfaces it for the operator.
+    expect(spies.logs.some((l) => l.includes('TST-001'))).toBe(true);
+    expect(spies.generated).toBe(1);
+    expect(spies.written.length).toBe(1);
   });
 
-  test('rejects a whitespace-only code', async () => {
+  test('whitespace-only code also triggers the self-mint path', async () => {
     const { deps, spies } = makeDeps(client);
     const result = await agentPairPhoneCore(deps, { code: '   ', label: 'x' });
-    expect(result.code).toBe(1);
-    expect(spies.generated).toBe(0);
-    expect(spies.written).toEqual([]);
+    expect(result.isError).toBe(false);
+    expect(spies.generated).toBe(1);
+    expect(spies.written.length).toBe(1);
   });
 
   test('completes the pair and writes the device record', async () => {

@@ -388,6 +388,15 @@ export function createMockEalClient(): MockEalClient {
       return [];
     },
 
+    async getConversationSessionId(): Promise<string | null> {
+      requireSignedIn();
+      return null;
+    },
+
+    async setConversationSessionId(): Promise<void> {
+      requireSignedIn();
+    },
+
     async postVoiceMessage(input: PostVoiceMessageInput): Promise<VoiceMessage> {
       requireSignedIn();
       return {

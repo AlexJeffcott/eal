@@ -31,6 +31,16 @@ export interface VoiceLoopDeps {
    * sentence.
    */
   sendText?: (text: string) => void;
+  /**
+   * Resume the persisted assistant conversation across chat and voice.
+   * The voice loop calls `loadSessionId` on its first turn and
+   * `saveSessionId` after every successful turn, so a follow-on chat
+   * message on the eal web app picks up where the call left off (and
+   * vice versa). If either hook is omitted the loop falls back to a
+   * per-call in-memory session, which means each call starts cold.
+   */
+  loadSessionId?: () => Promise<string | null>;
+  saveSessionId?: (sessionId: string) => Promise<void>;
   log: (line: string) => void;
 }
 
@@ -95,9 +105,11 @@ export function createVoiceLoop(
   const utterance: number[] = [];
   let speechFramesInUtterance = 0;
   let silenceFramesAfterSpeech = 0;
-  // Per-call Claude session id — carried across turns so the assistant
-  // remembers what was said earlier in the same conversation.
+  // Claude session id — carried across voice turns AND shared with the
+  // chat surface when `loadSessionId`/`saveSessionId` are wired. `null`
+  // until the first turn either loads or seeds it.
   let sessionId: string | null = null;
+  let sessionIdLoaded = false;
 
   function setState(next: LoopState): void {
     if (state === next) return;
@@ -129,6 +141,22 @@ export function createVoiceLoop(
     deps.log(`eal agent: heard "${transcript}"`);
     const turn = oneTurn(`${VOICE_PROMPT_PREFIX}\n\nuser said: ${transcript}`);
 
+    // First turn of a freshly-spun-up loop: pull the persisted session
+    // id so the call resumes whatever conversation the chat panel left
+    // behind. Subsequent turns reuse the in-memory value the runner
+    // returned on the previous turn.
+    if (!sessionIdLoaded && deps.loadSessionId !== undefined) {
+      try {
+        sessionId = await deps.loadSessionId();
+        if (sessionId !== null) {
+          deps.log(`eal agent: resumed conversation ${sessionId}`);
+        }
+      } catch (err) {
+        deps.log(`eal agent: loadSessionId failed: ${describe(err)}`);
+      }
+      sessionIdLoaded = true;
+    }
+
     let pending = '';
     let claudeResult;
     try {
@@ -156,6 +184,13 @@ export function createVoiceLoop(
       return;
     }
     sessionId = claudeResult.sessionId;
+    if (deps.saveSessionId !== undefined) {
+      try {
+        await deps.saveSessionId(claudeResult.sessionId);
+      } catch (err) {
+        deps.log(`eal agent: saveSessionId failed: ${describe(err)}`);
+      }
+    }
     const tail = pending.trim();
     if (tail.length > 0) await speakSentence(tail);
     if (!closed) setState('listening');

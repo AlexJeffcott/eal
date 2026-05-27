@@ -109,13 +109,46 @@ async function runAgentWorker(global: GlobalOptions): Promise<number> {
   log('eal agent: starting — the web app can now chat with the assistant.');
   log('  Press Ctrl-C to stop.');
 
-  // Family-phone identity is optional. If the device record is present
-  // the worker also appears on the call network; without it the chat
-  // path still works and we just point the operator at the pair command.
-  const phoneRecord = readAgentDevice();
+  // Family-phone identity is optional in principle (chat path still
+  // works without it), but the operator almost always wants it. If
+  // we have a user-session token and no device record on disk, mint
+  // the family-phone identity in-process so the operator never has
+  // to run a separate pair step. The mint runs as the signed-in
+  // user against the same api the worker is about to use.
+  let phoneRecord = readAgentDevice();
   if (phoneRecord === null) {
-    log('eal agent: voice disabled — run `eal agent pair-phone --code=<user-code>` to register on family-phone.');
-    log('eal agent: proactivity disabled — register on family-phone first.');
+    log('eal agent: no family-phone identity yet — minting one for this worker…');
+    const { agentPairPhoneCore } = await import('./agent-pair-phone.ts');
+    const { writeAgentDevice, agentDevicePath } = await import('../lib/agent-device-store.ts');
+    const result = await agentPairPhoneCore(
+      {
+        client,
+        generateKeyPair: async () => {
+          const kp = await crypto.subtle.generateKey(
+            { name: 'ECDSA', namedCurve: 'P-256' },
+            true,
+            ['sign', 'verify'],
+          );
+          const spki = new Uint8Array(await crypto.subtle.exportKey('spki', kp.publicKey));
+          const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', kp.privateKey));
+          return { publicKeySpki: spki, privateKeyPkcs8: pkcs8 };
+        },
+        writeRecord: writeAgentDevice,
+        devicePath: agentDevicePath,
+        log,
+      },
+      { code: undefined, label: 'agent' },
+    );
+    if (result.isError) {
+      logError(result.message);
+      log('eal agent: continuing without voice. Re-run `eal agent` once the api is reachable.');
+    } else {
+      log(result.message);
+      phoneRecord = readAgentDevice();
+    }
+  }
+  if (phoneRecord === null) {
+    log('eal agent: voice disabled — family-phone identity could not be minted.');
   } else {
     const providers = selectVoiceProviders();
     if (providers === null) {
@@ -240,6 +273,12 @@ async function startPhoneLoop(
               // Handsets and other agents can't render text, so they
               // get the audio channel only.
               ...(input.callerKind === 'pwa' ? { sendText: input.sendText } : {}),
+              // Share one assistant memory across chat and voice — the
+              // hooks GET/PUT the principal's persisted Claude session
+              // id so a follow-on chat picks up where the call left off
+              // (and vice versa).
+              loadSessionId: () => client.getConversationSessionId(),
+              saveSessionId: (sid) => client.setConversationSessionId(sid),
               log: (line) => log(`[call ${input.callId}] ${line}`),
             })
         : undefined;

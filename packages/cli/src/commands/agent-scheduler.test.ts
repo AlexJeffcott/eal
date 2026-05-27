@@ -128,6 +128,8 @@ function makeFakeClient(state: FakeClientState): EalClient {
     listVoiceMessages: notImplemented('listVoiceMessages'),
     getVoiceMessageAudio: notImplemented('getVoiceMessageAudio'),
     markVoiceMessageRead: notImplemented('markVoiceMessageRead'),
+    getConversationSessionId: notImplemented('getConversationSessionId'),
+    setConversationSessionId: notImplemented('setConversationSessionId'),
   };
 }
 

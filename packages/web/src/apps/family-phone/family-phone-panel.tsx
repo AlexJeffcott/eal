@@ -178,49 +178,6 @@ function CallableDeviceRow(props: {
   );
 }
 
-function AssistantCallout(props: {
-  agents: FamilyPhoneDevice[];
-  hasConnection: boolean;
-  hasActiveCall: boolean;
-}) {
-  const { agents, hasConnection, hasActiveCall } = props;
-  // Pick the first online agent. Multiple agents are rare today but
-  // possible (Pi + laptop both running the worker). The directory row
-  // for each still lets the operator pick a specific one.
-  const target = agents.find((a) => a.online) ?? agents[0];
-  if (!target) return null;
-  const canCall = hasConnection && !hasActiveCall && target.online;
-  const reason = !hasConnection
-    ? 'Pair this browser in Devices to place a call.'
-    : hasActiveCall
-      ? 'Already in a call.'
-      : !target.online
-        ? 'The assistant is offline.'
-        : undefined;
-  return (
-    <Surface variant="callout" padding="var(--polly-space-md)" className="family-phone-assistant">
-      <Cluster gap="var(--polly-space-md)" justify="space-between">
-        <Layout gap="var(--polly-space-xs)">
-          <Text as="h2" weight="bold">Assistant</Text>
-          <Text tone="muted">
-            {target.online
-              ? `Call ${target.label} to talk to the assistant.`
-              : 'The assistant is offline right now.'}
-          </Text>
-        </Layout>
-        <Button
-          tier="primary"
-          label="Call assistant"
-          disabled={!canCall}
-          {...(reason ? { title: reason } : {})}
-          data-action="family-phone:place-call"
-          data-action-target-device-id={String(target.id)}
-        />
-      </Cluster>
-    </Surface>
-  );
-}
-
 function formatLocal(iso: string): string {
   try {
     return new Date(iso).toLocaleString();
@@ -365,7 +322,6 @@ export function FamilyPhonePanel() {
   const paired = $pairedThisSession.value;
   const hasConnection = $deviceConnection.value !== null;
   const hasActiveCall = $activeCall.value !== null;
-  const agents = devices.filter((d) => d.kind === 'agent');
 
   return (
     <Layout gap="var(--polly-space-lg)" className="family-phone-panel">
@@ -392,12 +348,6 @@ export function FamilyPhonePanel() {
       <Show when={() => $pairedThisSession.value === null}>
         <PairFirstNotice />
       </Show>
-
-      <AssistantCallout
-        agents={agents}
-        hasConnection={hasConnection}
-        hasActiveCall={hasActiveCall}
-      />
 
       <Show when={() => $pairedThisSession.value !== null}>
         <VoicemailsCard voicemails={$voiceMessages.value} devices={devices} />
