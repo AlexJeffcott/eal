@@ -223,18 +223,36 @@ async function startPhoneLoop(
         privateKey,
       });
       const voiceLoopFactory = providers
-        ? (callId: string, sendAudio: (payload: Uint8Array) => void) =>
+        ? (input: {
+            callId: string;
+            fromDeviceId: number;
+            sendAudio: (payload: Uint8Array) => void;
+            sendText: (text: string) => void;
+            callerKind: 'handset' | 'pwa' | 'agent' | null;
+          }) =>
             createVoiceLoop({
               runClaude,
               stt: providers.stt,
               tts: providers.tts,
-              sendAudio,
-              log: (line) => log(`[call ${callId}] ${line}`),
+              sendAudio: input.sendAudio,
+              // PWAs render speech locally via the Web Speech API, so
+              // skip TTS+audio entirely and send the sentence text.
+              // Handsets and other agents can't render text, so they
+              // get the audio channel only.
+              ...(input.callerKind === 'pwa' ? { sendText: input.sendText } : {}),
+              log: (line) => log(`[call ${input.callId}] ${line}`),
             })
         : undefined;
+      const lookupDeviceKind = async (
+        deviceId: number,
+      ): Promise<'handset' | 'pwa' | 'agent' | null> => {
+        const devices = await client.listFamilyPhoneDevices();
+        return devices.find((d) => d.id === deviceId)?.kind ?? null;
+      };
       installAgentPhoneHandler(connection, {
         log,
         rejectReason: DEFAULT_REJECT_REASON,
+        lookupDeviceKind,
         ...(voiceLoopFactory ? { voiceLoopFactory } : {}),
       });
       log(

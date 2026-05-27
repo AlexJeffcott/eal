@@ -11,6 +11,10 @@ import {
 } from './audio.ts';
 import { Ringtone } from './ringtone.ts';
 import { IncomingCallNotifier } from './notifications.ts';
+import {
+  speechSynthesis,
+  SpeechSynthesisUtterance,
+} from '../../platform/speech-synthesis.ts';
 
 /**
  * Singletons for the in-page ringtone + browser notification. Both pull
@@ -183,6 +187,25 @@ export function installCallEventHandlers(event: FamilyPhoneCallEvent): void {
       void ringtone().stop();
       notifier().dismiss();
       void stopAudio();
+      stopSpeaking();
+      return;
+    }
+    case 'call:unanswered': {
+      // The server's unanswered timer fired on a pending outbound call.
+      // Mirrors the rejected handler — the call is over before it ever
+      // produced audio, so audio teardown is a defensive no-op.
+      $activeCall.value = null;
+      $callNote.value = 'No answer.';
+      void ringtone().stop();
+      notifier().dismiss();
+      void stopAudio();
+      return;
+    }
+    case 'call:text': {
+      // The agent sends spoken text instead of audio when it knows this
+      // peer can synthesise locally. Queue the sentence into the Web
+      // Speech API; the browser plays it on the user's system voice.
+      speakText(event.text);
       return;
     }
     case 'presence:changed':
@@ -190,6 +213,26 @@ export function installCallEventHandlers(event: FamilyPhoneCallEvent): void {
       // Devices app handles these on the same connection.
       return;
   }
+}
+
+/**
+ * Queue a sentence into the browser's SpeechSynthesis. Each call adds
+ * one utterance to the system queue, so a long reply that lands as
+ * several `call:text` frames plays sentence-by-sentence in order. A
+ * platform without the API (older browser, headless test runner) drops
+ * the text silently — the agent has no way to know we couldn't render
+ * it, and the user just hears nothing.
+ */
+function speakText(text: string): void {
+  if (speechSynthesis === null || SpeechSynthesisUtterance === null) return;
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return;
+  speechSynthesis.speak(new SpeechSynthesisUtterance(trimmed));
+}
+
+function stopSpeaking(): void {
+  if (speechSynthesis === null) return;
+  speechSynthesis.cancel();
 }
 
 /**

@@ -465,6 +465,33 @@ describe('family-phone.ws — call state machine, two authed peers', () => {
     expect(find(harness.send, 'alex-ws', 'call:unanswered')).toBeNull();
   });
 
+  test('call:text on a connected call is forwarded verbatim to the peer', async () => {
+    const { harness, handler, elisa, wsA, wsE } = await setup();
+    handler.onMessage(wsA, { type: 'call:invite', target_device_id: elisa.deviceId }, null);
+    const callId = find(harness.send, 'alex-ws', 'call:invite-ack')?.['call_id'];
+    if (typeof callId !== 'string') throw new Error('no call_id');
+    handler.onMessage(wsE, { type: 'call:accept', call_id: callId }, null);
+
+    harness.send.length = 0;
+    handler.onMessage(wsA, { type: 'call:text', call_id: callId, text: 'hello there' }, null);
+    const delivered = find(harness.send, 'elisa-ws', 'call:text');
+    expect(delivered?.['call_id']).toBe(callId);
+    expect(delivered?.['text']).toBe('hello there');
+    // Caller does not see their own text echoed back.
+    expect(find(harness.send, 'alex-ws', 'call:text')).toBeNull();
+  });
+
+  test('call:text on a pending (un-accepted) call is dropped', async () => {
+    const { harness, handler, elisa, wsA } = await setup();
+    handler.onMessage(wsA, { type: 'call:invite', target_device_id: elisa.deviceId }, null);
+    const callId = find(harness.send, 'alex-ws', 'call:invite-ack')?.['call_id'];
+    if (typeof callId !== 'string') throw new Error('no call_id');
+
+    harness.send.length = 0;
+    handler.onMessage(wsA, { type: 'call:text', call_id: callId, text: 'too early' }, null);
+    expect(find(harness.send, 'elisa-ws', 'call:text')).toBeNull();
+  });
+
   test('audio frame on a closed call is dropped, never forwarded', async () => {
     const { harness, handler, elisa, wsA, wsE } = await setup();
     handler.onMessage(wsA, { type: 'call:invite', target_device_id: elisa.deviceId }, null);

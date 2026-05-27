@@ -32,6 +32,7 @@ function makeConnection(): FakeConnection {
       return () => subscribers.delete(handler);
     },
     sendAudio() {},
+    sendText() {},
     subscribeAudio() {
       return () => {};
     },

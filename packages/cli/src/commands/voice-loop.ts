@@ -23,6 +23,14 @@ export interface VoiceLoopDeps {
   tts: TtsProvider;
   /** Emit a 20 ms PCM frame back to the caller. */
   sendAudio: (payload: Uint8Array) => void;
+  /**
+   * Optional text-frame sender. When present, the loop emits each
+   * completed sentence as a text frame and skips TTS entirely — the
+   * peer is expected to render it locally (Web Speech API on PWAs).
+   * When absent, the loop falls back to TTS + sendAudio for every
+   * sentence.
+   */
+  sendText?: (text: string) => void;
   log: (line: string) => void;
 }
 
@@ -155,6 +163,22 @@ export function createVoiceLoop(
   async function speakSentence(sentence: string): Promise<void> {
     if (closed) return;
     setState('speaking');
+    if (deps.sendText !== undefined) {
+      try {
+        deps.sendText(sentence);
+      } catch (err) {
+        deps.log(`eal agent: sendText failed: ${describe(err)}`);
+      }
+      // The peer is rendering the sentence locally — we have no way
+      // to know when it finishes. Estimate at ~170 words per minute
+      // (a measured speech-synthesis pace) and stay in `speaking`
+      // for that long so the loop's half-duplex guard still ignores
+      // inbound frames while the user is listening.
+      const words = sentence.trim().split(/\s+/).filter((w) => w.length > 0).length;
+      const estimatedMs = Math.max(300, Math.round((words * 60_000) / 170));
+      await delay(estimatedMs);
+      return;
+    }
     try {
       // Piper writes the whole utterance to disk first and the
       // chunker then yields ~30 frames in microseconds. The browser's

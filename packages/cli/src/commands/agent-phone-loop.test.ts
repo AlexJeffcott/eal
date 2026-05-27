@@ -1,6 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import type { FamilyPhoneCallEvent, FamilyPhoneDeviceConnection } from '@eal/client';
+import type {
+  FamilyPhoneCallEvent,
+  FamilyPhoneDeviceConnection,
+  FamilyPhoneDeviceKind,
+} from '@eal/client';
 import { DEFAULT_REJECT_REASON, installAgentPhoneHandler } from './agent-phone-loop.ts';
+
+async function flush(): Promise<void> {
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+}
 
 interface FakeConn extends FamilyPhoneDeviceConnection {
   emit(event: FamilyPhoneCallEvent): void;
@@ -26,6 +34,7 @@ function makeConn(): FakeConn {
       return () => subs.delete(h);
     },
     sendAudio: () => {},
+    sendText: () => {},
     subscribeAudio: (h) => {
       audioSubs.add(h);
       return () => audioSubs.delete(h);
@@ -57,7 +66,7 @@ describe('installAgentPhoneHandler', () => {
     expect(logs.some((l) => l.includes('abc') && l.includes('rejecting'))).toBe(true);
   });
 
-  test('logs hangups for the currently accepted call', () => {
+  test('logs hangups for the currently accepted call', async () => {
     const conn = makeConn();
     const logs: string[] = [];
     installAgentPhoneHandler(conn, {
@@ -67,12 +76,13 @@ describe('installAgentPhoneHandler', () => {
     });
 
     conn.emit({ type: 'call:incoming', callId: 'xyz', fromDeviceId: 1 });
+    await flush();
     conn.emit({ type: 'call:hung-up', callId: 'xyz', reason: 'caller bored' });
 
     expect(logs.some((l) => l.includes('xyz') && l.includes('caller bored'))).toBe(true);
   });
 
-  test('accepts and routes audio when a voiceLoopFactory is supplied', () => {
+  test('accepts and routes audio when a voiceLoopFactory is supplied', async () => {
     const conn = makeConn();
     const logs: string[] = [];
     const inboundFrames: Uint8Array[] = [];
@@ -89,6 +99,7 @@ describe('installAgentPhoneHandler', () => {
     });
 
     conn.emit({ type: 'call:incoming', callId: 'voice-1', fromDeviceId: 5 });
+    await flush();
     expect(conn.accepted).toEqual(['voice-1']);
     expect(conn.rejected).toEqual([]);
 
@@ -104,7 +115,7 @@ describe('installAgentPhoneHandler', () => {
     expect(closeCount).toBe(1);
   });
 
-  test('rejects a second concurrent call while the first is still active', () => {
+  test('rejects a second concurrent call while the first is still active', async () => {
     const conn = makeConn();
     installAgentPhoneHandler(conn, {
       log: () => {},
@@ -113,8 +124,118 @@ describe('installAgentPhoneHandler', () => {
     });
     conn.emit({ type: 'call:incoming', callId: 'one', fromDeviceId: 1 });
     conn.emit({ type: 'call:incoming', callId: 'two', fromDeviceId: 2 });
+    await flush();
     expect(conn.accepted).toEqual(['one']);
     expect(conn.rejected).toEqual(['two']);
+  });
+
+  test('lookupDeviceKind feeds the caller kind into the voiceLoopFactory', async () => {
+    const conn = makeConn();
+    const factoryInputs: Array<{
+      callerKind: FamilyPhoneDeviceKind | null;
+      fromDeviceId: number;
+    }> = [];
+    installAgentPhoneHandler(conn, {
+      log: () => {},
+      rejectReason: 'r',
+      lookupDeviceKind: async (id) => (id === 42 ? 'pwa' : null),
+      voiceLoopFactory: (input) => {
+        factoryInputs.push({
+          callerKind: input.callerKind,
+          fromDeviceId: input.fromDeviceId,
+        });
+        return { onInboundFrame: () => {}, close: () => {} };
+      },
+    });
+    conn.emit({ type: 'call:incoming', callId: 'pwa-call', fromDeviceId: 42 });
+    await flush();
+    expect(factoryInputs).toEqual([{ callerKind: 'pwa', fromDeviceId: 42 }]);
+  });
+
+  test('lookup failure surfaces null callerKind, the call is still accepted', async () => {
+    const conn = makeConn();
+    const factoryInputs: Array<FamilyPhoneDeviceKind | null> = [];
+    installAgentPhoneHandler(conn, {
+      log: () => {},
+      rejectReason: 'r',
+      lookupDeviceKind: async () => {
+        throw new Error('directory down');
+      },
+      voiceLoopFactory: (input) => {
+        factoryInputs.push(input.callerKind);
+        return { onInboundFrame: () => {}, close: () => {} };
+      },
+    });
+    conn.emit({ type: 'call:incoming', callId: 'mystery', fromDeviceId: 7 });
+    await flush();
+    expect(factoryInputs).toEqual([null]);
+    expect(conn.accepted).toEqual(['mystery']);
+  });
+
+  test('sendAudio and sendText handed to the factory route through the connection', async () => {
+    const conn = makeConn();
+    const sentAudio: Array<{ callId: string; payload: Uint8Array }> = [];
+    const sentText: Array<{ callId: string; text: string }> = [];
+    conn.sendAudio = (callId, payload) => sentAudio.push({ callId, payload });
+    conn.sendText = (callId, text) => sentText.push({ callId, text });
+    const captured: Array<{
+      sendAudio: (p: Uint8Array) => void;
+      sendText: (t: string) => void;
+    }> = [];
+    installAgentPhoneHandler(conn, {
+      log: () => {},
+      rejectReason: 'r',
+      voiceLoopFactory: (input) => {
+        captured.push({ sendAudio: input.sendAudio, sendText: input.sendText });
+        return { onInboundFrame: () => {}, close: () => {} };
+      },
+    });
+    conn.emit({ type: 'call:incoming', callId: 'wire-1', fromDeviceId: 7 });
+    await flush();
+    expect(captured).toHaveLength(1);
+    const callbacks = captured[0];
+    if (!callbacks) throw new Error('unreachable');
+    callbacks.sendAudio(new Uint8Array([0xaa, 0xbb]));
+    callbacks.sendText('hi there');
+    expect(sentAudio).toEqual([{ callId: 'wire-1', payload: new Uint8Array([0xaa, 0xbb]) }]);
+    expect(sentText).toEqual([{ callId: 'wire-1', text: 'hi there' }]);
+  });
+
+  test('an unrecognised wire event lands on the catch-all log line', () => {
+    const conn = makeConn();
+    const logs: string[] = [];
+    installAgentPhoneHandler(conn, {
+      log: (l) => logs.push(l),
+      rejectReason: 'r',
+    });
+    // call:invite-failed is a known event the handler does not act on.
+    conn.emit({ type: 'call:invite-failed', reason: 'whatever' });
+    expect(logs.some((l) => l.includes('call:invite-failed'))).toBe(true);
+  });
+
+  test('a hangup that lands during the kind lookup cancels the accept', async () => {
+    const conn = makeConn();
+    const resolvers: Array<(value: FamilyPhoneDeviceKind | null) => void> = [];
+    let factoryCalls = 0;
+    installAgentPhoneHandler(conn, {
+      log: () => {},
+      rejectReason: 'r',
+      lookupDeviceKind: () =>
+        new Promise<FamilyPhoneDeviceKind | null>((resolve) => {
+          resolvers.push(resolve);
+        }),
+      voiceLoopFactory: () => {
+        factoryCalls += 1;
+        return { onInboundFrame: () => {}, close: () => {} };
+      },
+    });
+    conn.emit({ type: 'call:incoming', callId: 'racey', fromDeviceId: 3 });
+    conn.emit({ type: 'call:hung-up', callId: 'racey' });
+    expect(resolvers).toHaveLength(1);
+    resolvers[0]?.('pwa');
+    await flush();
+    expect(factoryCalls).toBe(0);
+    expect(conn.accepted).toEqual([]);
   });
 
   test('swallows presence and directory churn without logging', () => {

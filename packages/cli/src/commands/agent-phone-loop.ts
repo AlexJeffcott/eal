@@ -1,4 +1,8 @@
-import type { FamilyPhoneCallEvent, FamilyPhoneDeviceConnection } from '@eal/client';
+import type {
+  FamilyPhoneCallEvent,
+  FamilyPhoneDeviceConnection,
+  FamilyPhoneDeviceKind,
+} from '@eal/client';
 import type { VoiceLoop } from './voice-loop.ts';
 
 /**
@@ -14,6 +18,32 @@ import type { VoiceLoop } from './voice-loop.ts';
  * rejected with a clear reason; v2 can revisit when needed.
  */
 
+export interface VoiceLoopFactoryInput {
+  callId: string;
+  /**
+   * The device id of the call's originator. Used by the factory to
+   * decide which reply channel to wire up — for example, a PWA peer
+   * gets the text channel; a handset gets audio only.
+   */
+  fromDeviceId: number;
+  /** Send a PCM frame back to the caller. */
+  sendAudio: (payload: Uint8Array) => void;
+  /**
+   * Send a sentence back as a text frame instead of audio. The
+   * factory chooses whether to expose this to the voice loop; loops
+   * given the function emit text and skip TTS, loops without it fall
+   * back to local TTS + sendAudio.
+   */
+  sendText: (text: string) => void;
+  /**
+   * The caller's declared device kind — `pwa`, `handset`, `agent`, or
+   * null when a directory lookup failed. The factory uses this to
+   * decide whether `sendText` is appropriate to route through to the
+   * loop (PWAs render text locally via Web Speech; other kinds cannot).
+   */
+  callerKind: FamilyPhoneDeviceKind | null;
+}
+
 export interface AgentPhoneHandlerDeps {
   log: (line: string) => void;
   /**
@@ -23,14 +53,19 @@ export interface AgentPhoneHandlerDeps {
    */
   rejectReason: string;
   /**
-   * Build a VoiceLoop for one accepted call. The factory receives the
-   * call id and a `sendAudio` closure already bound to that call. If
-   * omitted the handler stays in reject-only mode.
+   * Build a VoiceLoop for one accepted call. Receives the call id, the
+   * caller's device id and kind, and both reply channels — the factory
+   * decides which channel to expose to the loop. If omitted the handler
+   * stays in reject-only mode.
    */
-  voiceLoopFactory?: (
-    callId: string,
-    sendAudio: (payload: Uint8Array) => void,
-  ) => VoiceLoop;
+  voiceLoopFactory?: (input: VoiceLoopFactoryInput) => VoiceLoop;
+  /**
+   * Look up a paired device's kind from the directory so the factory
+   * can pick the right reply channel. Returns null when the device id
+   * is unknown or the lookup fails — the factory then defaults to
+   * audio (the lowest-common-denominator channel).
+   */
+  lookupDeviceKind?: (deviceId: number) => Promise<FamilyPhoneDeviceKind | null>;
 }
 
 export function installAgentPhoneHandler(
@@ -62,13 +97,10 @@ export function installAgentPhoneHandler(
         connection.rejectCall(event.callId);
         return;
       }
+      // Reserve the slot synchronously so a second incoming call during
+      // the directory lookup still hits the busy guard above.
       currentCallId = event.callId;
-      const sendAudio = (payload: Uint8Array): void => {
-        if (currentCallId !== null) connection.sendAudio(currentCallId, payload);
-      };
-      currentLoop = deps.voiceLoopFactory(event.callId, sendAudio);
-      deps.log(`eal agent: accepting call ${event.callId} from device ${event.fromDeviceId}`);
-      connection.acceptCall(event.callId);
+      void acceptCall(event.callId, event.fromDeviceId, deps.voiceLoopFactory);
       return;
     }
     if (event.type === 'call:hung-up') {
@@ -83,6 +115,38 @@ export function installAgentPhoneHandler(
     }
     deps.log(`eal agent: family-phone event ${event.type}`);
   });
+
+  async function acceptCall(
+    callId: string,
+    fromDeviceId: number,
+    factory: (input: VoiceLoopFactoryInput) => VoiceLoop,
+  ): Promise<void> {
+    let callerKind: FamilyPhoneDeviceKind | null = null;
+    if (deps.lookupDeviceKind !== undefined) {
+      try {
+        callerKind = await deps.lookupDeviceKind(fromDeviceId);
+      } catch (err) {
+        deps.log(
+          `eal agent: device-kind lookup failed for ${fromDeviceId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    // The call may have been hung up while the lookup was in flight.
+    if (currentCallId !== callId) return;
+
+    const sendAudio = (payload: Uint8Array): void => {
+      if (currentCallId !== null) connection.sendAudio(currentCallId, payload);
+    };
+    const sendText = (text: string): void => {
+      if (currentCallId !== null) connection.sendText(currentCallId, text);
+    };
+    currentLoop = factory({ callId, fromDeviceId, sendAudio, sendText, callerKind });
+    deps.log(
+      `eal agent: accepting call ${callId} from device ${fromDeviceId}` +
+        (callerKind !== null ? ` (kind=${callerKind})` : ''),
+    );
+    connection.acceptCall(callId);
+  }
 
   const offAudio = connection.subscribeAudio((callId, payload) => {
     if (callId === currentCallId && currentLoop) currentLoop.onInboundFrame(payload);

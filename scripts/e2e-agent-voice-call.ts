@@ -73,7 +73,12 @@ interface PairedClient {
   audio: { callId: string; payload: Uint8Array }[];
 }
 
-async function pairCallerClient(apiUrl: string, token: string, label: string): Promise<PairedClient> {
+async function pairCallerClient(
+  apiUrl: string,
+  token: string,
+  label: string,
+  kind: 'handset' | 'pwa' = 'handset',
+): Promise<PairedClient> {
   const client = createEalClient(apiUrl, { token });
   const { userCode } = await client.startFamilyPhonePair();
   const kp = await crypto.subtle.generateKey(
@@ -82,12 +87,16 @@ async function pairCallerClient(apiUrl: string, token: string, label: string): P
     ['sign', 'verify'],
   );
   const spki = new Uint8Array(await crypto.subtle.exportKey('spki', kp.publicKey));
+  // Caller's kind matters now: the agent sees it via lookupDeviceKind
+  // and decides whether to send PCM audio (handset) or text frames
+  // (pwa). The user-initiated scenario asserts on audio, so it pairs
+  // as a handset; the scheduled scenario does not care.
   const { deviceId } = await client.completeFamilyPhonePair({
     userCode,
     publicKey: toBase64Url(spki),
     alg: 'ES256',
     label,
-    kind: 'pwa',
+    kind,
   });
   const conn = await client.connectFamilyPhoneDevice({ deviceId, privateKey: kp.privateKey });
   const events: FamilyPhoneCallEvent[] = [];

@@ -896,6 +896,9 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
           frame.set(payload, 17);
           ws.send(frame);
         },
+        sendText(callId, text) {
+          sendCall({ type: 'call:text', call_id: callId, text });
+        },
         subscribeAudio(handler) {
           audioSubscribers.add(handler);
           return () => audioSubscribers.delete(handler);
@@ -1083,6 +1086,13 @@ function parseFamilyPhoneCallEvent(raw: string): FamilyPhoneCallEvent | null {
       return { type: t, ...base, reason: parsed.reason };
     }
     return { type: t, ...base };
+  }
+  if (
+    t === 'call:text' &&
+    'call_id' in parsed && typeof parsed.call_id === 'string' &&
+    'text' in parsed && typeof parsed.text === 'string'
+  ) {
+    return { type: 'call:text', callId: parsed.call_id, text: parsed.text };
   }
   if (
     t === 'presence:changed' &&

@@ -111,6 +111,30 @@ describe('createVoiceLoop', () => {
     expect(spies.sentFrames.length).toBe(4);
   });
 
+  test('text mode: sendText replaces TTS+audio for each sentence', async () => {
+    const { deps, spies } = makeDeps('Hello there. Good to hear you.');
+    const sentTexts: string[] = [];
+    deps.sendText = (text) => sentTexts.push(text);
+    const loop = createVoiceLoop(deps, {
+      ...FAST_OPTIONS,
+      // The text branch's half-duplex hold is word-count × 350 ms with
+      // a 300 ms minimum. Drop both to zero for the test by passing a
+      // single space sentence — but the test owns the reply, so it's
+      // cleaner to keep the reply natural and just let the flush()
+      // microtask drain be long enough.
+    });
+
+    for (let i = 0; i < 4; i++) loop.onInboundFrame(speechFrame(FAST_OPTIONS.samplesPerFrame));
+    for (let i = 0; i < 3; i++) loop.onInboundFrame(silenceFrame(FAST_OPTIONS.samplesPerFrame));
+
+    await flush();
+
+    expect(spies.sttCalls).toBe(1);
+    expect(spies.ttsCalls).toEqual([]);
+    expect(spies.sentFrames.length).toBe(0);
+    expect(sentTexts).toEqual(['Hello there.', 'Good to hear you.']);
+  });
+
   test('drops sub-threshold thumps without invoking STT', async () => {
     const { deps, spies } = makeDeps('ok');
     const loop = createVoiceLoop(deps, FAST_OPTIONS);

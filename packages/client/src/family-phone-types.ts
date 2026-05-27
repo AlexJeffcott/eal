@@ -53,6 +53,7 @@ export type FamilyPhoneCallEvent =
   | { type: 'call:cancelled'; callId: string }
   | { type: 'call:hung-up'; callId: string; reason?: string }
   | { type: 'call:unanswered'; callId: string }
+  | { type: 'call:text'; callId: string; text: string }
   | { type: 'presence:changed'; deviceId: number; online: boolean }
   | { type: 'directory:changed' }
   | { type: 'push:subscribed' }
@@ -173,6 +174,13 @@ export interface FamilyPhoneDeviceConnection {
    * callers can stay codec-agnostic.
    */
   sendAudio(callId: string, payload: Uint8Array): void;
+  /**
+   * Send a text frame on an active call — the spoken-reply equivalent of
+   * `sendAudio` for peers that can synthesise locally (PWAs via the Web
+   * Speech API). The server forwards verbatim through the same WS as
+   * audio frames; the receiving client decides how to render it.
+   */
+  sendText(callId: string, text: string): void;
   /**
    * Subscribe to audio frames arriving for any active call; returns an
    * unsubscribe. The handler receives the call id and the codec payload —

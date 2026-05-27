@@ -341,6 +341,28 @@ export function createFamilyPhoneWsHandler(
           return;
         }
 
+        case 'call:text': {
+          // The text-mode reply lane. The agent (today the only sender)
+          // posts spoken text instead of synthesised PCM when the peer
+          // can render it locally — PWAs via the Web Speech API. The
+          // server treats it like any other call:* frame: only forward
+          // while the call is connected; the peer is whoever isn't us.
+          const callId = readCallId(msg);
+          if (!callId) return;
+          if (!('text' in msg) || typeof msg.text !== 'string') return;
+          const text = msg.text;
+          const call = calls.get(callId);
+          if (!call || call.state !== 'connected') return;
+          const peer = peerOf(call, ws.id);
+          if (!peer) return;
+          ctx.ws.sendTo(peer.wsId, {
+            type: 'call:text',
+            call_id: callId,
+            text,
+          });
+          return;
+        }
+
         case 'call:hangup': {
           const callId = readCallId(msg);
           if (!callId) return;
