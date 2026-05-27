@@ -1,0 +1,367 @@
+import { describe, expect, test } from 'bun:test';
+import type {
+  AgentAction,
+  AgentActionResult,
+  AgentRule,
+  AgentRuleKind,
+  EalClient,
+  UpsertAgentRuleInput,
+} from '@eal/client';
+import { tickOnce } from './agent-scheduler.ts';
+
+interface RecordedCreatePlaceCall {
+  targetDeviceId: number;
+  trigger: 'scheduled' | 'tool';
+  ruleId: number | null;
+}
+
+interface FakeClientState {
+  rules: AgentRule[];
+  /** Override the next `createAgentPlaceCallAction` return value, FIFO. */
+  placeCallQueue: Array<AgentAction | null>;
+  recordedCreates: RecordedCreatePlaceCall[];
+  recordedUpserts: UpsertAgentRuleInput[];
+  listAgentRulesError: Error | null;
+}
+
+function defaultPlaceCall(input: RecordedCreatePlaceCall): AgentAction {
+  return {
+    id: 1,
+    ruleId: input.ruleId,
+    kind: 'place_call',
+    targetDeviceId: input.targetDeviceId,
+    trigger: input.trigger,
+    result: 'pending',
+    callId: null,
+    error: null,
+    createdAt: new Date().toISOString(),
+    finishedAt: null,
+  };
+}
+
+function makeFakeClient(state: FakeClientState): EalClient {
+  function notImplemented(name: string): () => never {
+    return () => {
+      throw new Error(`fake EalClient: ${name} not stubbed`);
+    };
+  }
+  return {
+    connect: notImplemented('connect'),
+    disconnect: notImplemented('disconnect'),
+    registerPasskey: notImplemented('registerPasskey'),
+    signInWithPasskey: notImplemented('signInWithPasskey'),
+    signOut: notImplemented('signOut'),
+    getCurrentUser: notImplemented('getCurrentUser'),
+    listUsers: notImplemented('listUsers'),
+    startCliPair: notImplemented('startCliPair'),
+    pollCliPair: notImplemented('pollCliPair'),
+    claimCliPair: notImplemented('claimCliPair'),
+    createTask: notImplemented('createTask'),
+    listTasks: notImplemented('listTasks'),
+    getTask: notImplemented('getTask'),
+    updateTask: notImplemented('updateTask'),
+    completeTask: notImplemented('completeTask'),
+    reopenTask: notImplemented('reopenTask'),
+    deleteTask: notImplemented('deleteTask'),
+    restoreTask: notImplemented('restoreTask'),
+    cloneTask: notImplemented('cloneTask'),
+    subscribeTaskEvents: notImplemented('subscribeTaskEvents'),
+    listFamilyPhoneDevices: notImplemented('listFamilyPhoneDevices'),
+    startFamilyPhonePair: notImplemented('startFamilyPhonePair'),
+    completeFamilyPhonePair: notImplemented('completeFamilyPhonePair'),
+    deleteFamilyPhoneDevice: notImplemented('deleteFamilyPhoneDevice'),
+    renameFamilyPhoneDevice: notImplemented('renameFamilyPhoneDevice'),
+    connectFamilyPhoneDevice: notImplemented('connectFamilyPhoneDevice'),
+    async listAgentRules(): Promise<AgentRule[]> {
+      if (state.listAgentRulesError !== null) throw state.listAgentRulesError;
+      return state.rules;
+    },
+    async upsertAgentRule(input: UpsertAgentRuleInput): Promise<AgentRule> {
+      state.recordedUpserts.push(input);
+      const id = input.id ?? -1;
+      const idx = state.rules.findIndex((r) => r.id === id);
+      const now = new Date().toISOString();
+      const updated: AgentRule = {
+        id,
+        name: input.name,
+        enabled: input.enabled,
+        targetDeviceId: input.targetDeviceId,
+        kind: input.kind,
+        body: input.body ?? null,
+        systemPrompt: input.systemPrompt ?? null,
+        nextFireAt: input.nextFireAt,
+        intervalSec: input.intervalSec ?? null,
+        cooldownSec: input.cooldownSec ?? 0,
+        lastFiredAt: idx >= 0 ? state.rules[idx]?.lastFiredAt ?? null : null,
+        createdAt: idx >= 0 ? state.rules[idx]?.createdAt ?? now : now,
+        updatedAt: now,
+      };
+      if (idx >= 0) state.rules[idx] = updated;
+      else state.rules.push(updated);
+      return updated;
+    },
+    deleteAgentRule: notImplemented('deleteAgentRule'),
+    async createAgentPlaceCallAction(input): Promise<AgentAction | null> {
+      const recorded: RecordedCreatePlaceCall = {
+        targetDeviceId: input.targetDeviceId,
+        trigger: input.trigger,
+        ruleId: input.ruleId ?? null,
+      };
+      state.recordedCreates.push(recorded);
+      if (state.placeCallQueue.length > 0) {
+        const head = state.placeCallQueue.shift();
+        if (head === undefined) throw new Error('placeCallQueue underflow');
+        return head;
+      }
+      return defaultPlaceCall(recorded);
+    },
+    attachAgentCall: notImplemented('attachAgentCall'),
+    finishAgentAction: notImplemented('finishAgentAction'),
+    listAgentActions: notImplemented('listAgentActions'),
+    listMessages: notImplemented('listMessages'),
+    clearChat: notImplemented('clearChat'),
+    sendChat: notImplemented('sendChat'),
+    subscribeChatEvents: notImplemented('subscribeChatEvents'),
+    connectAsAgent: notImplemented('connectAsAgent'),
+    sendChatReply: notImplemented('sendChatReply'),
+  };
+}
+
+function rule(partial: Partial<AgentRule> & { id: number }): AgentRule {
+  return {
+    name: `rule-${partial.id}`,
+    enabled: true,
+    targetDeviceId: 100,
+    kind: 'place_call' satisfies AgentRuleKind,
+    body: 'ring',
+    systemPrompt: null,
+    nextFireAt: '2025-01-01T00:00:00.000Z',
+    intervalSec: null,
+    cooldownSec: 0,
+    lastFiredAt: null,
+    createdAt: '2025-01-01T00:00:00.000Z',
+    updatedAt: '2025-01-01T00:00:00.000Z',
+    ...partial,
+  };
+}
+
+function newState(rules: AgentRule[], placeCallQueue: Array<AgentAction | null> = []): FakeClientState {
+  return {
+    rules,
+    placeCallQueue,
+    recordedCreates: [],
+    recordedUpserts: [],
+    listAgentRulesError: null,
+  };
+}
+
+const T = (iso: string) => new Date(iso);
+
+describe('agent scheduler — tickOnce', () => {
+  test('skips a rule whose nextFireAt is in the future', async () => {
+    const state = newState([
+      rule({ id: 1, nextFireAt: '2025-01-01T01:00:00.000Z' }),
+    ]);
+    const r = await tickOnce({
+      client: makeFakeClient(state),
+      now: () => T('2025-01-01T00:00:00.000Z'),
+      log: () => {},
+    });
+    expect(r.due).toEqual([]);
+    expect(state.recordedCreates).toEqual([]);
+  });
+
+  test('skips a disabled rule even when its nextFireAt is in the past', async () => {
+    const state = newState([
+      rule({
+        id: 1,
+        enabled: false,
+        nextFireAt: '2024-12-01T00:00:00.000Z',
+      }),
+    ]);
+    const r = await tickOnce({
+      client: makeFakeClient(state),
+      now: () => T('2025-01-01T00:00:00.000Z'),
+      log: () => {},
+    });
+    expect(r.due).toEqual([]);
+  });
+
+  test('fires a due place_call rule: creates an action and advances nextFireAt', async () => {
+    const state = newState([
+      rule({
+        id: 7,
+        targetDeviceId: 42,
+        nextFireAt: '2024-12-01T00:00:00.000Z',
+        intervalSec: 3600,
+      }),
+    ]);
+    const r = await tickOnce({
+      client: makeFakeClient(state),
+      now: () => T('2025-01-01T10:00:00.000Z'),
+      log: () => {},
+    });
+    expect(r.advanced).toEqual([7]);
+    expect(state.recordedCreates).toEqual([
+      { targetDeviceId: 42, trigger: 'scheduled', ruleId: 7 },
+    ]);
+    expect(state.recordedUpserts).toHaveLength(1);
+    const upsert = state.recordedUpserts[0];
+    expect(upsert?.id).toBe(7);
+    expect(upsert?.nextFireAt).toBe('2025-01-01T11:00:00.000Z');
+  });
+
+  test('one-shot rule (intervalSec=null) advances to a far-future sentinel and does not re-fire', async () => {
+    const state = newState([
+      rule({
+        id: 9,
+        nextFireAt: '2024-12-01T00:00:00.000Z',
+        intervalSec: null,
+      }),
+    ]);
+    const client = makeFakeClient(state);
+    await tickOnce({
+      client,
+      now: () => T('2025-01-01T00:00:00.000Z'),
+      log: () => {},
+    });
+    const second = await tickOnce({
+      client,
+      now: () => T('2025-01-01T01:00:00.000Z'),
+      log: () => {},
+    });
+    expect(second.due).toEqual([]);
+    expect(state.recordedCreates).toHaveLength(1);
+  });
+
+  test('busy lock (createAgentPlaceCallAction returns null) leaves the rule untouched', async () => {
+    const state = newState(
+      [
+        rule({
+          id: 3,
+          nextFireAt: '2024-12-01T00:00:00.000Z',
+          intervalSec: 60,
+        }),
+      ],
+      [null],
+    );
+    const r = await tickOnce({
+      client: makeFakeClient(state),
+      now: () => T('2025-01-01T00:00:00.000Z'),
+      log: () => {},
+    });
+    expect(r.busySkipped).toEqual([3]);
+    expect(r.advanced).toEqual([]);
+    expect(state.recordedUpserts).toEqual([]);
+  });
+
+  test('cooldown prevents re-fire when lastFiredAt is recent', async () => {
+    const state = newState([
+      rule({
+        id: 5,
+        nextFireAt: '2024-12-01T00:00:00.000Z',
+        cooldownSec: 600,
+        lastFiredAt: '2024-12-31T23:55:00.000Z',
+      }),
+    ]);
+    const r = await tickOnce({
+      client: makeFakeClient(state),
+      now: () => T('2025-01-01T00:00:00.000Z'),
+      log: () => {},
+    });
+    expect(r.due).toEqual([]);
+  });
+
+  test('cooldown lets the rule fire when enough time has passed', async () => {
+    const state = newState([
+      rule({
+        id: 5,
+        nextFireAt: '2024-12-01T00:00:00.000Z',
+        intervalSec: 60,
+        cooldownSec: 600,
+        lastFiredAt: '2024-12-31T23:30:00.000Z',
+      }),
+    ]);
+    const r = await tickOnce({
+      client: makeFakeClient(state),
+      now: () => T('2025-01-01T00:00:00.000Z'),
+      log: () => {},
+    });
+    expect(r.advanced).toEqual([5]);
+  });
+
+  test('voice_message rules are recognised but deferred (no action created, rule untouched)', async () => {
+    const state = newState([
+      rule({
+        id: 11,
+        kind: 'voice_message',
+        nextFireAt: '2024-12-01T00:00:00.000Z',
+        intervalSec: 3600,
+      }),
+    ]);
+    const r = await tickOnce({
+      client: makeFakeClient(state),
+      now: () => T('2025-01-01T00:00:00.000Z'),
+      log: () => {},
+    });
+    expect(r.notImplemented).toEqual([11]);
+    expect(state.recordedCreates).toEqual([]);
+    expect(state.recordedUpserts).toEqual([]);
+  });
+
+  test('listAgentRules failure is captured and the tick returns empty', async () => {
+    const state = newState([]);
+    state.listAgentRulesError = new Error('boom');
+    const logs: string[] = [];
+    const r = await tickOnce({
+      client: makeFakeClient(state),
+      now: () => T('2025-01-01T00:00:00.000Z'),
+      log: (line) => logs.push(line),
+    });
+    expect(r.due).toEqual([]);
+    expect(logs.some((l) => l.includes('boom'))).toBe(true);
+  });
+
+  test('per-rule errors are captured without aborting the tick', async () => {
+    const state = newState(
+      [
+        rule({
+          id: 1,
+          nextFireAt: '2024-12-01T00:00:00.000Z',
+          intervalSec: 3600,
+        }),
+        rule({
+          id: 2,
+          nextFireAt: '2024-12-01T00:00:00.000Z',
+          intervalSec: 3600,
+        }),
+      ],
+      [],
+    );
+    // First create throws; second succeeds.
+    const client = makeFakeClient(state);
+    let firstCall = true;
+    const originalCreate = client.createAgentPlaceCallAction;
+    client.createAgentPlaceCallAction = async (input) => {
+      if (firstCall) {
+        firstCall = false;
+        throw new Error('network down');
+      }
+      return originalCreate.call(client, input);
+    };
+    const r = await tickOnce({
+      client,
+      now: () => T('2025-01-01T00:00:00.000Z'),
+      log: () => {},
+    });
+    expect(r.errors).toHaveLength(1);
+    expect(r.errors[0]?.ruleId).toBe(1);
+    expect(r.advanced).toEqual([2]);
+  });
+});
+
+/** Used in tests to satisfy the `AgentActionResult` discriminant where
+ * the value is irrelevant; left here to keep all imports above touched
+ * by at least one reference. */
+const _unused: AgentActionResult = 'pending';
+void _unused;
