@@ -36,7 +36,9 @@ import type {
   FamilyPhonePairCompleteInput,
   FamilyPhonePairCompleteResult,
   FamilyPhonePairStartResult,
+  PostVoiceMessageInput,
   UpsertAgentRuleInput,
+  VoiceMessage,
 } from './family-phone-types.ts';
 
 const TOKEN_STORAGE_KEY = 'eal-token';
@@ -256,6 +258,16 @@ export interface EalClient {
   ): Promise<AgentAction>;
   /** Most-recent-first audit log, optionally filtered to one rule. */
   listAgentActions(input?: { limit?: number; ruleId?: number }): Promise<AgentAction[]>;
+
+  // ── Voicemail ────────────────────────────────────────────────────────────
+  /** Post a voicemail row, attaching synthesised PCM audio. */
+  postVoiceMessage(input: PostVoiceMessageInput): Promise<VoiceMessage>;
+  /** Voicemails for a device the caller owns, optionally unread-only. */
+  listVoiceMessages(input?: { deviceId?: number; unreadOnly?: boolean }): Promise<VoiceMessage[]>;
+  /** Stream a voicemail as a WAV file. The returned blob includes the header. */
+  getVoiceMessageAudio(id: number): Promise<ArrayBuffer>;
+  /** Stamp `readAt` on a voicemail. Idempotent. */
+  markVoiceMessageRead(id: number): Promise<VoiceMessage>;
 
   // ── Chat (browser side) ──────────────────────────────────────────────────
   /** Load the signed-in user's current assistant conversation, oldest first. */
@@ -962,7 +974,67 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
       const { actions } = await getJsonOrThrow<{ actions: AgentAction[] }>(path);
       return actions;
     },
+
+    async postVoiceMessage(input): Promise<VoiceMessage> {
+      const body: Record<string, unknown> = {
+        to_device_id: input.toDeviceId,
+        body: input.body,
+        audio_b64: bytesToBase64(input.audio),
+      };
+      if (input.fromDeviceId !== undefined) body['from_device_id'] = input.fromDeviceId;
+      if (input.fromExternal !== undefined) body['from_external'] = input.fromExternal;
+      if (input.sampleRate !== undefined) body['sample_rate'] = input.sampleRate;
+      if (input.channels !== undefined) body['channels'] = input.channels;
+      const { voiceMessage } = await postJson<{ voiceMessage: VoiceMessage }>(
+        '/api/family-phone/voice-messages',
+        body,
+      );
+      return voiceMessage;
+    },
+
+    async listVoiceMessages(input): Promise<VoiceMessage[]> {
+      const params = new URLSearchParams();
+      if (input?.deviceId !== undefined) params.set('device_id', String(input.deviceId));
+      if (input?.unreadOnly === true) params.set('unread', '1');
+      const query = params.toString();
+      const path = `/api/family-phone/voice-messages${query.length === 0 ? '' : `?${query}`}`;
+      const { voiceMessages } = await getJsonOrThrow<{ voiceMessages: VoiceMessage[] }>(path);
+      return voiceMessages;
+    },
+
+    async getVoiceMessageAudio(id): Promise<ArrayBuffer> {
+      const response = await fetch(
+        `${apiUrl}/api/family-phone/voice-messages/${id}/audio`,
+        { headers: authHeaders() },
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(extractServerError(text));
+      }
+      return response.arrayBuffer();
+    },
+
+    async markVoiceMessageRead(id): Promise<VoiceMessage> {
+      const { voiceMessage } = await postJson<{ voiceMessage: VoiceMessage }>(
+        `/api/family-phone/voice-messages/${id}/read`,
+        {},
+      );
+      return voiceMessage;
+    },
   };
+}
+
+/**
+ * Encode a byte array as base64 without leaning on Node's Buffer (the
+ * client runs in both the browser and Bun). One pass into a binary
+ * string then `btoa` — fine for the kilobyte-sized voicemail payloads
+ * the agent worker posts; larger payloads would want a streaming
+ * encoder.
+ */
+function bytesToBase64(bytes: Uint8Array): string {
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s);
 }
 
 /** Binary tag claimed by family-phone for audio frames; mirrors the server. */

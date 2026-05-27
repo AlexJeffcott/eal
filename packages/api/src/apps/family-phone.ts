@@ -2,6 +2,7 @@ import { Elysia } from 'elysia';
 import { familyPhoneHttpRoutes } from '../handlers/family-phone.http.ts';
 import { familyPhonePairHttpRoutes } from '../handlers/family-phone-pair.http.ts';
 import { familyPhoneDeviceAuthHttpRoutes } from '../handlers/family-phone-device-auth.http.ts';
+import { familyPhoneVoicemailHttpRoutes } from '../handlers/family-phone-voicemail.http.ts';
 import { createFamilyPhoneWsHandler } from '../handlers/family-phone.ws.ts';
 import type { ApiApp } from './types.ts';
 
@@ -81,6 +82,29 @@ CREATE TABLE IF NOT EXISTS family_phone_push_subscriptions (
   updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_family_phone_push_subs_device_id ON family_phone_push_subscriptions (device_id);
+
+-- Voicemails stored for a target device. The agent worker is the
+-- first writer (phase 6) but the column shape is wider than that:
+-- from_device_id is nullable + from_external carries a phase-7
+-- PSTN caller's display name or E.164. Audio is raw 16-bit signed
+-- little-endian PCM at the recorded sample_rate / channels; the
+-- WAV header is generated on read so the wire format stays canonical
+-- and SQLite stores fewer bytes per row.
+CREATE TABLE IF NOT EXISTS family_phone_voice_messages (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  to_device_id    INTEGER NOT NULL REFERENCES family_phone_devices(id) ON DELETE CASCADE,
+  from_device_id  INTEGER REFERENCES family_phone_devices(id) ON DELETE SET NULL,
+  from_external   TEXT,
+  body            TEXT    NOT NULL,
+  audio_blob      BLOB    NOT NULL,
+  sample_rate     INTEGER NOT NULL DEFAULT 24000,
+  channels        INTEGER NOT NULL DEFAULT 1,
+  duration_ms     INTEGER NOT NULL,
+  read_at         TEXT,
+  created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_family_phone_voice_messages_to_read
+  ON family_phone_voice_messages (to_device_id, read_at);
 `;
 
 export const familyPhoneApp: ApiApp = {
@@ -120,7 +144,11 @@ export const familyPhoneApp: ApiApp = {
       onDirectoryChanged: broadcastDirectoryChanged,
     });
     const deviceAuth = familyPhoneDeviceAuthHttpRoutes({ db: ctx.db });
-    return new Elysia().use(devices).use(pair).use(deviceAuth);
+    const voicemail = familyPhoneVoicemailHttpRoutes({
+      db: ctx.db,
+      getPrincipal: ctx.getPrincipal,
+    });
+    return new Elysia().use(devices).use(pair).use(deviceAuth).use(voicemail);
   },
   ws: {
     prefix: 'call',

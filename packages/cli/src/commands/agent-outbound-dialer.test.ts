@@ -132,6 +132,10 @@ function makeClient(): FakeClient {
     subscribeChatEvents: notImplemented('subscribeChatEvents'),
     connectAsAgent: notImplemented('connectAsAgent'),
     sendChatReply: notImplemented('sendChatReply'),
+    postVoiceMessage: notImplemented('postVoiceMessage'),
+    listVoiceMessages: notImplemented('listVoiceMessages'),
+    getVoiceMessageAudio: notImplemented('getVoiceMessageAudio'),
+    markVoiceMessageRead: notImplemented('markVoiceMessageRead'),
   };
   return {
     client,

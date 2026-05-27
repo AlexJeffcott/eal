@@ -122,6 +122,35 @@ export interface AgentAction {
 }
 
 /**
+ * Voice message metadata as the wire returns it. The audio bytes are
+ * fetched separately via `getVoiceMessageAudio` to keep list payloads
+ * cheap.
+ */
+export interface VoiceMessage {
+  id: number;
+  toDeviceId: number;
+  fromDeviceId: number | null;
+  fromExternal: string | null;
+  body: string;
+  sampleRate: number;
+  channels: number;
+  durationMs: number;
+  readAt: string | null;
+  createdAt: string;
+}
+
+export interface PostVoiceMessageInput {
+  toDeviceId: number;
+  fromDeviceId?: number | null;
+  fromExternal?: string | null;
+  body: string;
+  /** Raw 16-bit signed little-endian PCM bytes. */
+  audio: Uint8Array;
+  sampleRate?: number;
+  channels?: number;
+}
+
+/**
  * A live device-authenticated WebSocket. Returned by
  * `EalClient.connectFamilyPhoneDevice`; the caller subscribes to events,
  * places calls, accepts/rejects/hangups, and closes when the device leaves

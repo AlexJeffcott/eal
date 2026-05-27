@@ -16,10 +16,12 @@ import type {
   HouseholdMember,
   ListTasksInput,
   Message,
+  PostVoiceMessageInput,
   Task,
   TaskDetail,
   TaskEvent,
   UpsertAgentRuleInput,
+  VoiceMessage,
 } from '@eal/client';
 
 export interface MockEalClient extends EalClient {
@@ -383,6 +385,51 @@ export function createMockEalClient(): MockEalClient {
     async listAgentActions(): Promise<AgentAction[]> {
       requireSignedIn();
       return [];
+    },
+
+    async postVoiceMessage(input: PostVoiceMessageInput): Promise<VoiceMessage> {
+      requireSignedIn();
+      return {
+        id: 1,
+        toDeviceId: input.toDeviceId,
+        fromDeviceId: input.fromDeviceId ?? null,
+        fromExternal: input.fromExternal ?? null,
+        body: input.body,
+        sampleRate: input.sampleRate ?? 24000,
+        channels: input.channels ?? 1,
+        durationMs: Math.max(
+          1,
+          Math.round((input.audio.byteLength * 1000) / ((input.sampleRate ?? 24000) * (input.channels ?? 1) * 2)),
+        ),
+        readAt: null,
+        createdAt: isoNow(),
+      };
+    },
+
+    async listVoiceMessages(): Promise<VoiceMessage[]> {
+      requireSignedIn();
+      return [];
+    },
+
+    async getVoiceMessageAudio(): Promise<ArrayBuffer> {
+      requireSignedIn();
+      return new ArrayBuffer(0);
+    },
+
+    async markVoiceMessageRead(id: number): Promise<VoiceMessage> {
+      requireSignedIn();
+      return {
+        id,
+        toDeviceId: 1,
+        fromDeviceId: null,
+        fromExternal: null,
+        body: '',
+        sampleRate: 24000,
+        channels: 1,
+        durationMs: 1,
+        readAt: isoNow(),
+        createdAt: isoNow(),
+      };
     },
 
     async createTask(input): Promise<Task> {

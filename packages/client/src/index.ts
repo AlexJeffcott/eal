@@ -36,5 +36,7 @@ export type {
   FamilyPhonePairCompleteInput,
   FamilyPhonePairCompleteResult,
   FamilyPhonePairStartResult,
+  PostVoiceMessageInput,
   UpsertAgentRuleInput,
+  VoiceMessage,
 } from './family-phone-types.ts';
