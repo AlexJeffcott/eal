@@ -12,6 +12,7 @@ import {
   $activeCall,
   $callNote,
   $callTranscript,
+  $diagnosticsResult,
   $incomingCall,
   $playingVoiceMessageId,
   $voiceMessageAudioUrl,
@@ -19,6 +20,7 @@ import {
   $voiceMessagesError,
   type ActiveCall,
   type CallTranscriptEntry,
+  type DiagnosticsResult,
 } from './stores.ts';
 import {
   $deviceConnection,
@@ -110,6 +112,49 @@ function ActiveCallSurface(props: { call: ActiveCall; devices: FamilyPhoneDevice
       <Show when={() => $callTranscript.value.length > 0}>
         <CallTranscript entries={$callTranscript.value} />
       </Show>
+    </Surface>
+  );
+}
+
+function DiagnosticsCard(props: { result: DiagnosticsResult | null }) {
+  const variant: 'success' | 'danger' | 'info' = props.result?.tone ?? 'info';
+  return (
+    <Surface variant="callout" padding="var(--polly-space-md)" className="family-phone-diagnostics">
+      <Layout gap="var(--polly-space-sm)">
+        <Text as="h2" weight="bold">Diagnostics</Text>
+        <Text tone="muted">
+          Verify that this device can hear, speak, and is allowed to ring before placing a call.
+        </Text>
+        <Cluster gap="var(--polly-space-xs)">
+          <Button
+            tier="secondary"
+            label="Sound check"
+            data-action="family-phone:sound-check"
+          />
+          <Button
+            tier="secondary"
+            label="Mic check"
+            data-action="family-phone:mic-check"
+          />
+          <Button
+            tier="secondary"
+            label="Permissions check"
+            data-action="family-phone:permissions-check"
+          />
+        </Cluster>
+        <Show when={() => props.result !== null}>
+          {() => (
+            <Cluster gap="var(--polly-space-sm)" justify="space-between">
+              <Badge variant={variant}>{props.result?.message ?? ''}</Badge>
+              <Button
+                tier="tertiary"
+                label="Dismiss"
+                data-action="family-phone:dismiss-diagnostics"
+              />
+            </Cluster>
+          )}
+        </Show>
+      </Layout>
     </Surface>
   );
 }
@@ -343,6 +388,8 @@ export function FamilyPhonePanel() {
       <Surface variant="plain" padding="var(--polly-space-md)">
         <Text as="h1" weight="bold">Phone</Text>
       </Surface>
+
+      <DiagnosticsCard result={$diagnosticsResult.value} />
 
       <Show when={$callNote}>
         {(note) => <CallNoteStrip note={note} />}

@@ -40,6 +40,16 @@ export interface CallTranscriptEntry {
 }
 export const $callTranscript = $state<CallTranscriptEntry[]>([]);
 
+/** A one-shot result line from the diagnostics buttons (sound check, mic
+ *  check, permissions check). Mirrors `$callNote` in shape: rendered as
+ *  a strip the user can dismiss. `tone` lets the panel colour the strip
+ *  green/red without leaking the underlying check into the message text. */
+export interface DiagnosticsResult {
+  message: string;
+  tone: 'success' | 'danger' | 'info';
+}
+export const $diagnosticsResult = $state<DiagnosticsResult | null>(null);
+
 /** Voicemails addressed to the device this browser is paired as. The
  *  list is mirrored from `/api/family-phone/voice-messages?device_id=…`
  *  on every route entry plus after the audio handler stamps a row read. */
@@ -58,6 +68,7 @@ export interface FamilyPhoneStores {
   $activeCall: typeof $activeCall;
   $callNote: typeof $callNote;
   $callTranscript: typeof $callTranscript;
+  $diagnosticsResult: typeof $diagnosticsResult;
   $voiceMessages: typeof $voiceMessages;
   $voiceMessagesError: typeof $voiceMessagesError;
   $playingVoiceMessageId: typeof $playingVoiceMessageId;
@@ -70,6 +81,7 @@ export function createFamilyPhoneStores(): FamilyPhoneStores {
     $activeCall,
     $callNote,
     $callTranscript,
+    $diagnosticsResult,
     $voiceMessages,
     $voiceMessagesError,
     $playingVoiceMessageId,
@@ -82,6 +94,7 @@ export function resetFamilyPhoneStores(): void {
   $activeCall.value = null;
   $callNote.value = null;
   $callTranscript.value = [];
+  $diagnosticsResult.value = null;
   $voiceMessages.value = [];
   $voiceMessagesError.value = null;
   $playingVoiceMessageId.value = null;

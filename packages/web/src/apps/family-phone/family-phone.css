@@ -39,6 +39,10 @@
   border-left: 4px solid var(--polly-color-warning, #f93);
 }
 
+.family-phone-diagnostics {
+  border-left: 4px solid var(--polly-color-info, #2af);
+}
+
 .family-phone-transcript {
   margin-top: var(--polly-space-sm);
   padding: var(--polly-space-sm);

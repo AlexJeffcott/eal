@@ -6,6 +6,7 @@
   "main": "src/main.tsx",
   "dependencies": {
     "@eal/client": "workspace:*",
+    "@eal/shared": "workspace:*",
     "@fairfox/polly": "0.76.0",
     "@preact/signals": "2.9.0",
     "@simplewebauthn/browser": "11.0.0",
@@ -13,7 +14,6 @@
     "preact": "10.29.1"
   },
   "devDependencies": {
-    "@eal/client-mock": "workspace:*",
-    "@eal/shared": "workspace:*"
+    "@eal/client-mock": "workspace:*"
   }
 }

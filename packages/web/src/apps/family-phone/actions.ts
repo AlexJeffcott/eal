@@ -1,7 +1,12 @@
 import type { ActionRegistry } from '@fairfox/polly/actions';
 import type { AppStores } from '../../stores.ts';
 import type { FamilyPhoneCallEvent } from '@eal/client';
-import { $activeCall, $callNote, $callTranscript, $incomingCall } from './stores.ts';
+import {
+  $activeCall,
+  $callNote,
+  $callTranscript,
+  $incomingCall,
+} from './stores.ts';
 import { $deviceConnection, $devices } from '../devices/stores.ts';
 import {
   startAudioCapture,
@@ -15,6 +20,7 @@ import {
   speechSynthesis,
   SpeechSynthesisUtterance,
 } from '../../platform/speech-synthesis.ts';
+import { delay } from '@eal/shared';
 
 /**
  * Singletons for the in-page ringtone + browser notification. Both pull
@@ -468,5 +474,117 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
 
   'family-phone:dismiss-voicemail-error': ({ stores }) => {
     stores.$voiceMessagesError.value = null;
+  },
+
+  'family-phone:dismiss-diagnostics': ({ stores }) => {
+    stores.$diagnosticsResult.value = null;
+  },
+
+  // Speak a short test phrase from a real user gesture. On iOS this both
+  // primes the SpeechSynthesis API for the rest of the page's lifetime
+  // and confirms that the device's speaker is actually producing sound
+  // (mute switch, standalone PWA support, output route all in one).
+  'family-phone:sound-check': ({ stores }) => {
+    if (speechSynthesis === null || SpeechSynthesisUtterance === null) {
+      stores.$diagnosticsResult.value = {
+        message: 'Speech synthesis is not available in this browser.',
+        tone: 'danger',
+      };
+      return;
+    }
+    primeSpeechSynthesis();
+    const u = new SpeechSynthesisUtterance(
+      'Sound check. If you can hear this, the agent will be audible during calls.',
+    );
+    u.onend = (): void => {
+      stores.$diagnosticsResult.value = {
+        message: 'Sound check finished. If you heard nothing, check the mute switch and that the PWA is up to date.',
+        tone: 'info',
+      };
+    };
+    u.onerror = (): void => {
+      stores.$diagnosticsResult.value = {
+        message: 'Sound check failed — the browser refused the utterance.',
+        tone: 'danger',
+      };
+    };
+    speechSynthesis.speak(u);
+    stores.$diagnosticsResult.value = {
+      message: 'Sound check: speaking…',
+      tone: 'info',
+    };
+  },
+
+  // Open the microphone briefly and count frames. A successful capture
+  // proves that the permission is granted, the OS lets the browser have
+  // the mic, and the WebAudio graph wakes up — the same chain a real
+  // call depends on. Stops itself after a short window so the test
+  // never lingers.
+  'family-phone:mic-check': async ({ stores }) => {
+    let frameCount = 0;
+    let capture: AudioCapture | null = null;
+    stores.$diagnosticsResult.value = {
+      message: 'Mic check: listening for 1.5 seconds…',
+      tone: 'info',
+    };
+    try {
+      capture = await startAudioCapture(() => {
+        frameCount += 1;
+      });
+    } catch (err) {
+      stores.$diagnosticsResult.value = {
+        message: `Mic check failed: ${describeError(err)}`,
+        tone: 'danger',
+      };
+      return;
+    }
+    // 1.5s × (1 frame per 20ms) ≈ 75 frames if the graph is healthy.
+    await delay(1_500);
+    await capture.stop().catch(() => {});
+    if (frameCount === 0) {
+      stores.$diagnosticsResult.value = {
+        message: 'Mic check: microphone opened but produced no audio frames.',
+        tone: 'danger',
+      };
+      return;
+    }
+    stores.$diagnosticsResult.value = {
+      message: `Mic check OK — captured ${frameCount} frames in 1.5 s.`,
+      tone: 'success',
+    };
+  },
+
+  // Report the live state of every browser permission this app needs,
+  // and re-request the ones it can ask for from a gesture. The mic is
+  // not re-requested here — browsers tie that to the call-accept tap
+  // by design — but we surface its current state so the user knows
+  // whether the next call will trigger a fresh prompt.
+  'family-phone:permissions-check': async ({ stores }) => {
+    const lines: string[] = [];
+    if (typeof Notification === 'undefined') {
+      lines.push('Notifications: unsupported in this browser');
+    } else {
+      if (Notification.permission === 'default') {
+        try {
+          const next = await Notification.requestPermission();
+          lines.push(`Notifications: ${next}`);
+        } catch {
+          lines.push('Notifications: request failed');
+        }
+      } else {
+        lines.push(`Notifications: ${Notification.permission}`);
+      }
+    }
+    // The Permissions API microphone state is not exposed via the
+    // typed PermissionName union, so this check leaves it to the Mic
+    // check button — that one actually opens the device, which is a
+    // stronger signal than a permission state string anyway.
+    lines.push('Microphone: use the Mic check button to test');
+    const speech = speechSynthesis !== null ? 'available' : 'unavailable';
+    lines.push(`Speech synthesis: ${speech}`);
+    const tone = lines.some((l) => l.includes('denied') || l.includes('unavailable'))
+      ? 'danger'
+      : 'info';
+    stores.$diagnosticsResult.value = { message: lines.join(' · '), tone };
   },
 };
