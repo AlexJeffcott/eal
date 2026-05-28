@@ -43,6 +43,27 @@
   border-left: 4px solid var(--polly-color-info, #2af);
 }
 
+.family-phone-diag-result {
+  padding: var(--polly-space-sm);
+  border-radius: var(--polly-radius-sm, 0.25rem);
+  /* Long result messages must wrap, never overflow the card. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  background: var(--polly-color-surface-hover, rgba(0, 0, 0, 0.04));
+}
+
+.family-phone-diag-result--success {
+  background: var(--polly-color-success-soft, rgba(34, 197, 94, 0.12));
+}
+
+.family-phone-diag-result--danger {
+  background: var(--polly-color-danger-soft, rgba(239, 68, 68, 0.12));
+}
+
+.family-phone-diag-result--info {
+  background: var(--polly-color-info-soft, rgba(59, 130, 246, 0.1));
+}
+
 .family-phone-transcript {
   margin-top: var(--polly-space-sm);
   padding: var(--polly-space-sm);

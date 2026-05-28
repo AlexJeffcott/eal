@@ -144,14 +144,19 @@ function DiagnosticsCard(props: { result: DiagnosticsResult | null }) {
         </Cluster>
         <Show when={() => props.result !== null}>
           {() => (
-            <Cluster gap="var(--polly-space-sm)" justify="space-between">
-              <Badge variant={variant}>{props.result?.message ?? ''}</Badge>
-              <Button
-                tier="tertiary"
-                label="Dismiss"
-                data-action="family-phone:dismiss-diagnostics"
-              />
-            </Cluster>
+            <Layout
+              gap="var(--polly-space-xs)"
+              className={`family-phone-diag-result family-phone-diag-result--${variant}`}
+            >
+              <Text>{props.result?.message ?? ''}</Text>
+              <Cluster>
+                <Button
+                  tier="tertiary"
+                  label="Dismiss"
+                  data-action="family-phone:dismiss-diagnostics"
+                />
+              </Cluster>
+            </Layout>
           )}
         </Show>
       </Layout>
@@ -294,14 +299,16 @@ function VoicemailRow(props: { vm: VoiceMessage; devices: FamilyPhoneDevice[] })
 
 function VoicemailError(props: { error: string }) {
   return (
-    <Cluster gap="var(--polly-space-sm)" justify="space-between">
-      <Badge variant="danger">{props.error}</Badge>
-      <Button
-        tier="tertiary"
-        label="Dismiss"
-        data-action="family-phone:dismiss-voicemail-error"
-      />
-    </Cluster>
+    <Layout gap="var(--polly-space-xs)" className="family-phone-diag-result family-phone-diag-result--danger">
+      <Text>{props.error}</Text>
+      <Cluster>
+        <Button
+          tier="tertiary"
+          label="Dismiss"
+          data-action="family-phone:dismiss-voicemail-error"
+        />
+      </Cluster>
+    </Layout>
   );
 }
 
