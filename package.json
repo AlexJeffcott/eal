@@ -8,7 +8,13 @@
     "bun": ">=1.3.0"
   },
   "scripts": {
-    "devctl": "bun packages/devctl/index.ts"
+    "devctl": "bun packages/devctl/index.ts",
+    "mutation": "stryker run",
+    "mutation:specs": "stryker run stryker/specs.conf.json",
+    "mutation:shared": "stryker run stryker/shared.conf.json",
+    "mutation:cli-lib": "stryker run stryker/cli-lib.conf.json",
+    "mutation:web-logic": "stryker run stryker/web-logic.conf.json",
+    "mutation:handlers-shared": "stryker run stryker/handlers-shared.conf.json"
   },
   "devDependencies": {
     "@eal/shared": "workspace:*",

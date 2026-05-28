@@ -29,39 +29,51 @@
  * properties are not in the spec (they depend on per-message ordering rather
  * than per-call state) and are covered by the family-phone.ws tests.
  */
+// Stryker disable all -- declared initial value is overwritten by every test beforeEach; registry name not used at the test boundary
 import { $sharedState } from '@fairfox/polly/state';
 import { ensures, requires } from '@fairfox/polly/verify';
 
 export type CallState = 'nonexistent' | 'pending' | 'connected' | 'closed';
 
 export const callMachine = $sharedState<{ state: CallState }>('call', { state: 'nonexistent' });
+// Stryker restore all
 
 export function invite(): void {
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   requires(callMachine.value.state === 'nonexistent', 'invite: a call exists once per id');
   callMachine.value = { state: 'pending' };
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   ensures(callMachine.value.state === 'pending', 'invite: end pending');
 }
 
 export function accept(): void {
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   requires(callMachine.value.state === 'pending', 'accept: must be pending');
   callMachine.value = { state: 'connected' };
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   ensures(callMachine.value.state === 'connected', 'accept: end connected');
 }
 
 export function reject(): void {
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   requires(callMachine.value.state === 'pending', 'reject: must be pending');
   callMachine.value = { state: 'closed' };
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   ensures(callMachine.value.state === 'closed', 'reject: end closed');
 }
 
 export function cancel(): void {
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   requires(callMachine.value.state === 'pending', 'cancel: must be pending');
   callMachine.value = { state: 'closed' };
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   ensures(callMachine.value.state === 'closed', 'cancel: end closed');
 }
 
 export function hangup(): void {
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   requires(callMachine.value.state === 'connected', 'hangup: must be connected');
   callMachine.value = { state: 'closed' };
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   ensures(callMachine.value.state === 'closed', 'hangup: end closed');
 }

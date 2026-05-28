@@ -33,33 +33,43 @@
  * ║ that, via `bun devctl verify`.                                    ║
  * ╚═══════════════════════════════════════════════════════════════════╝
  */
+// Stryker disable all -- declared initial value is overwritten by every test beforeEach; registry name not used at the test boundary
 import { $sharedState } from '@fairfox/polly/state';
 import { ensures, requires } from '@fairfox/polly/verify';
 
 export type AuthPhase = 'anonymous' | 'authenticating' | 'authenticated';
 
 export const authMachine = $sharedState<{ phase: AuthPhase }>('auth', { phase: 'anonymous' });
+// Stryker restore all
 
 export function beginAuth(): void {
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   requires(authMachine.value.phase === 'anonymous', 'beginAuth: must start from anonymous');
   authMachine.value = { phase: 'authenticating' };
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   ensures(authMachine.value.phase === 'authenticating', 'beginAuth: end in authenticating');
 }
 
 export function completeAuth(): void {
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   requires(authMachine.value.phase === 'authenticating', 'completeAuth: must be in-flight');
   authMachine.value = { phase: 'authenticated' };
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   ensures(authMachine.value.phase === 'authenticated', 'completeAuth: end in authenticated');
 }
 
 export function cancelAuth(): void {
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   requires(authMachine.value.phase === 'authenticating', 'cancelAuth: only cancels an in-flight attempt');
   authMachine.value = { phase: 'anonymous' };
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   ensures(authMachine.value.phase === 'anonymous', 'cancelAuth: end in anonymous');
 }
 
 export function signOut(): void {
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   requires(authMachine.value.phase === 'authenticated', 'signOut: must be authenticated');
   authMachine.value = { phase: 'anonymous' };
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   ensures(authMachine.value.phase === 'anonymous', 'signOut: end in anonymous');
 }

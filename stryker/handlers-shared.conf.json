@@ -1,0 +1,25 @@
+{
+  "$schema": "../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "packageManager": "npm",
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "SKIP_TLS=1 bun test packages/api/src/handlers"
+  },
+  "coverageAnalysis": "off",
+  "checkers": [],
+  "reporters": ["clear-text", "progress"],
+  "mutate": [
+    "packages/api/src/handlers/tasks.shared.ts",
+    "packages/api/src/handlers/messages.shared.ts",
+    "packages/api/src/handlers/cli-pair.shared.ts"
+  ],
+  "thresholds": { "high": 90, "low": 70, "break": null },
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.git/**",
+    "**/.stryker-tmp/**"
+  ],
+  "timeoutMS": 30000,
+  "concurrency": 2
+}

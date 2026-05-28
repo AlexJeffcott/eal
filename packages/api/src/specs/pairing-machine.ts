@@ -25,6 +25,7 @@
  * not modelled here because TLC's state space doesn't include the key bytes;
  * the wire-contract tests in family-phone-pair.http.test.ts cover it.
  */
+// Stryker disable all -- declared initial value is overwritten by every test beforeEach; registry name not used at the test boundary
 import { $sharedState } from '@fairfox/polly/state';
 import { ensures, requires } from '@fairfox/polly/verify';
 
@@ -33,24 +34,32 @@ export type PairingState = 'nonexistent' | 'pending' | 'consumed' | 'expired';
 export const pairingMachine = $sharedState<{ state: PairingState }>('pairing', {
   state: 'nonexistent',
 });
+// Stryker restore all
 
 export function create(): void {
+  // Stryker disable all -- runtime no-op; only meaningful in TLA+ translation
   requires(
     pairingMachine.value.state === 'nonexistent',
     'create: a pair request only exists once per code',
   );
+  // Stryker restore all
   pairingMachine.value = { state: 'pending' };
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   ensures(pairingMachine.value.state === 'pending', 'create: end pending');
 }
 
 export function consume(): void {
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   requires(pairingMachine.value.state === 'pending', 'consume: must be pending');
   pairingMachine.value = { state: 'consumed' };
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   ensures(pairingMachine.value.state === 'consumed', 'consume: end consumed');
 }
 
 export function expire(): void {
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   requires(pairingMachine.value.state === 'pending', 'expire: must be pending');
   pairingMachine.value = { state: 'expired' };
+  // Stryker disable next-line all -- runtime no-op; only meaningful in TLA+ translation
   ensures(pairingMachine.value.state === 'expired', 'expire: end expired');
 }

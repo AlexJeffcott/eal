@@ -1,0 +1,28 @@
+{
+  "$schema": "../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "packageManager": "npm",
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "SKIP_TLS=1 bun test packages/cli/src/lib"
+  },
+  "coverageAnalysis": "off",
+  "checkers": [],
+  "reporters": ["clear-text", "progress"],
+  "mutate": [
+    "packages/cli/src/lib/audio-resample.ts",
+    "packages/cli/src/lib/wav.ts",
+    "packages/cli/src/lib/split-args.ts",
+    "packages/cli/src/lib/agent-key-import.ts",
+    "packages/cli/src/lib/token-store.ts",
+    "packages/cli/src/lib/agent-device-store.ts"
+  ],
+  "thresholds": { "high": 90, "low": 70, "break": null },
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.git/**",
+    "**/.stryker-tmp/**"
+  ],
+  "timeoutMS": 30000,
+  "concurrency": 2
+}

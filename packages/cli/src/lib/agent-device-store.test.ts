@@ -33,6 +33,16 @@ describe('agent-device-store', () => {
     expect(agentDevicePath()).toBe(path);
   });
 
+  test('agentDevicePath ignores an empty-string override and falls back to env', () => {
+    expect(agentDevicePath('')).toBe(path);
+  });
+
+  test('agentDevicePath ignores an empty env var and falls back to the default', () => {
+    process.env['EAL_AGENT_DEVICE_PATH'] = '';
+    const fallback = agentDevicePath();
+    expect(fallback.endsWith('.config/eal/family-phone-device.json')).toBe(true);
+  });
+
   test('readAgentDevice returns null when the file does not exist', () => {
     expect(readAgentDevice()).toBeNull();
   });
@@ -65,6 +75,61 @@ describe('agent-device-store', () => {
   test('readAgentDevice rejects a JSON object with missing fields', () => {
     writeFileSync(path, JSON.stringify({ deviceId: 1, label: 'l' }), 'utf8');
     expect(readAgentDevice()).toBeNull();
+  });
+
+  test('readAgentDevice rejects a non-object payload', () => {
+    writeFileSync(path, JSON.stringify('a string'), 'utf8');
+    expect(readAgentDevice()).toBeNull();
+  });
+
+  test('readAgentDevice rejects a JSON null payload', () => {
+    writeFileSync(path, JSON.stringify(null), 'utf8');
+    expect(readAgentDevice()).toBeNull();
+  });
+
+  test.each([
+    ['deviceId', 'not-a-number'],
+    ['privateKeyPkcs8B64', 7],
+    ['publicKeySpkiB64Url', false],
+    ['label', null],
+  ] as const)('readAgentDevice rejects a record with wrong-typed %s', (field, badValue) => {
+    const good: AgentDeviceRecord = {
+      deviceId: 1,
+      privateKeyPkcs8B64: 'k',
+      publicKeySpkiB64Url: 'p',
+      label: 'l',
+    };
+    writeFileSync(path, JSON.stringify({ ...good, [field]: badValue }), 'utf8');
+    expect(readAgentDevice()).toBeNull();
+  });
+
+  test.each(['deviceId', 'privateKeyPkcs8B64', 'publicKeySpkiB64Url', 'label'] as const)(
+    'readAgentDevice rejects a record missing %s',
+    (field) => {
+      const good: AgentDeviceRecord = {
+        deviceId: 1,
+        privateKeyPkcs8B64: 'k',
+        publicKeySpkiB64Url: 'p',
+        label: 'l',
+      };
+      const { [field]: _omitted, ...partial } = good;
+      writeFileSync(path, JSON.stringify(partial), 'utf8');
+      expect(readAgentDevice()).toBeNull();
+    },
+  );
+
+  test('writeAgentDevice creates the parent directory recursively', () => {
+    const nested = join(dir, 'a', 'b', 'c', 'family-phone-device.json');
+    writeAgentDevice(
+      {
+        deviceId: 1,
+        privateKeyPkcs8B64: 'k',
+        publicKeySpkiB64Url: 'p',
+        label: 'l',
+      },
+      nested,
+    );
+    expect(existsSync(nested)).toBe(true);
   });
 
   test('deleteAgentDevice removes the file and reports success', () => {

@@ -24,6 +24,14 @@ describe('token-store', () => {
     expect(tokenPath()).toBe(join(dir, 'token'));
   });
 
+  test('tokenPath honours an explicit override over the env var', () => {
+    expect(tokenPath('/elsewhere/token')).toBe('/elsewhere/token');
+  });
+
+  test('tokenPath ignores an empty-string override and falls back to env', () => {
+    expect(tokenPath('')).toBe(join(dir, 'token'));
+  });
+
   test('readToken returns null when the file does not exist', () => {
     expect(readToken()).toBeNull();
   });
