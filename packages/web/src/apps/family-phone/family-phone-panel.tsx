@@ -11,12 +11,14 @@ import type { FamilyPhoneDevice, VoiceMessage } from '@eal/client';
 import {
   $activeCall,
   $callNote,
+  $callTranscript,
   $incomingCall,
   $playingVoiceMessageId,
   $voiceMessageAudioUrl,
   $voiceMessages,
   $voiceMessagesError,
   type ActiveCall,
+  type CallTranscriptEntry,
 } from './stores.ts';
 import {
   $deviceConnection,
@@ -63,6 +65,16 @@ function IncomingCallBanner(props: {
   );
 }
 
+function CallTranscript(props: { entries: CallTranscriptEntry[] }) {
+  return (
+    <Layout gap="var(--polly-space-xs)" className="family-phone-transcript">
+      {props.entries.map((entry) => (
+        <Text key={entry.id}>{entry.text}</Text>
+      ))}
+    </Layout>
+  );
+}
+
 function ActiveCallSurface(props: { call: ActiveCall; devices: FamilyPhoneDevice[] }) {
   const { call } = props;
   const peer = deviceLabel(props.devices, call.peerDeviceId);
@@ -95,6 +107,9 @@ function ActiveCallSurface(props: { call: ActiveCall; devices: FamilyPhoneDevice
           disabled={call.state === 'closing'}
         />
       </Cluster>
+      <Show when={() => $callTranscript.value.length > 0}>
+        <CallTranscript entries={$callTranscript.value} />
+      </Show>
     </Surface>
   );
 }

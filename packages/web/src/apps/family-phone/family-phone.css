@@ -38,3 +38,12 @@
 .family-phone-pair-first {
   border-left: 4px solid var(--polly-color-warning, #f93);
 }
+
+.family-phone-transcript {
+  margin-top: var(--polly-space-sm);
+  padding: var(--polly-space-sm);
+  border-radius: var(--polly-radius-sm, 0.25rem);
+  background: var(--polly-color-surface-hover, rgba(0, 0, 0, 0.04));
+  max-height: 12rem;
+  overflow-y: auto;
+}

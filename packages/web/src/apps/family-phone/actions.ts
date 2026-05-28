@@ -1,7 +1,7 @@
 import type { ActionRegistry } from '@fairfox/polly/actions';
 import type { AppStores } from '../../stores.ts';
 import type { FamilyPhoneCallEvent } from '@eal/client';
-import { $activeCall, $callNote, $incomingCall } from './stores.ts';
+import { $activeCall, $callNote, $callTranscript, $incomingCall } from './stores.ts';
 import { $deviceConnection, $devices } from '../devices/stores.ts';
 import {
   startAudioCapture,
@@ -212,6 +212,11 @@ export function installCallEventHandlers(event: FamilyPhoneCallEvent): void {
       // The agent sends spoken text instead of audio when it knows this
       // peer can synthesise locally. Queue the sentence into the Web
       // Speech API; the browser plays it on the user's system voice.
+      // Also append to the in-call transcript so the user can read the
+      // line whether or not the speaker actually produces sound — iOS
+      // PWAs in standalone mode, the mute switch, and a noisy room all
+      // silently swallow the spoken version.
+      appendTranscript(event.text);
       speakText(event.text);
       return;
     }
@@ -269,14 +274,34 @@ function speakText(text: string): void {
  * arrive over the WebSocket — no gesture — so without priming the
  * very first utterance, and every utterance after it, plays nothing
  * on iOS. Call this from the click handlers that already exist
- * (place-call, accept-call); a zero-volume blank utterance is enough
- * to unlock the API for the rest of the page's lifetime.
+ * (place-call, accept-call). A short space-only utterance counts as
+ * the priming speak; iOS sometimes also needs the voice list pulled
+ * eagerly and the queue cleared before it will respect the first real
+ * utterance, so we do those here as well. Keep `volume` audible —
+ * volume=0 was observed on at least one iOS build to skip past the
+ * speak() entirely without the unlock side effect.
  */
 function primeSpeechSynthesis(): void {
   if (speechSynthesis === null || SpeechSynthesisUtterance === null) return;
+  try {
+    speechSynthesis.getVoices();
+  } catch {
+    /* best-effort */
+  }
+  speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(' ');
-  u.volume = 0;
   speechSynthesis.speak(u);
+}
+
+let nextTranscriptId = 1;
+
+function appendTranscript(text: string): void {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return;
+  $callTranscript.value = [
+    ...$callTranscript.value,
+    { id: nextTranscriptId++, role: 'agent', text: trimmed, at: new Date().toISOString() },
+  ];
 }
 
 function stopSpeaking(): void {
@@ -325,6 +350,7 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
       peerDeviceId: target,
       state: 'pending',
     };
+    stores.$callTranscript.value = [];
     primeSpeechSynthesis();
     conn.placeCall(target);
   },
@@ -343,6 +369,7 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
       state: 'pending',
     };
     stores.$incomingCall.value = null;
+    stores.$callTranscript.value = [];
     primeSpeechSynthesis();
     conn.acceptCall(callId);
   },

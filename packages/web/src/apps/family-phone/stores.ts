@@ -27,6 +27,19 @@ export const $activeCall = $state<ActiveCall | null>(null);
 /** Surfaced for one-shot info messages: "call rejected", "peer disconnected". */
 export const $callNote = $state<string | null>(null);
 
+/** Running transcript for the active call. The agent emits its spoken
+ *  replies as `call:text` frames; we mirror them here so the user can
+ *  read the line even when the device's speaker is silent (iOS PWA
+ *  standalone mode, mute switch on, accessibility, noisy room). Cleared
+ *  on every new call so each transcript stands on its own. */
+export interface CallTranscriptEntry {
+  id: number;
+  role: 'agent';
+  text: string;
+  at: string;
+}
+export const $callTranscript = $state<CallTranscriptEntry[]>([]);
+
 /** Voicemails addressed to the device this browser is paired as. The
  *  list is mirrored from `/api/family-phone/voice-messages?device_id=…`
  *  on every route entry plus after the audio handler stamps a row read. */
@@ -44,6 +57,7 @@ export interface FamilyPhoneStores {
   $incomingCall: typeof $incomingCall;
   $activeCall: typeof $activeCall;
   $callNote: typeof $callNote;
+  $callTranscript: typeof $callTranscript;
   $voiceMessages: typeof $voiceMessages;
   $voiceMessagesError: typeof $voiceMessagesError;
   $playingVoiceMessageId: typeof $playingVoiceMessageId;
@@ -55,6 +69,7 @@ export function createFamilyPhoneStores(): FamilyPhoneStores {
     $incomingCall,
     $activeCall,
     $callNote,
+    $callTranscript,
     $voiceMessages,
     $voiceMessagesError,
     $playingVoiceMessageId,
@@ -66,6 +81,7 @@ export function resetFamilyPhoneStores(): void {
   $incomingCall.value = null;
   $activeCall.value = null;
   $callNote.value = null;
+  $callTranscript.value = [];
   $voiceMessages.value = [];
   $voiceMessagesError.value = null;
   $playingVoiceMessageId.value = null;
