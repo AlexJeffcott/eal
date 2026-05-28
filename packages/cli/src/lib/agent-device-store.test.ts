@@ -43,6 +43,12 @@ describe('agent-device-store', () => {
     expect(fallback.endsWith('.config/eal/family-phone-device.json')).toBe(true);
   });
 
+  test('agentDevicePath falls back to the default when the env var is unset', () => {
+    delete process.env['EAL_AGENT_DEVICE_PATH'];
+    const fallback = agentDevicePath();
+    expect(fallback.endsWith('.config/eal/family-phone-device.json')).toBe(true);
+  });
+
   test('readAgentDevice returns null when the file does not exist', () => {
     expect(readAgentDevice()).toBeNull();
   });

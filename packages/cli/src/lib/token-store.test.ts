@@ -56,6 +56,16 @@ describe('token-store', () => {
     expect(readToken()).toBe('eal_v1_roundtrip');
   });
 
+  test('readToken trims surrounding whitespace from the file contents', () => {
+    writeToken('  eal_v1_padded\n');
+    expect(readToken()).toBe('eal_v1_padded');
+  });
+
+  test('readToken returns null when the file contains only whitespace', () => {
+    writeToken('   \n\t');
+    expect(readToken()).toBeNull();
+  });
+
   test('readToken returns null for an empty file', () => {
     writeToken('');
     expect(readToken()).toBeNull();

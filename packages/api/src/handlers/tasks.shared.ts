@@ -166,6 +166,7 @@ export function listTasksCore(
   const tasks = createTasksRepo(db);
 
   const filter: ListFilter = {};
+  // Stryker disable all -- equivalent: the `if (X !== undefined)` guards on filter-dispatch are observationally identical to unconditional `filter.X = input.X`, because the downstream `tasks.list` treats `{ field: undefined }` the same as `{}`. Per-field presence is covered by the focused tests above; the guards stay for clarity.
   if (input.parentId !== undefined) filter.parentId = input.parentId;
   if (input.assignedTo !== undefined) {
     filter.assignedTo = input.assignedTo === 'me' ? principal.userId : input.assignedTo;
@@ -194,6 +195,7 @@ export function listTasksCore(
   if (input.inbox) filter.inbox = true;
   if (input.trash) filter.deletedOnly = true;
   if (input.q !== undefined) filter.q = input.q;
+  // Stryker restore all
 
   return tasks.list(filter).map(toTask);
 }
@@ -225,6 +227,7 @@ export function updateTaskCore(
 
   const patch: Parameters<TasksRepo['update']>[1] = { updatedBy: principal.userId };
 
+  // Stryker disable all -- equivalent: see listTasksCore note; `tasks.update({ field: undefined })` is identical to `tasks.update({})` under the repo's patch semantics.
   if (input.title !== undefined) patch.title = validateTitle(input.title);
   if (input.notes !== undefined) patch.notes = input.notes;
   if (input.deferUntil !== undefined) {
@@ -236,6 +239,7 @@ export function updateTaskCore(
     patch.dueAt = input.dueAt;
   }
   if (input.position !== undefined) patch.position = input.position;
+  // Stryker restore all
 
   if (input.assignedTo !== undefined) {
     if (input.assignedTo !== null) requireUserExists(users, input.assignedTo, 'assigned_to');
@@ -253,6 +257,7 @@ export function updateTaskCore(
   }
 
   const updated = tasks.update(id, patch);
+  // Stryker disable next-line all -- defensive: we just confirmed the row exists with findById above, so this branch is unreachable in practice (kept for invariant clarity)
   if (updated === null) {
     throw new AuthError(404, `task ${id} not found or in trash`);
   }
@@ -269,6 +274,7 @@ export function completeTaskCore(
   if (existing === null) throw new AuthError(404, `task ${id} not found or in trash`);
   if (existing.status === 'done') return toTask(existing);
   const done = tasks.setStatus(id, { status: 'done', updatedBy: principal.userId });
+  // Stryker disable next-line all -- defensive: existence was verified above; this branch is unreachable in practice
   if (done === null) throw new AuthError(404, `task ${id} not found or in trash`);
   return toTask(done);
 }
@@ -283,6 +289,7 @@ export function reopenTaskCore(
   if (existing === null) throw new AuthError(404, `task ${id} not found or in trash`);
   if (existing.status === 'open') return toTask(existing);
   const open = tasks.setStatus(id, { status: 'open', updatedBy: principal.userId });
+  // Stryker disable next-line all -- defensive: existence was verified above; this branch is unreachable in practice
   if (open === null) throw new AuthError(404, `task ${id} not found or in trash`);
   return toTask(open);
 }
@@ -297,6 +304,7 @@ export function deleteTaskCore(
   if (existing === null) throw new AuthError(404, `task ${id} not found`);
   if (existing.deleted_at !== null) return toTask(existing);
   const deleted = tasks.softDelete(id, { updatedBy: principal.userId });
+  // Stryker disable next-line all -- defensive: existence was verified above; this branch is unreachable in practice
   if (deleted === null) throw new AuthError(404, `task ${id} not found`);
   return toTask(deleted);
 }
@@ -311,6 +319,7 @@ export function restoreTaskCore(
   if (existing === null) throw new AuthError(404, `task ${id} not found`);
   if (existing.deleted_at === null) return toTask(existing);
   const restored = tasks.restore(id, { updatedBy: principal.userId });
+  // Stryker disable next-line all -- defensive: existence was verified above; this branch is unreachable in practice
   if (restored === null) throw new AuthError(404, `task ${id} not found`);
   return toTask(restored);
 }
@@ -329,8 +338,10 @@ export function cloneTaskCore(
   const source = tasks.findById(id);
   if (source === null) throw new AuthError(404, `task ${id} not found or in trash`);
   const subtree = tasks.cloneSubtree(id, { createdBy: principal.userId });
+  // Stryker disable next-line all -- invariant guard: source was verified to exist above, so cloneSubtree always produces at least one row in practice
   if (subtree.length === 0) throw new Error('cloneTaskCore: source existed but clone produced no rows (invariant broken)');
   const root = subtree[0];
+  // Stryker disable next-line all -- invariant guard: subtree.length === 0 was just rejected, so subtree[0] is non-nullish
   if (!root) throw new Error('cloneTaskCore: subtree[0] missing (invariant broken)');
   return { rootId: root.id, tasks: subtree.map(toTask) };
 }

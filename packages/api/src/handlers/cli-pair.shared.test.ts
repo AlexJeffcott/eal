@@ -127,6 +127,13 @@ describe('startCore', () => {
     expect(row?.expires_at).toBe('2026-05-19 12:10:00');
   });
 
+  test('exported TTL constants match their documented day/minute values', async () => {
+    const mod = await import('./cli-pair.shared.ts');
+    expect(mod.CLI_PAIR_TTL_MS).toBe(10 * 60 * 1000);
+    expect(mod.CLI_SESSION_TTL_MS).toBe(90 * 24 * 60 * 60 * 1000);
+    expect(mod.POLL_INTERVAL_MS).toBe(2000);
+  });
+
   test('expiresAtIso reflects CLI_PAIR_TTL_MS', () => {
     const deps = makeDeps(db);
     const result = startCore(deps, { baseUrl: 'https://localhost:3000' });
@@ -156,18 +163,27 @@ describe('startCore', () => {
     expect(result.userCode).toBe('NEWC-ODE0');
   });
 
-  test('throws AuthError after four collisions', () => {
+  test('throws AuthError after exactly four collisions, message includes the underlying error', () => {
     const deps = makeDeps(db);
     deps.pairings.insert({
       deviceCodeHash: new Uint8Array(32).fill(9),
       userCode: 'WXYZ-1234',
       expiresAt: '2999-01-01 00:00:00',
     });
-    // Always return the same user_code → always collide.
     deps.randomUserCode = () => 'WXYZ-1234';
     let dcCalls = 0;
     deps.randomDeviceCode = () => `device-code-${++dcCalls}`;
-    expect(() => startCore(deps, { baseUrl: 'https://x' })).toThrow(AuthError);
+    try {
+      startCore(deps, { baseUrl: 'https://x' });
+      throw new Error('should have thrown');
+    } catch (err) {
+      if (!(err instanceof AuthError)) throw new Error('expected AuthError');
+      expect(err.status).toBe(500);
+      expect(err.message).toMatch(/could not mint a unique code/);
+      expect(err.message).not.toMatch(/null/);
+    }
+    // The bound is exactly four attempts; if it crept to five, dcCalls would be 5.
+    expect(dcCalls).toBe(4);
   });
 });
 
@@ -196,8 +212,8 @@ describe('claimCore', () => {
   test('rejects an empty/whitespace label', () => {
     const deps = makeDeps(db);
     startCore(deps, { baseUrl: 'https://x' });
-    expect(() => claimCore(deps, alex, { userCode: 'WXYZ-1234', label: '' })).toThrow(AuthError);
-    expect(() => claimCore(deps, alex, { userCode: 'WXYZ-1234', label: '   ' })).toThrow(AuthError);
+    expect(() => claimCore(deps, alex, { userCode: 'WXYZ-1234', label: '' })).toThrow(/label/);
+    expect(() => claimCore(deps, alex, { userCode: 'WXYZ-1234', label: '   ' })).toThrow(/label/);
   });
 
   test('rejects a malformed user_code with 400', () => {
@@ -208,6 +224,7 @@ describe('claimCore', () => {
     } catch (err) {
       if (!(err instanceof AuthError)) throw new Error('expected AuthError');
       expect(err.status).toBe(400);
+      expect(err.message).toMatch(/user_code is malformed/);
     }
   });
 
@@ -219,6 +236,7 @@ describe('claimCore', () => {
     } catch (err) {
       if (!(err instanceof AuthError)) throw new Error('expected AuthError');
       expect(err.status).toBe(404);
+      expect(err.message).toMatch(/user_code not found/);
     }
   });
 
@@ -233,10 +251,11 @@ describe('claimCore', () => {
     } catch (err) {
       if (!(err instanceof AuthError)) throw new Error('expected AuthError');
       expect(err.status).toBe(410);
+      expect(err.message).toMatch(/user_code expired/);
     }
   });
 
-  test('rejects a double-claim with 409', () => {
+  test('rejects a double-claim with 409 (already-claimed message)', () => {
     const deps = makeDeps(db);
     const leo = seedUser(usersRepo, 'leo');
     startCore(deps, { baseUrl: 'https://x' });
@@ -247,6 +266,7 @@ describe('claimCore', () => {
     } catch (err) {
       if (!(err instanceof AuthError)) throw new Error('expected AuthError');
       expect(err.status).toBe(409);
+      expect(err.message).toMatch(/user_code already claimed/);
     }
   });
 
@@ -358,5 +378,45 @@ describe('pollCore', () => {
     // Cascading delete removed the pair row already, but cover the in-between
     // case explicitly by claiming again with a fresh user → fresh pair.
     expect(pollCore(deps, { deviceCode })).toEqual({ status: 'expired' });
+  });
+
+  test('claimed pair where users.findById returns null → expired (in-between window)', () => {
+    const deps = makeDeps(db);
+    const { deviceCode } = startCore(deps, { baseUrl: 'https://x' });
+    claimCore(deps, alex, { userCode: 'WXYZ-1234', label: 'l' });
+    // Simulate the user-row being gone in the narrow window between claim and
+    // poll, with the pairing row still present.
+    deps.users = { ...deps.users, findById: () => null };
+    expect(pollCore(deps, { deviceCode })).toEqual({ status: 'expired' });
+  });
+
+  test('markConsumed race loser → expired (do not mint a session)', () => {
+    const deps = makeDeps(db);
+    const { deviceCode } = startCore(deps, { baseUrl: 'https://x' });
+    claimCore(deps, alex, { userCode: 'WXYZ-1234', label: 'l' });
+    // Two polls race; the loser sees markConsumed return false.
+    deps.pairings = { ...deps.pairings, markConsumed: () => false };
+    expect(pollCore(deps, { deviceCode })).toEqual({ status: 'expired' });
+  });
+
+  test('row already consumed → expired without re-calling markConsumed', () => {
+    const deps = makeDeps(db);
+    const { deviceCode } = startCore(deps, { baseUrl: 'https://x' });
+    claimCore(deps, alex, { userCode: 'WXYZ-1234', label: 'l' });
+    // Authorize once to flip consumed_at to non-null.
+    expect(pollCore(deps, { deviceCode }).status).toBe('authorized');
+    // From here, markConsumed should never be reached again — if it is, treat
+    // the test as failing (it would falsely mint another session).
+    let markConsumedCalls = 0;
+    const realMarkConsumed = deps.pairings.markConsumed;
+    deps.pairings = {
+      ...deps.pairings,
+      markConsumed: (args) => {
+        markConsumedCalls += 1;
+        return realMarkConsumed(args);
+      },
+    };
+    expect(pollCore(deps, { deviceCode })).toEqual({ status: 'expired' });
+    expect(markConsumedCalls).toBe(0);
   });
 });

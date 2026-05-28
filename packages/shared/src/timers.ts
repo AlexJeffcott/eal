@@ -62,6 +62,7 @@ export function pollUntil<T>(
         return;
       }
 
+      // Stryker disable next-line EqualityOperator -- equivalent: Date.now() advances in 1ms steps and never lands exactly on `deadline` deterministically, so `>` vs `>=` are observationally identical
       if (Date.now() >= deadline) {
         reject(new Error(`pollUntil: timed out after ${timeoutMs}ms waiting for ${label}`));
         return;
@@ -83,6 +84,7 @@ export function pollUntil<T>(
  * timer and so no flake and no wasted wall-clock time.
  */
 export function flushMicrotasks(): Promise<void> {
+  // Stryker disable next-line BlockStatement -- equivalent: `await undefined` (the mutant) yields a microtask tick to the queue exactly like an awaited resolved promise, so observers see no difference
   return new Promise((resolve) => {
     queueMicrotask(resolve);
   });

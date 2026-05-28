@@ -94,6 +94,52 @@ describe('createTaskCore', () => {
     expect(created.deferUntil).toBe('2026-06-15');
   });
 
+  describe('ISO 8601 regex — boundary rejection', () => {
+    const reject = (value: string) =>
+      expect(() => createTaskCore(ctx.db, { title: 'x', dueAt: value }, ctx.alex)).toThrow(
+        /due_at/,
+      );
+    const accept = (value: string) => {
+      const t = createTaskCore(ctx.db, { title: 'x', dueAt: value }, ctx.alex);
+      expect(t.dueAt).toBe(value);
+    };
+
+    test('rejects trailing garbage after a valid date', () => reject('2026-05-19-junk'));
+    test('rejects leading garbage before a valid date', () => reject('junk-2026-05-19'));
+    test('rejects day 32-39', () => reject('2026-05-32'));
+    test('rejects day 30', () => accept('2026-05-30'));
+    test('rejects month 00', () => reject('2026-00-15'));
+    test('rejects month 13', () => reject('2026-13-15'));
+    test('rejects day 00', () => reject('2026-05-00'));
+    test('rejects a 3-digit year', () => reject('999-05-19'));
+    test('accepts a leap-day-ish 29', () => accept('2024-02-29'));
+    test('accepts a timestamp with fractional seconds', () =>
+      accept('2026-05-19T10:00:00.123Z'));
+    test('rejects an empty fractional-seconds suffix', () => reject('2026-05-19T10:00:00.Z'));
+    test('rejects non-digit fractional seconds', () =>
+      reject('2026-05-19T10:00:00.abcZ'));
+    test('accepts a positive timezone offset', () =>
+      accept('2026-05-19T10:00:00+02:00'));
+    test('accepts a negative timezone offset', () =>
+      accept('2026-05-19T10:00:00-05:30'));
+    test('rejects a single-digit TZ hour', () => reject('2026-05-19T10:00:00+2:00'));
+    test('rejects a non-digit TZ hour', () => reject('2026-05-19T10:00:00+ab:00'));
+    test('rejects a non-sign sign character in the TZ offset', () =>
+      reject('2026-05-19T10:00:00*02:00'));
+    test('rejects a missing TZ designator', () => reject('2026-05-19T10:00:00'));
+    test('rejects single-digit hours in the time portion', () =>
+      reject('2026-05-19T1:00:00Z'));
+    test('treats an explicit null as "field absent" (no error)', () => {
+      const t = createTaskCore(
+        ctx.db,
+        { title: 'x', dueAt: null, deferUntil: null },
+        ctx.alex,
+      );
+      expect(t.dueAt).toBeNull();
+      expect(t.deferUntil).toBeNull();
+    });
+  });
+
   test('siblings get incrementing positions automatically', () => {
     const p = createTaskCore(ctx.db, { title: 'p' }, ctx.alex);
     const c1 = createTaskCore(ctx.db, { title: 'c1', parentId: p.id }, ctx.alex);
@@ -143,6 +189,45 @@ describe('updateTaskCore', () => {
     const c = createTaskCore(ctx.db, { title: 'c', parentId: p.id }, ctx.alex);
     const moved = updateTaskCore(ctx.db, c.id, { parentId: null }, ctx.alex);
     expect(moved.parentId).toBeNull();
+  });
+
+  test('400 when defer_until on update is not ISO 8601', () => {
+    const t = createTaskCore(ctx.db, { title: 'x' }, ctx.alex);
+    expect(() => updateTaskCore(ctx.db, t.id, { deferUntil: 'soon' }, ctx.alex)).toThrow(
+      /defer_until/,
+    );
+  });
+
+  test('400 when due_at on update is not ISO 8601', () => {
+    const t = createTaskCore(ctx.db, { title: 'x' }, ctx.alex);
+    expect(() => updateTaskCore(ctx.db, t.id, { dueAt: '2026-13-01' }, ctx.alex)).toThrow(
+      /due_at/,
+    );
+  });
+
+  test('update applies notes independently of title', () => {
+    const t = createTaskCore(ctx.db, { title: 'x' }, ctx.alex);
+    const u = updateTaskCore(ctx.db, t.id, { notes: 'just notes' }, ctx.alex);
+    expect(u.title).toBe('x');
+    expect(u.notes).toBe('just notes');
+  });
+
+  test('update applies deferUntil and dueAt independently', () => {
+    const t = createTaskCore(ctx.db, { title: 'x' }, ctx.alex);
+    const u = updateTaskCore(
+      ctx.db,
+      t.id,
+      { deferUntil: '2026-06-01', dueAt: '2026-07-01' },
+      ctx.alex,
+    );
+    expect(u.deferUntil).toBe('2026-06-01');
+    expect(u.dueAt).toBe('2026-07-01');
+  });
+
+  test('update applies a position change', () => {
+    const t = createTaskCore(ctx.db, { title: 'x' }, ctx.alex);
+    const u = updateTaskCore(ctx.db, t.id, { position: 42 }, ctx.alex);
+    expect(u.position).toBe(42);
   });
 
   test('clearing assignedTo via null vs leaving it via absence', () => {
@@ -298,6 +383,83 @@ describe('listTasksCore', () => {
     createTaskCore(ctx.db, { title: 'child', parentId: p.id }, ctx.alex);
     const titles = listTasksCore(ctx.db, { inbox: true }, ctx.alex).map((t) => t.title).sort();
     expect(titles).toEqual(['in-1', 'project']);
+  });
+
+  test('parentId filter narrows to a parent; absence returns root + children', () => {
+    const p = createTaskCore(ctx.db, { title: 'project' }, ctx.alex);
+    const c = createTaskCore(ctx.db, { title: 'child', parentId: p.id }, ctx.alex);
+    expect(listTasksCore(ctx.db, { parentId: p.id }, ctx.alex).map((t) => t.id)).toEqual([c.id]);
+    expect(listTasksCore(ctx.db, {}, ctx.alex).map((t) => t.id).sort()).toEqual(
+      [p.id, c.id].sort(),
+    );
+  });
+
+  test('status filter narrows by status', () => {
+    const open = createTaskCore(ctx.db, { title: 'open' }, ctx.alex);
+    const done = createTaskCore(ctx.db, { title: 'done' }, ctx.alex);
+    completeTaskCore(ctx.db, done.id, ctx.alex);
+    expect(listTasksCore(ctx.db, { status: 'open' }, ctx.alex).map((t) => t.id)).toEqual([
+      open.id,
+    ]);
+    expect(listTasksCore(ctx.db, { status: 'done' }, ctx.alex).map((t) => t.id)).toEqual([
+      done.id,
+    ]);
+  });
+
+  test('dueBefore filter excludes tasks dated on or after the cutoff', () => {
+    const early = createTaskCore(ctx.db, { title: 'early', dueAt: '2026-01-01' }, ctx.alex);
+    createTaskCore(ctx.db, { title: 'late', dueAt: '2026-12-31' }, ctx.alex);
+    expect(
+      listTasksCore(ctx.db, { dueBefore: '2026-06-01' }, ctx.alex).map((t) => t.id),
+    ).toEqual([early.id]);
+  });
+
+  test('dueBefore rejects an invalid ISO value', () => {
+    expect(() => listTasksCore(ctx.db, { dueBefore: 'tomorrow' }, ctx.alex)).toThrow(
+      /due_before/,
+    );
+  });
+
+  test('deferAfter filter excludes tasks deferred at or before the cutoff', () => {
+    createTaskCore(ctx.db, { title: 'past', deferUntil: '2026-01-01' }, ctx.alex);
+    const future = createTaskCore(
+      ctx.db,
+      { title: 'future', deferUntil: '2026-12-31' },
+      ctx.alex,
+    );
+    expect(
+      listTasksCore(ctx.db, { deferAfter: '2026-06-01' }, ctx.alex).map((t) => t.id),
+    ).toEqual([future.id]);
+  });
+
+  test('deferAfter rejects an invalid ISO value', () => {
+    expect(() => listTasksCore(ctx.db, { deferAfter: 'later' }, ctx.alex)).toThrow(
+      /defer_after/,
+    );
+  });
+
+  test('q filter matches by substring of the title', () => {
+    const milk = createTaskCore(ctx.db, { title: 'buy milk' }, ctx.alex);
+    createTaskCore(ctx.db, { title: 'water the plants' }, ctx.alex);
+    expect(listTasksCore(ctx.db, { q: 'milk' }, ctx.alex).map((t) => t.id)).toEqual([milk.id]);
+  });
+
+  test('today filter accepts an explicit todayCutoff and rejects an invalid one', () => {
+    const t = createTaskCore(
+      ctx.db,
+      { title: 'past', deferUntil: '2020-01-01T00:00:00Z' },
+      ctx.alex,
+    );
+    expect(
+      listTasksCore(
+        ctx.db,
+        { today: true, todayCutoff: '2026-05-19T10:00:00Z' },
+        ctx.alex,
+      ).map((row) => row.id),
+    ).toEqual([t.id]);
+    expect(() =>
+      listTasksCore(ctx.db, { today: true, todayCutoff: 'whenever' }, ctx.alex),
+    ).toThrow(/today_cutoff/);
   });
 });
 

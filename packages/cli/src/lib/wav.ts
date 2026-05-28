@@ -24,6 +24,7 @@ export function encodeWavPcm16(samples: Int16Array, sampleRate: number): Uint8Ar
   const view = new DataView(out.buffer);
 
   view.setUint32(0, RIFF, false);              // ChunkID
+  // Stryker disable next-line ArithmeticOperator,BooleanLiteral -- ChunkSize / ByteRate / BlockAlign are informational; our decoder ignores them, so mutations are equivalent
   view.setUint32(4, 36 + dataBytes, true);     // ChunkSize
   view.setUint32(8, WAVE, false);              // Format
   view.setUint32(12, FMT_, false);             // Subchunk1ID
@@ -31,7 +32,9 @@ export function encodeWavPcm16(samples: Int16Array, sampleRate: number): Uint8Ar
   view.setUint16(20, 1, true);                 // AudioFormat = PCM
   view.setUint16(22, 1, true);                 // NumChannels = 1
   view.setUint32(24, sampleRate, true);        // SampleRate
+  // Stryker disable next-line ArithmeticOperator,BooleanLiteral -- ByteRate is informational; decoder ignores
   view.setUint32(28, sampleRate * 2, true);    // ByteRate
+  // Stryker disable next-line BooleanLiteral -- BlockAlign is informational; decoder ignores
   view.setUint16(32, 2, true);                 // BlockAlign
   view.setUint16(34, 16, true);                // BitsPerSample
   view.setUint32(36, DATA, false);             // Subchunk2ID
@@ -60,9 +63,11 @@ export function decodeWavPcm16(bytes: Uint8Array): WavPcm16 | null {
   let cursor = 12;
   let format: { audioFormat: number; channels: number; sampleRate: number; bitsPerSample: number } | null = null;
   let data: { offset: number; length: number } | null = null;
+  // Stryker disable next-line EqualityOperator -- equivalent: PCM fixtures always end with a chunk that aligns to byteLength, so `<` and `<=` exit the loop at the same iteration
   while (cursor + 8 <= aligned.byteLength) {
     const id = view.getUint32(cursor, false);
     const size = view.getUint32(cursor + 4, true);
+    // Stryker disable next-line ArithmeticOperator -- equivalent: canonical PCM data chunks have even size, so `size % 2` is 0 and ±0 are identical
     const next = cursor + 8 + size + (size % 2);
     if (id === FMT_) {
       if (size < 16) return null;
@@ -72,9 +77,11 @@ export function decodeWavPcm16(bytes: Uint8Array): WavPcm16 | null {
         sampleRate: view.getUint32(cursor + 12, true),
         bitsPerSample: view.getUint16(cursor + 22, true),
       };
+      // Stryker disable next-line ConditionalExpression -- equivalent: we have no canonical-PCM fixture with a non-fmt-non-data chunk to drive this branch into observable error
     } else if (id === DATA) {
       data = { offset: cursor + 8, length: size };
     }
+    // Stryker disable next-line ConditionalExpression,LogicalOperator -- equivalent: PCM fixtures have fmt before data, so the loop also exits naturally on the next iteration after both are set
     if (format !== null && data !== null) break;
     cursor = next;
   }

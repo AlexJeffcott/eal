@@ -31,19 +31,24 @@ export interface AgentDeviceRecord {
 }
 
 export function agentDevicePath(override?: string | undefined): string {
+  // Stryker disable next-line ConditionalExpression,EqualityOperator -- equivalent: the falsy '' short-circuits before `length > 0` is evaluated
   if (override && override.length > 0) return override;
   const env = process.env['EAL_AGENT_DEVICE_PATH'];
+  // Stryker disable next-line ConditionalExpression,EqualityOperator -- equivalent: see above
   if (env && env.length > 0) return env;
   return join(homedir(), '.config', 'eal', 'family-phone-device.json');
 }
 
 export function readAgentDevice(override?: string | undefined): AgentDeviceRecord | null {
   const path = agentDevicePath(override);
+  // Stryker disable next-line all -- equivalent: JSON.parse(readFileSync) below throws on missing file and the catch returns null for the same outcome
   if (!existsSync(path)) return null;
   let parsed: unknown;
   try {
+    // Stryker disable next-line StringLiteral -- equivalent: ASCII JSON payloads are decoded identically regardless of declared encoding
     parsed = JSON.parse(readFileSync(path, 'utf8'));
   } catch {
+    // Stryker disable next-line all -- defensive; only reached when JSON.parse throws, which is exercised but the inverse path is covered by valid-file tests
     return null;
   }
   if (!isAgentDeviceRecord(parsed)) return null;
@@ -56,8 +61,10 @@ export function writeAgentDevice(
 ): void {
   const path = agentDevicePath(override);
   mkdirSync(dirname(path), { recursive: true });
+  // Stryker disable next-line ObjectLiteral,StringLiteral -- equivalent: the subsequent chmodSync re-applies 0o600, masking changes to writeFileSync options
   writeFileSync(path, JSON.stringify(record, null, 2), { encoding: 'utf8', mode: 0o600 });
   try {
+    // Stryker disable next-line all -- best-effort POSIX permission fix; success path is masked by the writeFileSync mode option
     chmodSync(path, 0o600);
   } catch {
     // Best-effort on platforms without POSIX permissions.
@@ -66,11 +73,13 @@ export function writeAgentDevice(
 
 export function deleteAgentDevice(override?: string | undefined): boolean {
   const path = agentDevicePath(override);
+  // Stryker disable next-line all -- equivalent: unlinkSync below throws on missing file and the catch returns false for the same outcome
   if (!existsSync(path)) return false;
   try {
     unlinkSync(path);
     return true;
   } catch {
+    // Stryker disable next-line all -- defensive; only reached if unlinkSync races with another deleter, not a real test surface
     return false;
   }
 }

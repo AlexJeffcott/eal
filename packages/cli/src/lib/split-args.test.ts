@@ -77,6 +77,68 @@ describe('splitArgs', () => {
     expect(r.command).toBeUndefined();
     expect(r.global.help).toBe(true);
   });
+
+  test('-h aliases --help', () => {
+    const r = splitArgs(['-h']);
+    expect(r.global.help).toBe(true);
+  });
+
+  test('--verbose flag is recognised in its long form too', () => {
+    const r = splitArgs(['--verbose']);
+    expect(r.global.verbose).toBe(true);
+  });
+
+  test('strips global --token-path <path> before the command', () => {
+    const r = splitArgs(['--token-path', '/tmp/elsewhere', 'hello']);
+    expect(r.command).toBe('hello');
+    expect(r.global.tokenPathOverride).toBe('/tmp/elsewhere');
+  });
+
+  test('strips global --token-path=<path> equals form too', () => {
+    const r = splitArgs(['--token-path=/tmp/equals', 'hello']);
+    expect(r.global.tokenPathOverride).toBe('/tmp/equals');
+  });
+
+  test('explicit --token-path wins over EAL_TOKEN_PATH env', () => {
+    process.env['EAL_TOKEN_PATH'] = '/env/path';
+    const r = splitArgs(['--token-path', '/flag/path', 'hello']);
+    expect(r.global.tokenPathOverride).toBe('/flag/path');
+  });
+
+  test('falls back to default api url when EAL_API_URL is an empty string', () => {
+    process.env['EAL_API_URL'] = '';
+    const r = splitArgs([]);
+    expect(r.global.apiUrl).toBe('https://127.0.0.1:3000');
+  });
+
+  test('tokenPathOverride is undefined when EAL_TOKEN_PATH is an empty string', () => {
+    process.env['EAL_TOKEN_PATH'] = '';
+    const r = splitArgs([]);
+    expect(r.global.tokenPathOverride).toBeUndefined();
+  });
+
+  test('--api-url with no following value leaves apiUrl at the env/default', () => {
+    const r = splitArgs(['--api-url']);
+    expect(r.global.apiUrl).toBe('https://127.0.0.1:3000');
+  });
+
+  test('--api-url <value> consumes the next token so it is not treated as a command', () => {
+    const r = splitArgs(['--api-url', 'https://example.test:9000']);
+    expect(r.command).toBeUndefined();
+    expect(r.global.commandArgs).toEqual([]);
+  });
+
+  test('a sparse argv slot (undefined element) is skipped', () => {
+    // Sparse array — index 1 has no value, mirroring how some argv plumbing
+    // surfaces a missing positional. The function's `if (a === undefined)`
+    // continue is the guard under test.
+    const argv: string[] = [];
+    argv[0] = 'hello';
+    argv[2] = '--flag';
+    const r = splitArgs(argv);
+    expect(r.command).toBe('hello');
+    expect(r.global.commandArgs).toEqual(['--flag']);
+  });
 });
 
 describe('readStringFlag', () => {

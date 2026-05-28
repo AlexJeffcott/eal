@@ -55,6 +55,12 @@ describe('pollUntil', () => {
     ).rejects.toThrow('pollUntil: timed out after 20ms waiting for the impossible');
   });
 
+  test('uses the default label in the timeout message when no label is supplied', async () => {
+    await expect(
+      pollUntil(() => false, { intervalMs: 1, timeoutMs: 20 }),
+    ).rejects.toThrow('waiting for condition');
+  });
+
   test('rejects if the condition itself throws', async () => {
     await expect(
       pollUntil(
