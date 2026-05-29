@@ -9,6 +9,9 @@
   },
   "scripts": {
     "devctl": "bun packages/devctl/index.ts",
+    "verify": "bun packages/devctl/index.ts verify",
+    "verify:estimate": "bunx polly verify --estimate",
+    "verify:validate": "bunx polly verify --validate",
     "mutation": "stryker run",
     "mutation:specs": "stryker run stryker/specs.conf.json",
     "mutation:shared": "stryker run stryker/shared.conf.json",
@@ -30,6 +33,6 @@
     "@types/bun": "1.3.13"
   },
   "dependencies": {
-    "@fairfox/polly": "0.76.0"
+    "@fairfox/polly": "0.77.2"
   }
 }

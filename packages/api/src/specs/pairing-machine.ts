@@ -1,8 +1,10 @@
 /**
- * Shadow pair-request state machine for `polly verify`. Not imported by
- * production code; same ANCHORING GAP caveat as the rest of the specs/ tier.
- * The `requires` / `ensures` annotations are runtime no-ops — only TLC
- * catches bad sequences.
+ * Shadow pair-request state machine for `polly verify`. Production routes in
+ * handlers/family-phone-pair.http.ts now carry inline `requires` / `ensures`
+ * and guarded `pairingMachine.value =` assignments mirroring the transitions
+ * below; the `POST /start` and `POST /complete` routes are the anchored
+ * surface. `requires` / `ensures` are runtime no-ops; the guarded
+ * assignments fire only when `POLLY_VERIFY=1`.
  *
  * Modelled lifecycle of a single family-phone pair request as it passes
  * through `family-phone-pair.shared.ts` (added in Phase C of the plan):
@@ -31,7 +33,7 @@ import { ensures, requires } from '@fairfox/polly/verify';
 
 export type PairingState = 'nonexistent' | 'pending' | 'consumed' | 'expired';
 
-export const pairingMachine = $sharedState<{ state: PairingState }>('pairing', {
+export const pairingMachine = $sharedState<{ state: PairingState }>('pairingMachine', {
   state: 'nonexistent',
 });
 // Stryker restore all

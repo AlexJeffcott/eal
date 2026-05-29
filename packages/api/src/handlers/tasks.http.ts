@@ -1,7 +1,11 @@
 import { Elysia, t } from 'elysia';
+import { ensures, requires } from '@fairfox/polly/verify';
 import type { DatabaseClient } from '../db/client.ts';
 import type { Principal } from '../auth/principals.ts';
 import { AuthError } from './auth.shared.ts';
+import { taskStatusMachine } from '../specs/tasks-status-machine.ts';
+
+const POLLY_ANCHOR = process.env['POLLY_VERIFY'] === '1';
 import {
   cloneTaskCore,
   completeTaskCore,
@@ -192,15 +196,21 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
       },
     )
     .post('/:id/complete', ({ params, request }) => {
+      requires(taskStatusMachine.value.status === 'open', 'complete: must be open');
       const principal = requirePrincipal(ctx, request);
       const task = completeTaskCore(ctx.db, Number(params.id), principal);
       ctx.broadcastTask({ type: 'task:updated', topic: 'tasks', payload: task });
+      if (POLLY_ANCHOR) taskStatusMachine.value = { status: 'done' };
+      ensures(taskStatusMachine.value.status === 'done', 'complete: end in done');
       return { task };
     })
     .post('/:id/reopen', ({ params, request }) => {
+      requires(taskStatusMachine.value.status === 'done', 'reopen: must be done');
       const principal = requirePrincipal(ctx, request);
       const task = reopenTaskCore(ctx.db, Number(params.id), principal);
       ctx.broadcastTask({ type: 'task:updated', topic: 'tasks', payload: task });
+      if (POLLY_ANCHOR) taskStatusMachine.value = { status: 'open' };
+      ensures(taskStatusMachine.value.status === 'open', 'reopen: end in open');
       return { task };
     })
     .post('/:id/clone', ({ params, request }) => {
@@ -210,15 +220,24 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
       return result;
     })
     .delete('/:id', ({ params, request }) => {
+      requires(
+        taskStatusMachine.value.status === 'open' || taskStatusMachine.value.status === 'done',
+        'delete: must be live (open or done)',
+      );
       const principal = requirePrincipal(ctx, request);
       const task = deleteTaskCore(ctx.db, Number(params.id), principal);
       ctx.broadcastTask({ type: 'task:deleted', topic: 'tasks', payload: task });
+      if (POLLY_ANCHOR) taskStatusMachine.value = { status: 'deleted' };
+      ensures(taskStatusMachine.value.status === 'deleted', 'delete: end in deleted');
       return { task };
     })
     .post('/:id/restore', ({ params, request }) => {
+      requires(taskStatusMachine.value.status === 'deleted', 'restore: must be deleted');
       const principal = requirePrincipal(ctx, request);
       const task = restoreTaskCore(ctx.db, Number(params.id), principal);
       ctx.broadcastTask({ type: 'task:updated', topic: 'tasks', payload: task });
+      if (POLLY_ANCHOR) taskStatusMachine.value = { status: 'open' };
+      ensures(taskStatusMachine.value.status === 'open', 'restore: end in open (predictable resurrection)');
       return { task };
     });
 }

@@ -28,7 +28,7 @@ import { ensures, requires } from '@fairfox/polly/verify';
 
 export type WsState = 'idle' | 'connecting' | 'connected' | 'error';
 
-export const wsMachine = $sharedState<{ state: WsState }>('ws', { state: 'idle' });
+export const wsMachine = $sharedState<{ state: WsState }>('wsMachine', { state: 'idle' });
 // Stryker restore all
 
 export function beginConnect(): void {

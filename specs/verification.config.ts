@@ -38,19 +38,19 @@ import { defineVerification } from '@fairfox/polly/verify';
  */
 export default defineVerification({
   state: {
-    'auth.phase': { type: 'enum', values: ['anonymous', 'authenticating', 'authenticated'] },
-    'ws.state': { type: 'enum', values: ['idle', 'connecting', 'connected', 'error'] },
-    'sessions.outstanding': { type: 'number', min: 0, max: 2 },
-    'taskStatus.status': { type: 'enum', values: ['open', 'done', 'deleted'] },
-    'authGate.state': {
+    'authMachine.phase': { type: 'enum', values: ['anonymous', 'authenticating', 'authenticated'] },
+    'wsMachine.state': { type: 'enum', values: ['idle', 'connecting', 'connected', 'error'] },
+    'sessionsMachine.outstanding': { type: 'number', min: 0, max: 2 },
+    'taskStatusMachine.status': { type: 'enum', values: ['open', 'done', 'deleted'] },
+    'authGateMachine.state': {
       type: 'enum',
       values: ['undecided', 'public', 'appOwned', 'principalRequired', 'handled', 'rejected'],
     },
-    'pairing.state': {
+    'pairingMachine.state': {
       type: 'enum',
       values: ['nonexistent', 'pending', 'consumed', 'expired'],
     },
-    'call.state': {
+    'callMachine.state': {
       type: 'enum',
       values: ['nonexistent', 'pending', 'connected', 'closed'],
     },
@@ -58,6 +58,82 @@ export default defineVerification({
   messages: {
     maxInFlight: 1,
     maxTabs: 1,
+  },
+  /**
+   * Subsystem partition. The combined model (7 fields × 45 handlers) estimates
+   * at ~4.8B states — infeasible. Polly runs each subsystem as its own TLC
+   * job, filtered to the listed handlers and state fields, so each per-job
+   * state space stays bounded.
+   *
+   * Polly's analyzer keys handlers by route string only (no Elysia prefix).
+   * Where a route name (e.g. `GET /`, `GET /:id`) appears in multiple files
+   * the message type is ambiguous and we deliberately omit it from any
+   * subsystem rather than alias unrelated handlers together. Every listed
+   * handler must belong to exactly one subsystem.
+   *
+   * Three subsystems are anchored end-to-end (production handlers carry the
+   * `requires` / `ensures` / guarded state-assignment lines that polly's
+   * static extractor reads):
+   *
+   *   - auth  — auth.http.ts handlers; co-models sessions.outstanding because
+   *             /register/verify, /login/verify, /logout, /cli-pair/claim all
+   *             mutate both `auth.phase` and `sessions.outstanding`.
+   *   - tasks — tasks.http.ts handlers.
+   *   - pairing — family-phone-pair.http.ts handlers.
+   *
+   * Three machines have shadow models and unit tests but no subsystem here
+   * because polly's analyzer cannot extract requires/ensures/assignments from
+   * the surfaces that own their state transitions:
+   *
+   *   - ws.state lives in the browser client; the client uses
+   *     `socket.addEventListener('open'|'close', …)` arrow handlers whose
+   *     bodies polly does walk, but anchoring them needs care around the
+   *     reconnect loop in packages/client/src/eal-client.ts.
+   *   - authGate.state lives in middleware (auth/middleware.ts); the only
+   *     route handlers polly sees with names that match are the gate tests in
+   *     server-factory.auth-gate.test.ts.
+   *   - call.state transitions live in the `switch (msg.type)` cases inside
+   *     family-phone.ws.ts. Polly's `extractSwitchCaseHandlers` builds a
+   *     handler entry per case but hardcodes assignments/pre/post to empty —
+   *     anchoring would require refactoring the dispatch to a handler-map.
+   *
+   * The shadow modules for those three (ws-machine.ts, auth-gate-machine.ts,
+   * call-machine.ts) stay as the intent spec and are exercised by their
+   * `.test.ts` neighbours.
+   */
+  subsystems: {
+    auth: {
+      state: ['authMachine.phase', 'sessionsMachine.outstanding'],
+      handlers: [
+        'POST /register/options',
+        'POST /register/verify',
+        'POST /login/options',
+        'POST /login/verify',
+        'POST /logout',
+        'GET /me',
+        'POST /cli-pair/start',
+        'POST /cli-pair/claim',
+        'POST /cli-pair/poll',
+      ],
+      bounds: { maxInFlight: 2 },
+    },
+    tasks: {
+      state: ['taskStatusMachine.status'],
+      handlers: [
+        'POST /:id/complete',
+        'POST /:id/reopen',
+        'POST /:id/clone',
+        'POST /:id/restore',
+        'DELETE /:id',
+        'PATCH /:id',
+      ],
+      bounds: { maxInFlight: 1 },
+    },
+    pairing: {
+      state: ['pairingMachine.state'],
+      handlers: ['POST /start', 'POST /complete'],
+      bounds: { maxInFlight: 1 },
+    },
   },
   onBuild: 'warn',
   onRelease: 'error',

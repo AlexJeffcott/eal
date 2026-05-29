@@ -1,8 +1,11 @@
 /**
- * Shadow session-counter state machine for `polly verify`. Not imported by
- * production code. See `auth-machine.ts` for the full ANCHORING GAP banner —
- * same caveats apply: spec is intent, requires/ensures are runtime no-ops,
- * only `bun devctl verify` catches bad sequences.
+ * Shadow session-counter state machine for `polly verify`. The production
+ * routes in handlers/auth.http.ts now carry inline `requires` / `ensures`
+ * and guarded `sessionsMachine.value =` assignments on the mint sites
+ * (`POST /register/verify`, `POST /login/verify`, `POST /cli-pair/claim`) and
+ * the revoke site (`POST /logout`). `sessions.outstanding` is co-modelled
+ * with `auth.phase` in the `auth` subsystem because those handlers transition
+ * both at once.
  *
  * `sessions.outstanding` is a bounded integer (0..MAX). Mint increments,
  * revoke decrements (requires ≥1 to revoke), revokeAll resets to zero.
@@ -20,7 +23,7 @@ import { ensures, requires } from '@fairfox/polly/verify';
 
 const MAX_OUTSTANDING = 2;
 
-export const sessionsMachine = $sharedState<{ outstanding: number }>('sessions', { outstanding: 0 });
+export const sessionsMachine = $sharedState<{ outstanding: number }>('sessionsMachine', { outstanding: 0 });
 // Stryker restore all
 
 export function mintSession(): void {

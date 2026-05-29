@@ -11,26 +11,33 @@
  * so model-checking can prove invariants like "from authenticated you can
  * only reach anonymous via signOut" without needing to model sqlite.
  *
- * ╔════════════════════════ ANCHORING GAP ════════════════════════════╗
- * ║ This model is INTENT, not enforcement. Production handlers        ║
- * ║ (registerVerifyCore, loginVerifyCore, logoutCore in handlers/     ║
- * ║ auth.shared.ts) do not import `beginAuth` / `completeAuth` /      ║
- * ║ `signOut`. They mutate sqlite directly.                           ║
+ * ╔════════════════════════ ANCHORING ════════════════════════════════╗
+ * ║ The HTTP route handlers in handlers/auth.http.ts now carry        ║
+ * ║ inline `requires` / `ensures` and guarded `authMachine.value =`   ║
+ * ║ assignments mirroring the transitions below. Polly's static       ║
+ * ║ extractor walks the route bodies (not callees), so the anchor     ║
+ * ║ has to live in the route function itself.                         ║
  * ║                                                                   ║
- * ║ Consequences:                                                     ║
- * ║   - `polly verify` proves the SPEC is internally consistent.      ║
- * ║   - It does NOT prove the production handlers match the spec.     ║
- * ║   - Drift between spec and code is invisible.                     ║
+ * ║ The guarded assignments fire only when `POLLY_VERIFY=1` at        ║
+ * ║ runtime — in normal serving they are dead branches. Polly's       ║
+ * ║ analyzer is static and sees them regardless. `requires` /         ║
+ * ║ `ensures` are runtime no-ops from `@fairfox/polly/verify` so      ║
+ * ║ unguarded calls are also safe.                                    ║
  * ║                                                                   ║
- * ║ To close: handlers should call these transitions in addition to   ║
- * ║ their sqlite writes (with the polly state registry scoped per     ║
- * ║ request), OR equivalent runtime assertions should mirror the      ║
- * ║ requires/ensures bodies inline in the handler code paths.         ║
+ * ║ Anchored routes (auth subsystem):                                 ║
+ * ║   POST /register/options  → anonymous → authenticating            ║
+ * ║   POST /register/verify   → authenticating → authenticated        ║
+ * ║   POST /login/options     → anonymous → authenticating            ║
+ * ║   POST /login/verify      → authenticating → authenticated        ║
+ * ║   POST /logout            → authenticated → anonymous             ║
+ * ║   GET  /me                → authenticated → authenticated         ║
  * ║                                                                   ║
- * ║ Also note: `requires` and `ensures` from @fairfox/polly/verify    ║
- * ║ are RUNTIME NO-OPS. Importing this file and calling the           ║
- * ║ transitions does NOT raise on bad sequences. Only TLC catches     ║
- * ║ that, via `bun devctl verify`.                                    ║
+ * ║ The transition helpers below stay as the canonical shadow         ║
+ * ║ machine and are exercised by `auth-machine.test.ts`.              ║
+ * ║                                                                   ║
+ * ║ The other six machines (ws, sessions, taskStatus, authGate,       ║
+ * ║ pairing, call) still need the same anchoring on their respective  ║
+ * ║ handlers — pattern in handlers/auth.http.ts.                      ║
  * ╚═══════════════════════════════════════════════════════════════════╝
  */
 // Stryker disable all -- declared initial value is overwritten by every test beforeEach; registry name not used at the test boundary
@@ -39,7 +46,7 @@ import { ensures, requires } from '@fairfox/polly/verify';
 
 export type AuthPhase = 'anonymous' | 'authenticating' | 'authenticated';
 
-export const authMachine = $sharedState<{ phase: AuthPhase }>('auth', { phase: 'anonymous' });
+export const authMachine = $sharedState<{ phase: AuthPhase }>('authMachine', { phase: 'anonymous' });
 // Stryker restore all
 
 export function beginAuth(): void {

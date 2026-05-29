@@ -28,14 +28,13 @@
  *   - `restore` is only valid from `deleted` and always lands in `open`
  *     (the predictable-resurrection rule documented in docs/tasks-v1.md).
  *
- * ╔════════════════════════ ANCHORING GAP ════════════════════════════╗
- * ║ This model is INTENT, not enforcement. Production handlers in     ║
- * ║ handlers/tasks.shared.ts mutate sqlite directly; they do NOT      ║
- * ║ call beginComplete / completeDone / etc. Drift between spec and  ║
- * ║ code is invisible to TLC. To close, every core handler would     ║
- * ║ also need to call the matching transition, or inline a runtime   ║
- * ║ assert mirroring the requires/ensures body. Same gap the other   ║
- * ║ shadow machines (auth, ws, sessions) flag — see auth-machine.ts. ║
+ * ╔════════════════════════ ANCHORING ════════════════════════════════╗
+ * ║ The HTTP route handlers in handlers/tasks.http.ts now carry       ║
+ * ║ inline `requires` / `ensures` and guarded                         ║
+ * ║ `taskStatusMachine.value = ...` assignments. The anchored         ║
+ * ║ surface is `POST /:id/complete`, `POST /:id/reopen`,              ║
+ * ║ `DELETE /:id`, and `POST /:id/restore`. Same pattern as           ║
+ * ║ auth-machine.ts.                                                  ║
  * ║                                                                   ║
  * ║ Not modelled here (deferred to a future convergence machine):    ║
  * ║   - multi-device interleaving                                    ║
@@ -54,7 +53,7 @@ import { ensures, requires } from '@fairfox/polly/verify';
 
 export type TaskStatus = 'open' | 'done' | 'deleted';
 
-export const taskStatusMachine = $sharedState<{ status: TaskStatus }>('taskStatus', {
+export const taskStatusMachine = $sharedState<{ status: TaskStatus }>('taskStatusMachine', {
   status: 'open',
 });
 

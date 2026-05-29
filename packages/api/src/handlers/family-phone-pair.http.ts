@@ -1,6 +1,10 @@
 import { Elysia, t } from 'elysia';
+import { ensures, requires } from '@fairfox/polly/verify';
 import type { DatabaseClient } from '../db/client.ts';
 import type { Principal } from '../auth/principals.ts';
+import { pairingMachine } from '../specs/pairing-machine.ts';
+
+const POLLY_ANCHOR = process.env['POLLY_VERIFY'] === '1';
 import { createFamilyPhonePairingsRepo } from '../db/repos/family-phone-pairings.ts';
 import { createFamilyPhoneDevicesRepo } from '../db/repos/family-phone-devices.ts';
 import { createFamilyPhoneDeviceKeysRepo } from '../db/repos/family-phone-device-keys.ts';
@@ -52,18 +56,22 @@ export function familyPhonePairHttpRoutes(ctx: FamilyPhonePairRoutesContext) {
     .post(
       '/start',
       ({ request, set }) => {
+        requires(pairingMachine.value.state !== 'pending', 'pair/start: no in-flight pairing');
         const principal = ctx.getPrincipal(request);
         if (!principal) {
           set.status = 401;
           return { error: 'unauthenticated' };
         }
         const result = startCore(deps, principal);
+        if (POLLY_ANCHOR) pairingMachine.value = { state: 'pending' };
+        ensures(pairingMachine.value.state === 'pending', 'pair/start: pending');
         return { user_code: result.userCode, expires_at: result.expiresAt };
       },
     )
     .post(
       '/complete',
       ({ body, request, set }) => {
+        requires(pairingMachine.value.state === 'pending', 'pair/complete: requires pending pair');
         const publicKey = decodeBase64Url(body.public_key);
         if (!publicKey) {
           set.status = 400;
@@ -84,6 +92,8 @@ export function familyPhonePairHttpRoutes(ctx: FamilyPhonePairRoutesContext) {
           ...(joiner ? { overrideOwnerUserId: joiner.userId } : {}),
         });
         ctx.onDirectoryChanged();
+        if (POLLY_ANCHOR) pairingMachine.value = { state: 'consumed' };
+        ensures(pairingMachine.value.state === 'consumed', 'pair/complete: consumed');
         return { device_id: result.deviceId };
       },
       {

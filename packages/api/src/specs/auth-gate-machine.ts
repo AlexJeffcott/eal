@@ -40,7 +40,7 @@ export type AuthGateState =
   | 'handled'
   | 'rejected';
 
-export const authGateMachine = $sharedState<{ state: AuthGateState }>('authGate', {
+export const authGateMachine = $sharedState<{ state: AuthGateState }>('authGateMachine', {
   state: 'undecided',
 });
 // Stryker restore all

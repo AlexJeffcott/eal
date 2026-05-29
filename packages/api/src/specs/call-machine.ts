@@ -35,7 +35,7 @@ import { ensures, requires } from '@fairfox/polly/verify';
 
 export type CallState = 'nonexistent' | 'pending' | 'connected' | 'closed';
 
-export const callMachine = $sharedState<{ state: CallState }>('call', { state: 'nonexistent' });
+export const callMachine = $sharedState<{ state: CallState }>('callMachine', { state: 'nonexistent' });
 // Stryker restore all
 
 export function invite(): void {
