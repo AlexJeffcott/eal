@@ -50,13 +50,13 @@ describe('SignIn (browser)', () => {
 
     await waitFor(() => stores.$currentUser.value !== null);
     expect(stores.$currentUser.value?.displayName).toBe('Leo');
-
-    await waitFor(() => document.querySelector('[data-current-user]')?.textContent === 'Leo');
-    expect(document.querySelector('[data-current-user]')?.textContent).toBe('Leo');
     expect(document.querySelector('[data-sign-in]')).toBeNull();
 
-    // Sign-out lives in the nav drawer — open it to confirm it's reachable.
+    // The current-user badge and Sign-out both live in the nav drawer — open
+    // it to confirm both surfaces are reachable.
     document.querySelector<HTMLElement>('[data-action="shell:nav-toggle"]')?.click();
+    await waitFor(() => document.querySelector('[data-current-user]')?.textContent === 'Leo');
+    expect(document.querySelector('[data-current-user]')?.textContent).toBe('Leo');
     await waitFor(() => document.querySelector('[data-sign-out]') !== null);
     expect(document.querySelector('[data-sign-out]')).not.toBeNull();
   });
@@ -66,10 +66,11 @@ describe('SignIn (browser)', () => {
     stores.$currentUser.value = { userId: 1, displayName: 'Leo' };
     render(<App />, root);
 
-    expect(document.querySelector('[data-current-user]')?.textContent).toBe('Leo');
-
-    // Sign-out lives in the nav drawer — open it, then click through.
+    // The current-user badge and Sign-out both live in the nav drawer — open
+    // it, confirm Leo's name shows, then click sign-out.
     document.querySelector<HTMLElement>('[data-action="shell:nav-toggle"]')?.click();
+    await waitFor(() => document.querySelector('[data-current-user]')?.textContent === 'Leo');
+    expect(document.querySelector('[data-current-user]')?.textContent).toBe('Leo');
     await waitFor(() => document.querySelector('[data-action="auth:sign-out"]') !== null);
     const signOutBtn = document.querySelector<HTMLButtonElement>('[data-action="auth:sign-out"]');
     expect(signOutBtn).not.toBeNull();

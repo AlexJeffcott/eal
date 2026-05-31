@@ -14,6 +14,7 @@ import {
   $callTranscript,
   $diagnosticsResult,
   $incomingCall,
+  $leaveMessage,
   $playingVoiceMessageId,
   $voiceMessageAudioUrl,
   $voiceMessages,
@@ -21,6 +22,7 @@ import {
   type ActiveCall,
   type CallTranscriptEntry,
   type DiagnosticsResult,
+  type LeaveMessage,
 } from './stores.ts';
 import {
   $deviceConnection,
@@ -159,6 +161,70 @@ function DiagnosticsCard(props: { result: DiagnosticsResult | null }) {
             </Layout>
           )}
         </Show>
+      </Layout>
+    </Surface>
+  );
+}
+
+function LeaveMessageSurface(props: {
+  prompt: LeaveMessage;
+  devices: FamilyPhoneDevice[];
+}) {
+  const { prompt } = props;
+  const peer = deviceLabel(props.devices, prompt.peerDeviceId);
+  const seconds = Math.max(0, Math.round(prompt.durationMs / 100) / 10);
+  return (
+    <Surface variant="callout" padding="var(--polly-space-md)" className="family-phone-leave-message">
+      <Layout gap="var(--polly-space-sm)">
+        {prompt.state === 'prompt' && (
+          <>
+            <Text as="h2" weight="bold">Leave a message for {peer}?</Text>
+            <Text tone="muted">Record a voice message they'll see in their voicemails.</Text>
+            <Cluster gap="var(--polly-space-sm)">
+              <Button
+                tier="primary"
+                label="Record message"
+                data-action="family-phone:leave-message-start"
+              />
+              <Button
+                tier="tertiary"
+                label="No thanks"
+                data-action="family-phone:leave-message-cancel"
+              />
+            </Cluster>
+          </>
+        )}
+        {prompt.state === 'recording' && (
+          <>
+            <Text as="h2" weight="bold">Recording for {peer}…</Text>
+            <Text tone="muted">{seconds.toFixed(1)}s — speak, then send.</Text>
+            <Cluster gap="var(--polly-space-sm)">
+              <Button
+                tier="primary"
+                color="success"
+                label="Send"
+                data-action="family-phone:leave-message-send"
+              />
+              <Button
+                tier="secondary"
+                color="danger"
+                label="Cancel"
+                data-action="family-phone:leave-message-cancel"
+              />
+            </Cluster>
+          </>
+        )}
+        {prompt.state === 'sending' && (
+          <>
+            <Text as="h2" weight="bold">Sending message…</Text>
+            <Text tone="muted">Posting {seconds.toFixed(1)}s of audio to {peer}.</Text>
+          </>
+        )}
+        {prompt.error !== null && (
+          <Text tone="muted" className="family-phone-leave-message-error">
+            {prompt.error}
+          </Text>
+        )}
       </Layout>
     </Surface>
   );
@@ -391,7 +457,7 @@ export function FamilyPhonePanel() {
   const hasActiveCall = $activeCall.value !== null;
 
   return (
-    <Layout gap="var(--polly-space-lg)" className="family-phone-panel">
+    <Layout gap="var(--polly-space-lg)" className="family-phone-panel" data-family-phone-panel>
       <Surface variant="plain" padding="var(--polly-space-md)">
         <Text as="h1" weight="bold">Phone</Text>
       </Surface>
@@ -412,6 +478,9 @@ export function FamilyPhonePanel() {
       </Show>
       <Show when={$activeCall}>
         {(call) => <ActiveCallSurface call={call} devices={devices} />}
+      </Show>
+      <Show when={$leaveMessage}>
+        {(prompt) => <LeaveMessageSurface prompt={prompt} devices={devices} />}
       </Show>
 
       <Show when={() => $pairedThisSession.value === null}>

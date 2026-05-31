@@ -318,14 +318,36 @@ async function startPhoneLoop(
  * substitutes a deterministic runner that emits the given string as a
  * single delta — enough to exercise the sentence-chunking and TTS path
  * the voice loop relies on. Production never sets this.
+ *
+ * Two template tokens make the fake useful for cross-modal recall tests:
+ *   {{last_user}}     — content of the newest user turn the runner saw
+ *   {{user_history}}  — every user turn the runner has ever seen for the
+ *                       current sessionId, joined by " | "
+ * The history is kept in process memory keyed by sessionId so a voice call
+ * that resumes a chat session sees what the chat said.
  */
+const FAKE_USER_HISTORY = new Map<string, string[]>();
+const FAKE_SESSION_ID = 'fake-session';
+
 async function selectClaudeRunner(global: GlobalOptions): Promise<ClaudeRunner> {
   const fakeReply = process.env['EAL_CLAUDE_FAKE_REPLY'];
   if (typeof fakeReply === 'string') {
     log('eal agent: EAL_CLAUDE_FAKE_REPLY set — using deterministic stub runner for tests');
-    return async (_input, emit) => {
-      emit(fakeReply);
-      return { content: fakeReply, sessionId: 'fake-session' };
+    return async (input, emit) => {
+      const sid = input.sessionId ?? FAKE_SESSION_ID;
+      const seen = FAKE_USER_HISTORY.get(sid) ?? [];
+      let lastUser = '';
+      for (const m of input.conversation) {
+        if (m.role !== 'user') continue;
+        seen.push(m.content);
+        lastUser = m.content;
+      }
+      FAKE_USER_HISTORY.set(sid, seen);
+      const reply = fakeReply
+        .replaceAll('{{last_user}}', lastUser)
+        .replaceAll('{{user_history}}', seen.join(' | '));
+      emit(reply);
+      return { content: reply, sessionId: FAKE_SESSION_ID };
     };
   }
   return createClaudeRunner({
@@ -345,7 +367,12 @@ function selectVoiceProviders(): { stt: SttProvider; tts: TtsProvider } | null {
 }
 
 function pickStt(name: string): SttProvider | null {
-  if (name === 'fixture') return createFixtureStt();
+  if (name === 'fixture') {
+    const transcript = process.env['EAL_STT_FIXTURE_TRANSCRIPT'];
+    return createFixtureStt(
+      transcript !== undefined ? { transcript } : { transcript: 'hello' },
+    );
+  }
   if (name === 'whisper-local') {
     const binPath = process.env['EAL_WHISPER_BIN'];
     const modelPath = process.env['EAL_WHISPER_MODEL'];

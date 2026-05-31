@@ -163,6 +163,13 @@ export function createFamilyPhoneWsHandler(
         type: 'call:unanswered',
         call_id: callId,
       });
+      // The callee is still ringing — its UI has no other signal that
+      // the call is over, so it would ring forever without this. Same
+      // shape as `call:cancel` so the client can reuse one handler.
+      ctx.ws.sendTo(call.callee.wsId, {
+        type: 'call:cancelled',
+        call_id: callId,
+      });
     }, unansweredMs);
     unansweredTimers.set(callId, handle);
   }

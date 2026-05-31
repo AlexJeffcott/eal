@@ -64,6 +64,15 @@
   background: var(--polly-color-info-soft, rgba(59, 130, 246, 0.1));
 }
 
+.family-phone-leave-message {
+  border-left: 4px solid var(--polly-color-info, #2af);
+}
+
+.family-phone-leave-message-error {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .family-phone-transcript {
   margin-top: var(--polly-space-sm);
   padding: var(--polly-space-sm);

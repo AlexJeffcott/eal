@@ -27,6 +27,20 @@ export const $activeCall = $state<ActiveCall | null>(null);
 /** Surfaced for one-shot info messages: "call rejected", "peer disconnected". */
 export const $callNote = $state<string | null>(null);
 
+/** A caller's "leave a message" affordance, surfaced after the peer rejected
+ *  the call or let it go unanswered. `prompt` is the offer; `recording`
+ *  means the mic is open and frames are accumulating; `sending` covers the
+ *  POST to /voice-messages. `durationMs` is updated by the recorder so the
+ *  UI can show elapsed seconds. Cleared on send / cancel / new call. */
+export type LeaveMessageState = 'prompt' | 'recording' | 'sending';
+export interface LeaveMessage {
+  peerDeviceId: number;
+  state: LeaveMessageState;
+  durationMs: number;
+  error: string | null;
+}
+export const $leaveMessage = $state<LeaveMessage | null>(null);
+
 /** Running transcript for the active call. The agent emits its spoken
  *  replies as `call:text` frames; we mirror them here so the user can
  *  read the line even when the device's speaker is silent (iOS PWA
@@ -67,6 +81,7 @@ export interface FamilyPhoneStores {
   $incomingCall: typeof $incomingCall;
   $activeCall: typeof $activeCall;
   $callNote: typeof $callNote;
+  $leaveMessage: typeof $leaveMessage;
   $callTranscript: typeof $callTranscript;
   $diagnosticsResult: typeof $diagnosticsResult;
   $voiceMessages: typeof $voiceMessages;
@@ -80,6 +95,7 @@ export function createFamilyPhoneStores(): FamilyPhoneStores {
     $incomingCall,
     $activeCall,
     $callNote,
+    $leaveMessage,
     $callTranscript,
     $diagnosticsResult,
     $voiceMessages,
@@ -93,6 +109,7 @@ export function resetFamilyPhoneStores(): void {
   $incomingCall.value = null;
   $activeCall.value = null;
   $callNote.value = null;
+  $leaveMessage.value = null;
   $callTranscript.value = [];
   $diagnosticsResult.value = null;
   $voiceMessages.value = [];

@@ -6,6 +6,7 @@ import {
   $callNote,
   $callTranscript,
   $incomingCall,
+  $leaveMessage,
 } from './stores.ts';
 import { $deviceConnection, $devices } from '../devices/stores.ts';
 import {
@@ -177,6 +178,7 @@ export function installCallEventHandlers(event: FamilyPhoneCallEvent): void {
       return;
     }
     case 'call:rejected': {
+      offerLeaveMessageIfCaller();
       $activeCall.value = null;
       $callNote.value = 'Call was rejected.';
       void ringtone().stop();
@@ -207,6 +209,7 @@ export function installCallEventHandlers(event: FamilyPhoneCallEvent): void {
       // The server's unanswered timer fired on a pending outbound call.
       // Mirrors the rejected handler — the call is over before it ever
       // produced audio, so audio teardown is a defensive no-op.
+      offerLeaveMessageIfCaller();
       $activeCall.value = null;
       $callNote.value = 'No answer.';
       void ringtone().stop();
@@ -324,9 +327,63 @@ export function resetFamilyPhoneCallState(): void {
   $activeCall.value = null;
   $incomingCall.value = null;
   $callNote.value = null;
+  $leaveMessage.value = null;
   void ringtone().stop();
   notifier().dismiss();
   void stopAudio();
+  void stopLeaveMessageCapture();
+}
+
+/**
+ * After the peer rejects or doesn't answer, give the caller a chance to
+ * record a voicemail. No-op when we were the callee or there's no peer
+ * to address — both happen for the same wire frames depending on which
+ * side this device is on.
+ */
+function offerLeaveMessageIfCaller(): void {
+  const call = $activeCall.value;
+  if (!call || call.role !== 'caller') return;
+  $leaveMessage.value = {
+    peerDeviceId: call.peerDeviceId,
+    state: 'prompt',
+    durationMs: 0,
+    error: null,
+  };
+}
+
+/**
+ * Open mic state for the voicemail recorder. Owned at module scope for the
+ * same reason as `activeAudio` — there is at most one recording in flight
+ * and it spans several action handlers (start/cancel/send).
+ */
+const RECORDER_SAMPLE_RATE = 24_000;
+interface RecorderHandle {
+  capture: AudioCapture;
+  frames: Uint8Array[];
+  startedAt: number;
+  ticker: ReturnType<typeof setInterval>;
+}
+let recorder: RecorderHandle | null = null;
+
+async function stopLeaveMessageCapture(): Promise<Uint8Array[]> {
+  const r = recorder;
+  if (!r) return [];
+  recorder = null;
+  clearInterval(r.ticker);
+  await r.capture.stop().catch(() => {});
+  return r.frames;
+}
+
+function concatPcm(frames: Uint8Array[]): Uint8Array {
+  let total = 0;
+  for (const f of frames) total += f.byteLength;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const f of frames) {
+    out.set(f, offset);
+    offset += f.byteLength;
+  }
+  return out;
 }
 
 export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
@@ -357,8 +414,101 @@ export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
       state: 'pending',
     };
     stores.$callTranscript.value = [];
+    stores.$leaveMessage.value = null;
+    void stopLeaveMessageCapture();
     primeSpeechSynthesis();
     conn.placeCall(target);
+  },
+
+  'family-phone:leave-message-start': async ({ stores }) => {
+    const offer = stores.$leaveMessage.value;
+    if (!offer || offer.state !== 'prompt') return;
+    if (recorder !== null) return;
+    const frames: Uint8Array[] = [];
+    let capture: AudioCapture;
+    try {
+      capture = await startAudioCapture((payload) => {
+        frames.push(payload);
+      });
+    } catch (err) {
+      stores.$leaveMessage.value = {
+        ...offer,
+        state: 'prompt',
+        error: `Microphone unavailable: ${describeError(err)}`,
+      };
+      return;
+    }
+    const startedAt = Date.now();
+    const ticker = setInterval(() => {
+      const r = recorder;
+      const current = stores.$leaveMessage.value;
+      if (!r || !current || current.state !== 'recording') return;
+      stores.$leaveMessage.value = {
+        ...current,
+        durationMs: Date.now() - r.startedAt,
+      };
+    }, 250);
+    recorder = { capture, frames, startedAt, ticker };
+    stores.$leaveMessage.value = {
+      ...offer,
+      state: 'recording',
+      durationMs: 0,
+      error: null,
+    };
+  },
+
+  'family-phone:leave-message-send': async ({ stores }) => {
+    const offer = stores.$leaveMessage.value;
+    if (!offer || offer.state !== 'recording') return;
+    const paired = stores.$pairedThisSession.value;
+    if (paired === null) {
+      stores.$leaveMessage.value = {
+        ...offer,
+        error: 'This browser is no longer paired.',
+      };
+      return;
+    }
+    if (recorder === null) {
+      stores.$leaveMessage.value = { ...offer, state: 'prompt', error: 'Recorder was not running.' };
+      return;
+    }
+    stores.$leaveMessage.value = { ...offer, state: 'sending' };
+    const frames = await stopLeaveMessageCapture();
+    const audio = concatPcm(frames);
+    if (audio.byteLength === 0) {
+      stores.$leaveMessage.value = {
+        ...offer,
+        state: 'prompt',
+        durationMs: 0,
+        error: 'Recording was empty; try again.',
+      };
+      return;
+    }
+    try {
+      await stores.client.postVoiceMessage({
+        toDeviceId: offer.peerDeviceId,
+        fromDeviceId: paired.deviceId,
+        body: 'Voice message',
+        audio,
+        sampleRate: RECORDER_SAMPLE_RATE,
+        channels: 1,
+      });
+    } catch (err) {
+      stores.$leaveMessage.value = {
+        ...offer,
+        state: 'prompt',
+        durationMs: 0,
+        error: `Could not send message: ${describeError(err)}`,
+      };
+      return;
+    }
+    stores.$leaveMessage.value = null;
+    stores.$callNote.value = 'Voice message sent.';
+  },
+
+  'family-phone:leave-message-cancel': async ({ stores }) => {
+    await stopLeaveMessageCapture();
+    stores.$leaveMessage.value = null;
   },
 
   'family-phone:accept-call': ({ data, stores }) => {

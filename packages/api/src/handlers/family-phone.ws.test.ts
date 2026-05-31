@@ -377,6 +377,13 @@ describe('family-phone.ws — call state machine, two authed peers', () => {
     const unanswered = find(harness.send, 'alex-ws', 'call:unanswered');
     expect(unanswered?.['call_id']).toBe(callId);
 
+    // The callee must also be told to stop ringing — without this the
+    // incoming-call banner on the target device sits forever, ringing
+    // and burning the screen, since the client has no other signal
+    // that the caller gave up.
+    const cancelledToCallee = find(harness.send, 'elisa-ws', 'call:cancelled');
+    expect(cancelledToCallee?.['call_id']).toBe(callId);
+
     // The call is now `closed`. A late accept finds no `pending` call and
     // produces no further events — the FSM is collapsed.
     harness.send.length = 0;
