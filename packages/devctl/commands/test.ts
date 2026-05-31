@@ -66,16 +66,24 @@ async function runApp(appId: string): Promise<number> {
   if (unitCode !== 0) return unitCode;
 
   // Polly's browser runner is directory-scoped — it cannot take individual
-  // files — so this runs the whole browser tier (a superset of the app's
-  // browser files, named here for the record).
-  console.log(`\n=== ${app.id}: browser (full tier; app files: ${app.browser.join(', ')}) ===`);
-  const browser = spawn(['bunx', 'polly', 'test:browser', 'packages/web/tests/browser'], {
-    cwd: ROOT,
-    stdout: 'inherit',
-    stderr: 'inherit',
-  });
-  const browserCode = await browser.exited;
-  if (browserCode !== 0) return browserCode;
+  // files — so when an app declares any browser files we run the whole tier
+  // (a superset). When `browser: []`, skip it: the tier was just verified by
+  // another app's run, and re-running it pointlessly hits polly#159 (the
+  // browser runner intermittently deadlocks at chat.browser.tsx).
+  if (app.browser.length > 0) {
+    console.log(`\n=== ${app.id}: browser (full tier; app files: ${app.browser.join(', ')}) ===`);
+    // Spawn with cwd at the package that owns the tests — from the monorepo
+    // root the runner deadlocks more reliably (polly#159, workaround).
+    const browser = spawn(['bunx', 'polly', 'test:browser', 'tests/browser'], {
+      cwd: resolve(ROOT, 'packages/web'),
+      stdout: 'inherit',
+      stderr: 'inherit',
+    });
+    const browserCode = await browser.exited;
+    if (browserCode !== 0) return browserCode;
+  } else {
+    console.log(`\n=== ${app.id}: browser — skipped (app declares no browser files) ===`);
+  }
 
   console.log(`\n=== ${app.id}: e2e ===`);
   const e2e = spawn(['bunx', 'playwright', 'test', ...app.e2e], {
@@ -128,8 +136,9 @@ async function runUnit(): Promise<number> {
 }
 
 async function runBrowser(): Promise<number> {
-  const proc = spawn(['bunx', 'polly', 'test:browser', 'packages/web/tests/browser'], {
-    cwd: ROOT,
+  // See `runApp` — polly#159, the runner deadlocks from the monorepo root.
+  const proc = spawn(['bunx', 'polly', 'test:browser', 'tests/browser'], {
+    cwd: resolve(ROOT, 'packages/web'),
     stdout: 'inherit',
     stderr: 'inherit',
   });

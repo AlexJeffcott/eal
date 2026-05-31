@@ -51,6 +51,44 @@ export const APPS: readonly AppVerification[] = [
     e2e: ['packages/e2e-tests/tests/showcase.spec.ts'],
     mutate: [],
   },
+  {
+    id: 'family-phone',
+    unit: [
+      'packages/web/src/apps/family-phone/actions.test.ts',
+      'packages/web/src/apps/family-phone/notifications.test.ts',
+      'packages/web/src/apps/family-phone/ringtone.test.ts',
+      'packages/web/src/apps/family-phone/voicemail-actions.test.ts',
+      'packages/api/src/handlers/family-phone.http.test.ts',
+      'packages/api/src/handlers/family-phone.ws.test.ts',
+      'packages/api/src/handlers/family-phone-voicemail.http.test.ts',
+      'packages/api/src/handlers/family-phone-device-auth.http.test.ts',
+      'packages/api/src/handlers/family-phone-pair.http.test.ts',
+      'packages/api/src/db/repos/family-phone-push-subscriptions.test.ts',
+      'packages/api/src/db/repos/family-phone-voice-messages.test.ts',
+      'packages/cli/src/apps/family-phone.test.ts',
+    ],
+    browser: [],
+    e2e: ['packages/e2e-tests/tests/family-phone.spec.ts'],
+    mutate: [
+      'packages/api/src/handlers/family-phone.ws.ts',
+      'packages/api/src/handlers/family-phone-pair.shared.ts',
+      'packages/api/src/handlers/family-phone-device-auth.shared.ts',
+      'packages/api/src/db/repos/family-phone-voice-messages.ts',
+    ],
+  },
+  {
+    id: 'agent-rules',
+    unit: [
+      'packages/api/src/handlers/agent-rules.http.test.ts',
+      'packages/api/src/db/repos/agent-rules.test.ts',
+      'packages/web/src/apps/agent-rules/actions.test.ts',
+    ],
+    browser: [],
+    e2e: ['packages/e2e-tests/tests/agent-rules.spec.ts'],
+    mutate: [
+      'packages/api/src/db/repos/agent-rules.ts',
+    ],
+  },
 ];
 
 export function appById(id: string): AppVerification | undefined {

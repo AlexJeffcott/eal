@@ -306,7 +306,7 @@ function ActionsLogCard(props: {
 
 export function AgentRulesPanel() {
   return (
-    <Layout gap="var(--polly-space-lg)">
+    <Layout gap="var(--polly-space-lg)" data-agent-rules-panel>
       <Surface variant="plain" padding="var(--polly-space-md)">
         <Text as="h1" weight="bold">Agent proactivity</Text>
       </Surface>
