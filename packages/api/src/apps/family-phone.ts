@@ -16,15 +16,24 @@ import type { ApiApp } from './types.ts';
  * later phases — see docs/family-phone.md.
  */
 const SCHEMA = `
+-- kind='pstn' rows are ephemeral per-E.164 entries created by the Twilio
+-- bridge so the inbound (or future outbound) call has a virtual device on
+-- the call router. They are not owned by any human, so user_id is NULL —
+-- the CHECK enforces the invariant that every other kind has a user_id.
+-- The label carries the E.164 (a friendly label can override it later);
+-- the partial unique index keeps one row per remote number.
 CREATE TABLE IF NOT EXISTS family_phone_devices (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
   label       TEXT    NOT NULL,
-  kind        TEXT    NOT NULL CHECK (kind IN ('handset','pwa','agent')),
+  kind        TEXT    NOT NULL CHECK (kind IN ('handset','pwa','agent','pstn')),
   created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
-  paired_at   TEXT
+  paired_at   TEXT,
+  CHECK (kind = 'pstn' OR user_id IS NOT NULL)
 );
 CREATE INDEX IF NOT EXISTS idx_family_phone_devices_user_id ON family_phone_devices (user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_family_phone_devices_pstn_label
+  ON family_phone_devices (label) WHERE kind = 'pstn';
 
 -- A pair request is a 60s-TTL invite minted by an in-household browser. The
 -- joining device supplies its own label and kind on /pair/complete, so this

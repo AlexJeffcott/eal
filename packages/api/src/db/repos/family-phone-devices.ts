@@ -1,10 +1,16 @@
 import type { DatabaseClient } from '../client.ts';
 
+export type FamilyPhoneDeviceKind = 'handset' | 'pwa' | 'agent' | 'pstn';
+
 export interface FamilyPhoneDeviceRow {
   id: number;
-  user_id: number;
+  /**
+   * Owning user. Null only for kind='pstn' rows, which represent a remote
+   * phone number, not a household device — the schema CHECK enforces this.
+   */
+  user_id: number | null;
   label: string;
-  kind: 'handset' | 'pwa' | 'agent';
+  kind: FamilyPhoneDeviceKind;
   created_at: string;
   paired_at: string | null;
 }
@@ -12,9 +18,12 @@ export interface FamilyPhoneDeviceRow {
 /**
  * Device row joined with its owner's display name. The directory endpoint
  * returns this shape so every row carries enough context to render
- * "Leo's handset (Leo)" without a second round-trip.
+ * "Leo's handset (Leo)" without a second round-trip. Excludes kind='pstn'
+ * rows because they have no owner — the household directory paints
+ * humans-and-their-devices only.
  */
 export interface FamilyPhoneDeviceWithOwner extends FamilyPhoneDeviceRow {
+  user_id: number;
   owner_display_name: string;
 }
 
@@ -22,10 +31,21 @@ export interface FamilyPhoneDevicesRepo {
   insert(input: {
     userId: number;
     label: string;
-    kind: 'handset' | 'pwa' | 'agent';
+    kind: Exclude<FamilyPhoneDeviceKind, 'pstn'>;
     pairedAt?: string;
   }): FamilyPhoneDeviceRow;
-  /** Every device in the household, ordered by owner name then device id. */
+  /**
+   * Materialise (or fetch) the device row that represents an inbound or
+   * outbound PSTN counterparty. Keyed by E.164 via the partial unique
+   * index on (label) WHERE kind='pstn'. Always returns the canonical row
+   * — fresh insert on first sight, existing row otherwise.
+   */
+  upsertPstnByE164(e164: string): FamilyPhoneDeviceRow;
+  /**
+   * Every household device (kind != 'pstn'), ordered by owner name then
+   * device id. PSTN rows are excluded — they are per-call ephemera with
+   * no human owner and the directory UI does not surface them.
+   */
   listAllWithOwner(): FamilyPhoneDeviceWithOwner[];
   findById(id: number): FamilyPhoneDeviceRow | null;
   /** Set a new label on an existing device. Returns the patched row,
@@ -41,11 +61,26 @@ export function createFamilyPhoneDevicesRepo(db: DatabaseClient): FamilyPhoneDev
      VALUES (?, ?, ?, ?)
      RETURNING id, user_id, label, kind, created_at, paired_at`,
   );
+  // The partial unique index on (label) WHERE kind='pstn' makes this a
+  // safe upsert keyed by E.164. ON CONFLICT(label) is rejected by SQLite
+  // for a partial index target, so the lookup-then-insert pattern lives
+  // inside a transaction below to keep concurrent calls from racing.
+  const findPstnStmt = db.prepare<FamilyPhoneDeviceRow, [string]>(
+    `SELECT id, user_id, label, kind, created_at, paired_at
+       FROM family_phone_devices
+      WHERE kind = 'pstn' AND label = ?`,
+  );
+  const insertPstnStmt = db.prepare<FamilyPhoneDeviceRow, [string]>(
+    `INSERT INTO family_phone_devices (user_id, label, kind)
+     VALUES (NULL, ?, 'pstn')
+     RETURNING id, user_id, label, kind, created_at, paired_at`,
+  );
   const listAllStmt = db.prepare<FamilyPhoneDeviceWithOwner, []>(
     `SELECT d.id, d.user_id, d.label, d.kind, d.created_at, d.paired_at,
             u.display_name AS owner_display_name
      FROM family_phone_devices d
      JOIN users u ON u.id = d.user_id
+     WHERE d.kind <> 'pstn'
      ORDER BY u.display_name COLLATE NOCASE, d.id`,
   );
   const findByIdStmt = db.prepare<FamilyPhoneDeviceRow, [number]>(
@@ -72,6 +107,15 @@ export function createFamilyPhoneDevicesRepo(db: DatabaseClient): FamilyPhoneDev
       );
       if (!row) throw new Error('family_phone_devices.insert: RETURNING gave no row');
       return row;
+    },
+    upsertPstnByE164(e164): FamilyPhoneDeviceRow {
+      const existing = findPstnStmt.get(e164);
+      if (existing) return existing;
+      const inserted = insertPstnStmt.get(e164);
+      if (!inserted) {
+        throw new Error('family_phone_devices.upsertPstnByE164: RETURNING gave no row');
+      }
+      return inserted;
     },
     listAllWithOwner(): FamilyPhoneDeviceWithOwner[] {
       return listAllStmt.all();

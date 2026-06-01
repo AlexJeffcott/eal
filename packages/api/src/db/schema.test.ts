@@ -123,6 +123,61 @@ describe('applySchema', () => {
     expect(rowCount?.count).toBe(1);
   });
 
+  test('rebuilds a pre-PSTN family_phone_devices table and preserves rows', () => {
+    // Hand-craft the legacy shape: no 'pstn' in the CHECK and a NOT NULL
+    // user_id. applySchema must rebuild it into the new shape and
+    // carry every existing row across.
+    db.exec(`
+      CREATE TABLE users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        display_name TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE family_phone_devices (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        label       TEXT    NOT NULL,
+        kind        TEXT    NOT NULL CHECK (kind IN ('handset','pwa','agent')),
+        created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+        paired_at   TEXT
+      );
+      INSERT INTO users (display_name) VALUES ('alex');
+      INSERT INTO family_phone_devices (user_id, label, kind) VALUES (1, 'phone', 'handset');
+    `);
+    applySchema(db);
+
+    interface DeviceRow {
+      id: number;
+      user_id: number | null;
+      label: string;
+      kind: string;
+    }
+    const rows = db
+      .prepare<DeviceRow, []>(
+        "SELECT id, user_id, label, kind FROM family_phone_devices ORDER BY id",
+      )
+      .all();
+    expect(rows).toEqual([{ id: 1, user_id: 1, label: 'phone', kind: 'handset' }]);
+
+    // New shape accepts a kind='pstn' row with a null user_id.
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO family_phone_devices (user_id, label, kind) VALUES (NULL, '+12025550100', 'pstn')",
+        )
+        .run(),
+    ).not.toThrow();
+
+    // The CHECK still rejects a non-PSTN row with a null user_id.
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO family_phone_devices (user_id, label, kind) VALUES (NULL, 'orphan', 'handset')",
+        )
+        .run(),
+    ).toThrow();
+  });
+
   test('indexes survive repeated applySchema calls without duplication', () => {
     applySchema(db);
     applySchema(db);
@@ -143,6 +198,7 @@ describe('applySchema', () => {
       'idx_family_phone_challenges_expires_at',
       'idx_family_phone_device_sessions_device_id',
       'idx_family_phone_device_sessions_expires_at',
+      'idx_family_phone_devices_pstn_label',
       'idx_family_phone_devices_user_id',
       'idx_family_phone_pair_expires_at',
       'idx_family_phone_pair_user_code',

@@ -91,6 +91,13 @@ export function applySchema(db: DatabaseClient): void {
   // pre-migration database and drops the stale table first.
   pruneLegacyPairColumns(db);
 
+  // Phase 7B.4d: family_phone_devices.kind once forbade 'pstn' and required
+  // a non-NULL user_id. The Twilio bridge introduces user-less PSTN device
+  // rows, so the constraint widens. SQLite cannot ALTER a CHECK, so an
+  // older shape needs a table rebuild — done before `app.schema` runs so
+  // the fresh CREATE lands on the new shape.
+  rebuildFamilyPhoneDevicesIfLegacy(db);
+
   db.exec(GLOBAL_SCHEMA);
   for (const app of API_APPS) {
     db.exec(app.schema);
@@ -100,6 +107,49 @@ export function applySchema(db: DatabaseClient): void {
 }
 
 interface TableNameRow { name: string }
+
+interface TableSqlRow { sql: string | null }
+
+/**
+ * Drop and rebuild family_phone_devices when the on-disk shape is the
+ * pre-PSTN one. Detection: read the CREATE statement from sqlite_master
+ * and check for the new 'pstn' literal in the kind CHECK. Existing rows
+ * are copied across; foreign-key references survive because the index
+ * targets the same column (id) and we run inside a single transaction
+ * with `foreign_keys` momentarily off so the FK targets that still
+ * point at the soon-to-be-dropped table aren't policed mid-flight.
+ *
+ * Idempotent: a database already on the new shape returns early.
+ */
+function rebuildFamilyPhoneDevicesIfLegacy(db: DatabaseClient): void {
+  const row = db
+    .prepare<TableSqlRow, []>(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='family_phone_devices'",
+    )
+    .get();
+  if (!row || row.sql === null) return;
+  if (row.sql.includes("'pstn'")) return;
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec(`
+      CREATE TABLE family_phone_devices_new (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        label       TEXT    NOT NULL,
+        kind        TEXT    NOT NULL CHECK (kind IN ('handset','pwa','agent','pstn')),
+        created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+        paired_at   TEXT,
+        CHECK (kind = 'pstn' OR user_id IS NOT NULL)
+      );
+      INSERT INTO family_phone_devices_new (id, user_id, label, kind, created_at, paired_at)
+        SELECT id, user_id, label, kind, created_at, paired_at FROM family_phone_devices;
+      DROP TABLE family_phone_devices;
+      ALTER TABLE family_phone_devices_new RENAME TO family_phone_devices;
+    `);
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
 
 function pruneLegacyPairColumns(db: DatabaseClient): void {
   const exists = db
