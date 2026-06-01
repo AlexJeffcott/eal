@@ -212,7 +212,14 @@ export async function createAppInternal(
     },
     sendBinaryTo(wsId, frame) {
       const target = connections.get(wsId);
-      if (target) target.send(frame);
+      if (!target) return;
+      // Elysia's ws.send JSON-stringifies a plain Uint8Array (only Buffer
+      // is treated as binary; see node_modules/elysia/dist/ws/index.js).
+      // Wrap the frame in a Buffer view so cross-endpoint sends from app
+      // routes (e.g. the Twilio media WS forwarding audio to a handset)
+      // hit the wire as a binary frame, not a JSON envelope.
+      const asBuffer = Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength);
+      target.send(asBuffer);
     },
     subscribe(ws, topic) {
       subscribe(ws, topic);

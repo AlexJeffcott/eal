@@ -160,11 +160,20 @@ export const familyPhoneApp: ApiApp = {
    * All other family-phone routes still flow through the global gate.
    */
   ownsAuthFor: (method, pathname) => {
+    // The Twilio Media Stream WS upgrade is a GET that carries no Bearer
+    // token — Twilio cannot mint one. Endpoint security comes from the
+    // signed-URL handoff in the voice webhook's TwiML; 7D adds a per-
+    // source allowlist on top.
+    if (method === 'GET' && pathname === '/api/family-phone/twilio/media') return true;
     if (method !== 'POST') return false;
     return (
       pathname === '/api/family-phone/pair/complete' ||
       pathname === '/api/family-phone/device/challenge' ||
-      pathname === '/api/family-phone/device/auth'
+      pathname === '/api/family-phone/device/auth' ||
+      // Twilio voice webhook: authenticated by the X-Twilio-Signature
+      // HMAC the handler verifies before doing anything. The global
+      // Bearer gate would reject it before that check could run.
+      pathname === '/api/family-phone/twilio/voice'
     );
   },
   routes: (ctx) => {
