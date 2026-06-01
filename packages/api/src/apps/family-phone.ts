@@ -5,8 +5,17 @@ import { familyPhoneDeviceAuthHttpRoutes } from '../handlers/family-phone-device
 import { familyPhoneVoicemailHttpRoutes } from '../handlers/family-phone-voicemail.http.ts';
 import { pstnContactsHttpRoutes } from '../handlers/family-phone-pstn-contacts.http.ts';
 import { twilioHttpRoutes } from '../handlers/family-phone-twilio.http.ts';
+import { twilioMediaWsRoute } from '../handlers/family-phone-twilio.ws.ts';
 import { loadTwilioConfig } from '../twilio/config.ts';
-import { createFamilyPhoneWsHandler } from '../handlers/family-phone.ws.ts';
+import {
+  createFamilyPhoneWsHandler,
+  DEFAULT_UNANSWERED_MS,
+} from '../handlers/family-phone.ws.ts';
+import { createCallRouter, type CallRouter } from '../handlers/family-phone-call-router.ts';
+import { createFireOfflineCallWake } from '../handlers/family-phone-call-wake.ts';
+import { createFamilyPhoneDevicesRepo } from '../db/repos/family-phone-devices.ts';
+import type { DatabaseClient } from '../db/client.ts';
+import type { WsService } from './types.ts';
 import type { ApiApp } from './types.ts';
 
 /**
@@ -162,6 +171,7 @@ export const familyPhoneApp: ApiApp = {
     const broadcastDirectoryChanged = (): void => {
       ctx.ws.broadcast(FAMILY_PHONE_TOPIC, { type: 'directory:changed' });
     };
+    const router = getOrCreateRouter(ctx.db, ctx.ws);
     const devices = familyPhoneHttpRoutes({
       db: ctx.db,
       getPrincipal: ctx.getPrincipal,
@@ -203,7 +213,16 @@ export const familyPhoneApp: ApiApp = {
         );
       }
       const publicHost = new URL(origin).host;
-      app = app.use(twilioHttpRoutes({ twilio, publicHost }));
+      const devices = createFamilyPhoneDevicesRepo(ctx.db);
+      app = app
+        .use(twilioHttpRoutes({ twilio, publicHost }))
+        .use(
+          twilioMediaWsRoute({
+            router,
+            devices,
+            onlineDevices: ONLINE_DEVICES,
+          }),
+        );
     }
     return app;
   },
@@ -211,9 +230,38 @@ export const familyPhoneApp: ApiApp = {
     prefix: 'call',
     binaryTag: 0x10,
     handler: (ctx) =>
-      createFamilyPhoneWsHandler(ctx, ONLINE_DEVICES, FAMILY_PHONE_TOPIC),
+      createFamilyPhoneWsHandler(ctx, ONLINE_DEVICES, FAMILY_PHONE_TOPIC, {
+        router: getOrCreateRouter(ctx.db, ctx.ws),
+      }),
   },
 };
+
+/**
+ * Process-wide router cache keyed by db handle. The router carries
+ * connection state (which device is on which wsId, the per-call FSM)
+ * that the Twilio bridge and the family-phone WS handler must share —
+ * the bridge places virtual-side calls and the WS handler turns real
+ * handset accepts into router events. Server-factory builds the WS
+ * handler before the routes, so this lazy keyed-by-db cache is the
+ * simplest way to give both sides the same instance without changing
+ * the ApiApp interface.
+ */
+const ROUTER_BY_DB = new WeakMap<DatabaseClient, CallRouter>();
+
+function getOrCreateRouter(db: DatabaseClient, ws: WsService): CallRouter {
+  const existing = ROUTER_BY_DB.get(db);
+  if (existing) return existing;
+  const fireOfflineCallWake = createFireOfflineCallWake(db);
+  const created = createCallRouter({
+    ws,
+    unansweredMs: DEFAULT_UNANSWERED_MS,
+    onCallInviteOfflineTarget: (fromDeviceId, targetDeviceId) => {
+      void fireOfflineCallWake(targetDeviceId, fromDeviceId);
+    },
+  });
+  ROUTER_BY_DB.set(db, created);
+  return created;
+}
 
 /**
  * Topic every authenticated family-phone WS subscribes to. The server

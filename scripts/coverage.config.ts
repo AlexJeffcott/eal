@@ -43,6 +43,10 @@ export const config: CoverageConfig = {
       reason: 'e2e: Elysia route wiring is exercised by playwright',
       claimedBy: 'packages/e2e-tests/tests/auth.spec.ts',
     },
+    'packages/api/src/handlers/family-phone-twilio.ws.ts': {
+      reason: 'thin Elysia .ws shim around createTwilioMediaSession (unit-tested); the upgrade path is exercised by scripts/e2e-pstn-inbound.ts',
+      claimedBy: 'packages/api/src/handlers/family-phone-twilio.ws.test.ts',
+    },
     'packages/api/src/server.ts': {
       reason: 'e2e/multi: server boot is observed by bootApi + curl',
       claimedBy: 'scripts/e2e-tasks-multi.ts',
