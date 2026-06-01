@@ -12,25 +12,46 @@ export interface TwilioRoutesContext {
   publicHost: string;
 }
 
+interface TwiMLOptions {
+  streamUrl: string;
+  callSid: string;
+  from: string;
+  to: string;
+  direction: 'inbound' | 'outbound';
+  /**
+   * Only set on outbound calls. The handset that placed the call: the
+   * bridge binds the media stream to this device id, skipping fan-out.
+   */
+  targetHandsetId: number | null;
+}
+
 /**
- * The TwiML response Twilio fetches on every inbound call: ask Twilio to
- * open a bidirectional Media Stream to our WS endpoint and bridge it
- * with the caller. The `customParameters` carry the call's identifying
- * fields so the WS side does not have to parse a separate event for
- * caller-id.
+ * The TwiML response Twilio fetches on every call: ask Twilio to open
+ * a bidirectional Media Stream to our WS endpoint and bridge it with
+ * the caller. The `customParameters` carry every per-call field the
+ * bridge needs — caller-id, direction, and (on outbound) the bound
+ * handset — so the WS side does not have to parse separate events
+ * for them.
  */
-function buildTwiML(streamUrl: string, callSid: string, from: string, to: string): string {
-  const escapedSid = escapeAttribute(callSid);
-  const escapedFrom = escapeAttribute(from);
-  const escapedTo = escapeAttribute(to);
+function buildTwiML(opts: TwiMLOptions): string {
+  const parameters: Array<[string, string]> = [
+    ['callSid', opts.callSid],
+    ['from', opts.from],
+    ['to', opts.to],
+    ['direction', opts.direction],
+  ];
+  if (opts.targetHandsetId !== null) {
+    parameters.push(['handset', String(opts.targetHandsetId)]);
+  }
+  const paramTags = parameters
+    .map(([name, value]) => `      <Parameter name="${name}" value="${escapeAttribute(value)}"/>`)
+    .join('\n');
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<Response>',
     '  <Connect>',
-    `    <Stream url="${escapeAttribute(streamUrl)}">`,
-    `      <Parameter name="callSid" value="${escapedSid}"/>`,
-    `      <Parameter name="from" value="${escapedFrom}"/>`,
-    `      <Parameter name="to" value="${escapedTo}"/>`,
+    `    <Stream url="${escapeAttribute(opts.streamUrl)}">`,
+    paramTags,
     '    </Stream>',
     '  </Connect>',
     '</Response>',
@@ -58,6 +79,13 @@ function escapeAttribute(value: string): string {
  * signature module wants. Each parameter appears once — Twilio does
  * not send repeated keys for voice webhooks.
  */
+function parseHandsetParam(raw: string | null): number | null {
+  if (raw === null || raw === '') return null;
+  if (!/^\d+$/.test(raw)) return null;
+  const n = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
 function searchParamsToFields(params: URLSearchParams): Record<string, string> {
   const fields: Record<string, string> = {};
   for (const [k, v] of params.entries()) fields[k] = v;
@@ -99,9 +127,19 @@ export function twilioHttpRoutes(ctx: TwilioRoutesContext) {
           set.status = 400;
           return 'missing required Twilio voice fields';
         }
+        // Outbound calls come back through this same webhook with a
+        // `direction=outbound&handset=<id>` query string the
+        // place-call handler (7C.4) puts on the TwiML URL it sends
+        // Twilio. Twilio signs the full URL — query included — so
+        // the verifier above has already proved the params are
+        // exactly the ones we requested.
+        const requestUrl = new URL(request.url);
+        const direction: 'inbound' | 'outbound' =
+          requestUrl.searchParams.get('direction') === 'outbound' ? 'outbound' : 'inbound';
+        const targetHandsetId = parseHandsetParam(requestUrl.searchParams.get('handset'));
         const streamUrl = `wss://${ctx.publicHost}/api/family-phone/twilio/media`;
         set.headers['content-type'] = 'text/xml; charset=utf-8';
-        return buildTwiML(streamUrl, callSid, from, to);
+        return buildTwiML({ streamUrl, callSid, from, to, direction, targetHandsetId });
       },
       {
         // Twilio sends application/x-www-form-urlencoded; we read the

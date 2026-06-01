@@ -81,6 +81,28 @@ function startFrame(from: string, callSid = 'CA1', streamSid = 'MZ1', to = '+441
   });
 }
 
+function outboundStartFrame(
+  from: string,
+  handsetId: number,
+  callSid = 'CA1',
+  streamSid = 'MZ1',
+  to = '+441234567890',
+): string {
+  return JSON.stringify({
+    event: 'start',
+    start: {
+      streamSid,
+      callSid,
+      customParameters: {
+        from,
+        to,
+        direction: 'outbound',
+        handset: String(handsetId),
+      },
+    },
+  });
+}
+
 describe('createTwilioMediaSession', () => {
   let db: DatabaseClient;
   let devices: FamilyPhoneDevicesRepo;
@@ -166,6 +188,40 @@ describe('createTwilioMediaSession', () => {
   test('close on a connection that never started is a no-op', () => {
     const { ws } = makeWs('twilio-1');
     expect(() => session.close(ws)).not.toThrow();
+  });
+
+  test('outbound start rings only the named handset, skipping fan-out', () => {
+    // Add a second handset that should NOT receive the invite on outbound.
+    const secondHandset = devices.insert({ userId: 1, label: 'tablet', kind: 'handset' });
+    onlineDevices.add(secondHandset.id);
+
+    const { ws } = makeWs('twilio-outbound');
+    // The PSTN target is the dialed party; the named handset is the one
+    // that placed the call. Use the first handset (id=1, registered as
+    // 'handset-ws').
+    session.message(ws, outboundStartFrame('+12025550100', 1));
+
+    const incomings = cap.sendTo.filter((c) => c.payload['type'] === 'call:incoming');
+    expect(incomings).toHaveLength(1);
+    expect(incomings[0]?.wsId).toBe('handset-ws');
+  });
+
+  test('outbound start whose named handset is offline terminates the bridge', () => {
+    let closed = false;
+    const wsObj = {
+      id: 'twilio-outbound',
+      send() {},
+      close() {
+        closed = true;
+      },
+    };
+    // Reference a handset id that exists in DB but is not in
+    // onlineDevices: the bridge sees an empty target list and shuts
+    // down so Twilio drops the call instead of dialling out into the
+    // void.
+    const offline = devices.insert({ userId: 1, label: 'tablet', kind: 'handset' });
+    session.message(wsObj, outboundStartFrame('+12025550100', offline.id));
+    expect(closed).toBe(true);
   });
 
   test('a second start for the same E.164 returns the existing PSTN device row', () => {

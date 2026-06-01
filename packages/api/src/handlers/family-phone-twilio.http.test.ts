@@ -87,6 +87,31 @@ describe('POST /api/family-phone/twilio/voice', () => {
     expect(res.body).toContain(`value="${VALID_FIELDS.To}"`);
   });
 
+  test('inbound TwiML carries direction=inbound and no handset parameter', async () => {
+    const sig = signFor(VALID_FIELDS);
+    const res = await postForm(mountApp(), '/api/family-phone/twilio/voice', VALID_FIELDS, sig);
+    expect(res.body).toContain('name="direction" value="inbound"');
+    expect(res.body).not.toContain('name="handset"');
+  });
+
+  test('outbound query string lands in TwiML as direction + handset parameters', async () => {
+    const path = '/api/family-phone/twilio/voice?direction=outbound&handset=42';
+    const sig = signFor(VALID_FIELDS, path);
+    const res = await postForm(mountApp(), path, VALID_FIELDS, sig);
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('name="direction" value="outbound"');
+    expect(res.body).toContain('name="handset" value="42"');
+  });
+
+  test('non-integer handset query param is dropped (no parameter emitted)', async () => {
+    const path = '/api/family-phone/twilio/voice?direction=outbound&handset=banana';
+    const sig = signFor(VALID_FIELDS, path);
+    const res = await postForm(mountApp(), path, VALID_FIELDS, sig);
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('name="direction" value="outbound"');
+    expect(res.body).not.toContain('name="handset"');
+  });
+
   test('escapes XML-unsafe characters in caller-id values', async () => {
     const fields = { ...VALID_FIELDS, From: '"<bobby>&apos;' };
     const sig = signFor(fields);

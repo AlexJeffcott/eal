@@ -58,7 +58,50 @@ describe('parseTwilioEvent — start', () => {
       callSid: 'CA001',
       from: '+12025550100',
       to: '+441234567890',
+      direction: 'inbound',
+      targetHandsetId: null,
     });
+  });
+
+  test('reads direction=outbound + handset id from customParameters', () => {
+    const parsed = parseTwilioEvent(
+      asJson({
+        event: 'start',
+        start: {
+          streamSid: 'MZ001',
+          callSid: 'CA001',
+          customParameters: {
+            from: '+1',
+            to: '+2',
+            direction: 'outbound',
+            handset: '42',
+          },
+        },
+      }),
+    );
+    if (parsed?.type !== 'start') throw new Error('expected start');
+    expect(parsed.direction).toBe('outbound');
+    expect(parsed.targetHandsetId).toBe(42);
+  });
+
+  test('rejects a non-integer handset value (defaults to null)', () => {
+    const parsed = parseTwilioEvent(
+      asJson({
+        event: 'start',
+        start: {
+          streamSid: 'MZ001',
+          callSid: 'CA001',
+          customParameters: {
+            from: '+1',
+            to: '+2',
+            direction: 'outbound',
+            handset: 'banana',
+          },
+        },
+      }),
+    );
+    if (parsed?.type !== 'start') throw new Error('expected start');
+    expect(parsed.targetHandsetId).toBeNull();
   });
 
   test('accepts streamSid at the top level as a fallback', () => {

@@ -73,7 +73,20 @@ export function createTwilioMediaSession(ctx: TwilioMediaWsContext): TwilioMedia
       if (event.type !== 'start') return;
 
       const pstn = ctx.devices.upsertPstnByE164(event.from);
-      const handsetIds = [...ctx.onlineDevices];
+      // Outbound: the TwiML carried direction=outbound + the device id
+      // of the handset that placed the call. Bind to that handset only
+      // — fan-out would ring uninvolved household devices. Skip if the
+      // handset has gone offline; the bridge terminates on an empty
+      // target list, which closes the upstream WS and Twilio drops
+      // the call.
+      let handsetIds: number[];
+      if (event.direction === 'outbound' && event.targetHandsetId !== null) {
+        handsetIds = ctx.onlineDevices.has(event.targetHandsetId)
+          ? [event.targetHandsetId]
+          : [];
+      } else {
+        handsetIds = [...ctx.onlineDevices];
+      }
       const bridge = createTwilioBridge({
         router: ctx.router,
         pstnDeviceId: pstn.id,

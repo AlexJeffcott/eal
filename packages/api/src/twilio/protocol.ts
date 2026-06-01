@@ -11,9 +11,28 @@
  * the rest of the stack.
  */
 
+/**
+ * The `direction` field is supplied by our TwiML — it carries the
+ * value back through the Media Stream's `customParameters` so the
+ * bridge can pick between fan-out (inbound: ring every online handset)
+ * and bind (outbound: the named handset placed the call and is the
+ * only valid peer). Defaults to 'inbound' when absent so existing
+ * inbound-only flows keep their semantics.
+ *
+ * `targetHandsetId` is only meaningful when `direction === 'outbound'`
+ * — the device id of the handset that initiated the outbound call.
+ */
 export type TwilioEvent =
   | { type: 'connected'; version: string }
-  | { type: 'start'; streamSid: string; callSid: string; from: string; to: string }
+  | {
+      type: 'start';
+      streamSid: string;
+      callSid: string;
+      from: string;
+      to: string;
+      direction: 'inbound' | 'outbound';
+      targetHandsetId: number | null;
+    }
   | { type: 'media'; streamSid: string; track: 'inbound'; payload: string }
   | { type: 'mark'; streamSid: string; name: string }
   | { type: 'stop'; streamSid: string };
@@ -91,7 +110,20 @@ function parseStart(record: Record<string, unknown>): TwilioEvent | null {
   const from = getString(custom, 'from');
   const to = getString(custom, 'to');
   if (from === null || to === null) return null;
-  return { type: 'start', streamSid, callSid, from, to };
+  // Outbound TwiML adds `direction=outbound` + the device id of the
+  // handset that placed the call. Inbound TwiML omits both — the
+  // parser defaults to 'inbound' so 7B's inbound path is unchanged.
+  const directionRaw = getString(custom, 'direction');
+  const direction: 'inbound' | 'outbound' = directionRaw === 'outbound' ? 'outbound' : 'inbound';
+  const targetHandsetId = parseIntStrict(getString(custom, 'handset'));
+  return { type: 'start', streamSid, callSid, from, to, direction, targetHandsetId };
+}
+
+function parseIntStrict(s: string | null): number | null {
+  if (s === null || s === '') return null;
+  if (!/^-?\d+$/.test(s)) return null;
+  const n = Number.parseInt(s, 10);
+  return Number.isSafeInteger(n) ? n : null;
 }
 
 function parseMedia(record: Record<string, unknown>): TwilioEvent | null {

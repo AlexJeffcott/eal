@@ -51,6 +51,8 @@ function startEvent(streamSid = 'MZ123') {
     callSid: 'CA456',
     from: '+390000000001',
     to: '+390000000002',
+    direction: 'inbound' as const,
+    targetHandsetId: null,
   };
 }
 
