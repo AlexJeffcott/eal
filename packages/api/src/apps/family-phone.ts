@@ -4,6 +4,8 @@ import { familyPhonePairHttpRoutes } from '../handlers/family-phone-pair.http.ts
 import { familyPhoneDeviceAuthHttpRoutes } from '../handlers/family-phone-device-auth.http.ts';
 import { familyPhoneVoicemailHttpRoutes } from '../handlers/family-phone-voicemail.http.ts';
 import { pstnContactsHttpRoutes } from '../handlers/family-phone-pstn-contacts.http.ts';
+import { twilioHttpRoutes } from '../handlers/family-phone-twilio.http.ts';
+import { loadTwilioConfig } from '../twilio/config.ts';
 import { createFamilyPhoneWsHandler } from '../handlers/family-phone.ws.ts';
 import type { ApiApp } from './types.ts';
 
@@ -171,7 +173,30 @@ export const familyPhoneApp: ApiApp = {
       db: ctx.db,
       getPrincipal: ctx.getPrincipal,
     });
-    return new Elysia().use(devices).use(pair).use(deviceAuth).use(voicemail).use(pstnContacts);
+    // The Twilio webhook only mounts when TWILIO_ENABLED=true and every
+    // required env var validates — see twilio/config.ts. With it off the
+    // bare family-phone stack still boots; with it on, a missing var
+    // fails the boot loudly. The wss:// URL is derived from EAL_ORIGIN
+    // (already required for WebAuthn) so the trunk does not duplicate
+    // the public-host config.
+    const twilio = loadTwilioConfig();
+    let app = new Elysia()
+      .use(devices)
+      .use(pair)
+      .use(deviceAuth)
+      .use(voicemail)
+      .use(pstnContacts);
+    if (twilio !== null) {
+      const origin = process.env['EAL_ORIGIN'];
+      if (origin === undefined || origin === '') {
+        throw new Error(
+          'EAL_API: TWILIO_ENABLED=true requires EAL_ORIGIN so Twilio can be told the wss:// media URL.',
+        );
+      }
+      const publicHost = new URL(origin).host;
+      app = app.use(twilioHttpRoutes({ twilio, publicHost }));
+    }
+    return app;
   },
   ws: {
     prefix: 'call',
