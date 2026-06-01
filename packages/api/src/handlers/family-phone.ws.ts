@@ -1,8 +1,5 @@
-import { randomBytes } from 'node:crypto';
-import webpush from 'web-push';
 import { createFamilyPhoneChallengesRepo } from '../db/repos/family-phone-challenges.ts';
 import { createFamilyPhoneDeviceKeysRepo } from '../db/repos/family-phone-device-keys.ts';
-import { createFamilyPhoneDevicesRepo } from '../db/repos/family-phone-devices.ts';
 import {
   createFamilyPhonePushSubscriptionsRepo,
   type FamilyPhonePushSubscriptionsRepo,
@@ -10,33 +7,9 @@ import {
 import { createFamilyPhoneDeviceSessionsRepo } from '../db/repos/family-phone-device-sessions.ts';
 import { authCore, defaultRandomToken } from './family-phone-device-auth.shared.ts';
 import { AuthError } from './auth.shared.ts';
-import { loadPushVapidConfig } from './push.http.ts';
+import { createCallRouter, type CallRouter } from './family-phone-call-router.ts';
+import { createFireOfflineCallWake } from './family-phone-call-wake.ts';
 import type { WsAppContext, WsLike, WsMessageHandler } from '../apps/types.ts';
-
-/**
- * In-process call state. Closes when the call enters `closed` — we never
- * resurrect a call_id, so once it's closed it sits as a tombstone until
- * the next eviction (a periodic sweep is future work; at family scale the
- * map stays tiny).
- */
-interface CallState {
-  callId: string;
-  caller: { wsId: string; deviceId: number };
-  callee: { wsId: string; deviceId: number };
-  state: 'pending' | 'connected' | 'closed';
-}
-
-function readCallId(msg: unknown): string | null {
-  if (typeof msg !== 'object' || msg === null) return null;
-  if (!('call_id' in msg) || typeof msg.call_id !== 'string') return null;
-  return msg.call_id;
-}
-
-function readTargetDeviceId(msg: unknown): number | null {
-  if (typeof msg !== 'object' || msg === null) return null;
-  if (!('target_device_id' in msg) || typeof msg.target_device_id !== 'number') return null;
-  return msg.target_device_id;
-}
 
 /**
  * Parse a `{type: 'push:subscribe', endpoint, p256dh, auth}` envelope.
@@ -59,18 +32,6 @@ function readPushUnsubscribe(msg: unknown): { endpoint: string } | null {
   if (typeof msg !== 'object' || msg === null) return null;
   if (!('endpoint' in msg) || typeof msg.endpoint !== 'string') return null;
   return { endpoint: msg.endpoint };
-}
-
-/**
- * web-push throws errors carrying a `statusCode` field on vendor
- * responses. Read it defensively without casting — `unknown` flows
- * through structural narrowing.
- */
-function readWebPushStatusCode(err: unknown): number {
-  if (typeof err !== 'object' || err === null) return 0;
-  if (!('statusCode' in err)) return 0;
-  const candidate = err.statusCode;
-  return typeof candidate === 'number' ? candidate : 0;
 }
 
 /**
@@ -100,6 +61,12 @@ export const DEFAULT_UNANSWERED_MS = 25_000;
 export interface FamilyPhoneWsHandlerOptions {
   /** Override the unanswered timeout. Tests pass a tiny value. */
   unansweredMs?: number;
+  /**
+   * Inject a router instance so the Twilio bridge and the WS handler
+   * share one FSM. When omitted the handler builds its own — the path
+   * tests take.
+   */
+  router?: CallRouter;
 }
 
 export function createFamilyPhoneWsHandler(
@@ -113,12 +80,7 @@ export function createFamilyPhoneWsHandler(
   const deviceKeys = createFamilyPhoneDeviceKeysRepo(ctx.db);
   const sessions = createFamilyPhoneDeviceSessionsRepo(ctx.db);
   const pushSubs: FamilyPhonePushSubscriptionsRepo = createFamilyPhonePushSubscriptionsRepo(ctx.db);
-  const devicesRepo = createFamilyPhoneDevicesRepo(ctx.db);
-  // VAPID config is read once when the handler boots. Calling
-  // sendNotification when this is null is wasted work — the
-  // module-global webpush.setVapidDetails was skipped at boot, so
-  // every call would throw. Guard the offline-wake branch on it.
-  const vapid = loadPushVapidConfig();
+  const fireOfflineCallWake = createFireOfflineCallWake(ctx.db);
   const authDeps = {
     challenges,
     deviceKeys,
@@ -128,110 +90,15 @@ export function createFamilyPhoneWsHandler(
     randomToken: defaultRandomToken,
   };
 
-  /** ws.id → deviceId. Set by `authenticate`, cleared by `onClose`. */
-  const wsDevices = new Map<string, number>();
-  /** deviceId → ws.id. Maintained alongside wsDevices for O(1) target lookup. */
-  const deviceToWs = new Map<number, string>();
-  /** Active and recently-closed calls, keyed by server-minted call_id. */
-  const calls = new Map<string, CallState>();
-  /**
-   * Per-call unanswered timer. Set on `call:invite`, cleared on every
-   * state transition out of `pending` (accept, reject, cancel, peer
-   * disconnect). Firing collapses the call to `closed` and notifies the
-   * caller with `call:unanswered`.
-   */
-  const unansweredTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-  function cancelUnansweredTimer(callId: string): void {
-    const handle = unansweredTimers.get(callId);
-    if (handle === undefined) return;
-    clearTimeout(handle);
-    unansweredTimers.delete(callId);
-  }
-
-  function scheduleUnansweredTimer(callId: string): void {
-    const handle = setTimeout(() => {
-      unansweredTimers.delete(callId);
-      const call = calls.get(callId);
-      // The call may have moved on (accepted, rejected, cancelled,
-      // hung-up, or its caller closed) between scheduling and firing;
-      // only act when it is still pending. Setting state='closed'
-      // before sending the event keeps the FSM atomic.
-      if (!call || call.state !== 'pending') return;
-      call.state = 'closed';
-      ctx.ws.sendTo(call.caller.wsId, {
-        type: 'call:unanswered',
-        call_id: callId,
-      });
-      // The callee is still ringing — its UI has no other signal that
-      // the call is over, so it would ring forever without this. Same
-      // shape as `call:cancel` so the client can reuse one handler.
-      ctx.ws.sendTo(call.callee.wsId, {
-        type: 'call:cancelled',
-        call_id: callId,
-      });
-    }, unansweredMs);
-    unansweredTimers.set(callId, handle);
-  }
-
-  function peerOf(call: CallState, wsId: string): { wsId: string; deviceId: number } | null {
-    if (call.caller.wsId === wsId) return call.callee;
-    if (call.callee.wsId === wsId) return call.caller;
-    return null;
-  }
-
-  /**
-   * Fire a Web Push notification at every push subscription registered
-   * for `targetDeviceId`. Called when a call:invite finds the target
-   * offline — the call itself still fails (the caller's UI shows
-   * target-offline), but the recipient's phone buzzes so they can
-   * open the app and call back.
-   *
-   * Best-effort: VAPID misconfiguration, network failures, and vendor
-   * errors all short-circuit silently. A vendor 404/410 deletes the
-   * stale subscription row so future invites skip it.
-   */
-  async function fireOfflineCallWake(
-    targetDeviceId: number,
-    callerDeviceId: number,
-  ): Promise<void> {
-    if (!vapid) return;
-    const targets = pushSubs.listByDevice(targetDeviceId);
-    if (targets.length === 0) return;
-    const callerDevice = devicesRepo.findById(callerDeviceId);
-    const callerLabel = callerDevice?.label ?? 'Someone';
-    const payload = JSON.stringify({
-      kind: 'call',
-      title: 'Incoming call',
-      body: `From ${callerLabel}`,
-      // Coalesce multiple invites from the same caller — repeated
-      // dials should re-buzz the OS (renotify: true in the SW) but
-      // not stack on the lock screen.
-      tag: `call:${callerDeviceId}`,
-      url: '/devices',
+  const router =
+    options.router ??
+    createCallRouter({
+      ws: ctx.ws,
+      unansweredMs,
+      onCallInviteOfflineTarget: (fromDeviceId, targetDeviceId) => {
+        void fireOfflineCallWake(targetDeviceId, fromDeviceId);
+      },
     });
-    await Promise.all(
-      targets.map(async (t) => {
-        try {
-          await webpush.sendNotification(
-            { endpoint: t.endpoint, keys: { p256dh: t.p256dh, auth: t.auth } },
-            payload,
-            { TTL: 30 },
-          );
-        } catch (err) {
-          const statusCode = readWebPushStatusCode(err);
-          if (statusCode === 404 || statusCode === 410) {
-            // The subscription is dead. Clear it so future invites
-            // don't waste a round trip on a vendor that will reject
-            // every time.
-            pushSubs.deleteByEndpoint(t.endpoint);
-          } else {
-            console.warn('[push] call-wake send failed:', err);
-          }
-        }
-      }),
-    );
-  }
 
   return {
     /**
@@ -250,8 +117,7 @@ export function createFamilyPhoneWsHandler(
         if (err instanceof AuthError) return false;
         throw err;
       }
-      wsDevices.set(ws.id, fields.deviceId);
-      deviceToWs.set(fields.deviceId, ws.id);
+      router.registerRealDevice(fields.deviceId, ws.id);
       onlineDevices.add(fields.deviceId);
       // Every authed device joins the broadcast topic so each one receives
       // presence and directory updates as they happen. The presence event
@@ -270,126 +136,15 @@ export function createFamilyPhoneWsHandler(
       if (typeof msg !== 'object' || msg === null || !('type' in msg)) return;
       const type = msg.type;
       if (typeof type !== 'string') return;
-      const deviceId = wsDevices.get(ws.id);
+      const deviceId = router.deviceIdFor(ws.id);
       if (deviceId === undefined) return;
 
+      if (type.startsWith('call:')) {
+        router.submitEvent(ws.id, msg);
+        return;
+      }
+
       switch (type) {
-        case 'call:invite': {
-          const targetDeviceId = readTargetDeviceId(msg);
-          if (targetDeviceId === null) {
-            ws.send(JSON.stringify({ type: 'call:invite-failed', reason: 'missing-target' }));
-            return;
-          }
-          const targetWsId = deviceToWs.get(targetDeviceId);
-          if (!targetWsId) {
-            // Target isn't on the WS — the call itself can't go through
-            // (no media path), but if the target has a registered push
-            // subscription we ring its phone so the human can open the
-            // app and call back. The notification fires async; the
-            // caller's UI sees `call:invite-failed` immediately, same as
-            // before, so existing behaviour is preserved.
-            void fireOfflineCallWake(targetDeviceId, deviceId);
-            ws.send(JSON.stringify({ type: 'call:invite-failed', reason: 'target-offline' }));
-            return;
-          }
-          // 16 ASCII characters of hex so the call_id fits exactly into the
-          // 16-byte field of the binary audio frame header.
-          const callId = randomBytes(8).toString('hex');
-          calls.set(callId, {
-            callId,
-            caller: { wsId: ws.id, deviceId },
-            callee: { wsId: targetWsId, deviceId: targetDeviceId },
-            state: 'pending',
-          });
-          ws.send(JSON.stringify({ type: 'call:invite-ack', call_id: callId }));
-          ctx.ws.sendTo(targetWsId, {
-            type: 'call:incoming',
-            call_id: callId,
-            from_device_id: deviceId,
-          });
-          scheduleUnansweredTimer(callId);
-          return;
-        }
-
-        case 'call:accept': {
-          const callId = readCallId(msg);
-          if (!callId) return;
-          const call = calls.get(callId);
-          if (!call || call.state !== 'pending') return;
-          if (call.callee.wsId !== ws.id) return; // only the callee may accept
-          cancelUnansweredTimer(callId);
-          call.state = 'connected';
-          ctx.ws.sendTo(call.caller.wsId, { type: 'call:accepted', call_id: callId });
-          ws.send(JSON.stringify({ type: 'call:accept-ack', call_id: callId }));
-          return;
-        }
-
-        case 'call:reject': {
-          const callId = readCallId(msg);
-          if (!callId) return;
-          const call = calls.get(callId);
-          if (!call || call.state !== 'pending') return;
-          if (call.callee.wsId !== ws.id) return; // only the callee may reject
-          cancelUnansweredTimer(callId);
-          call.state = 'closed';
-          ctx.ws.sendTo(call.caller.wsId, { type: 'call:rejected', call_id: callId });
-          return;
-        }
-
-        case 'call:cancel': {
-          const callId = readCallId(msg);
-          if (!callId) return;
-          const call = calls.get(callId);
-          if (!call || call.state !== 'pending') return;
-          if (call.caller.wsId !== ws.id) return; // only the caller may cancel
-          cancelUnansweredTimer(callId);
-          call.state = 'closed';
-          ctx.ws.sendTo(call.callee.wsId, { type: 'call:cancelled', call_id: callId });
-          return;
-        }
-
-        case 'call:text': {
-          // The text-mode reply lane. The agent (today the only sender)
-          // posts spoken text instead of synthesised PCM when the peer
-          // can render it locally — PWAs via the Web Speech API. The
-          // server treats it like any other call:* frame: only forward
-          // while the call is connected; the peer is whoever isn't us.
-          const callId = readCallId(msg);
-          if (!callId) return;
-          if (!('text' in msg) || typeof msg.text !== 'string') return;
-          const text = msg.text;
-          const call = calls.get(callId);
-          if (!call || call.state !== 'connected') return;
-          const peer = peerOf(call, ws.id);
-          if (!peer) return;
-          ctx.ws.sendTo(peer.wsId, {
-            type: 'call:text',
-            call_id: callId,
-            text,
-          });
-          return;
-        }
-
-        case 'call:hangup': {
-          const callId = readCallId(msg);
-          if (!callId) return;
-          const call = calls.get(callId);
-          if (!call) return;
-          // Hangup is the only way out of `connected`. Both peers may send
-          // it; the second one finds the call already `closed` and is a
-          // no-op (single-shot collapse).
-          if (call.state !== 'connected') return;
-          const peer = peerOf(call, ws.id);
-          if (!peer) return;
-          // The connected→closed path can't have a live unanswered timer
-          // (it was cleared on accept), but call defensively in case a
-          // future transition ever skips accept.
-          cancelUnansweredTimer(callId);
-          call.state = 'closed';
-          ctx.ws.sendTo(peer.wsId, { type: 'call:hung-up', call_id: callId });
-          return;
-        }
-
         case 'push:subscribe': {
           // The authed device registers (or refreshes) its Web Push
           // subscription. Upsert keyed by endpoint so a re-subscribe
@@ -443,42 +198,19 @@ export function createFamilyPhoneWsHandler(
      * invariant: no audio after closed.
      */
     onBinary(ws: WsLike, frame: Uint8Array, _principal): void {
-      if (frame.length < 1 + 16) return;
-      const callIdBytes = frame.slice(1, 17);
-      const callId = new TextDecoder().decode(callIdBytes).replace(/\0+$/, '');
-      const call = calls.get(callId);
-      if (!call || call.state !== 'connected') return;
-      const peer = peerOf(call, ws.id);
-      if (!peer) return;
-      ctx.ws.sendBinaryTo(peer.wsId, frame);
+      router.submitBinary(ws.id, frame);
     },
 
     onClose(ws: WsLike): void {
-      const deviceId = wsDevices.get(ws.id);
-      wsDevices.delete(ws.id);
+      const deviceId = router.deviceIdFor(ws.id);
+      router.unregisterDevice(ws.id);
       ctx.ws.unsubscribe(ws, broadcastTopic);
       if (deviceId !== undefined) {
-        deviceToWs.delete(deviceId);
         onlineDevices.delete(deviceId);
         ctx.ws.broadcast(broadcastTopic, {
           type: 'presence:changed',
           device_id: deviceId,
           online: false,
-        });
-      }
-      // Tear down any call this connection was party to. The peer learns
-      // via call:hung-up with reason 'peer-disconnect' so the UI can
-      // distinguish a clean hangup from a crash.
-      for (const call of calls.values()) {
-        if (call.state === 'closed') continue;
-        const peer = peerOf(call, ws.id);
-        if (!peer) continue;
-        cancelUnansweredTimer(call.callId);
-        call.state = 'closed';
-        ctx.ws.sendTo(peer.wsId, {
-          type: 'call:hung-up',
-          call_id: call.callId,
-          reason: 'peer-disconnect',
         });
       }
     },
