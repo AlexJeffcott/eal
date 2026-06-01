@@ -105,6 +105,24 @@ CREATE TABLE IF NOT EXISTS family_phone_voice_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_family_phone_voice_messages_to_read
   ON family_phone_voice_messages (to_device_id, read_at);
+
+-- Phase 7A: the household's PSTN phonebook — friendly labels for E.164
+-- numbers the trunk can dial out to and that may dial in. The contact is
+-- household-wide (no user_id) because the trunk is one number shared by
+-- the whole house; per-contact allow_in/allow_out is the routing gate
+-- 7D will enforce. E.164 shape is validated at the HTTP boundary, not
+-- here, so the repo stays a thin store.
+CREATE TABLE IF NOT EXISTS family_phone_pstn_contacts (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  e164        TEXT    NOT NULL UNIQUE,
+  label       TEXT    NOT NULL,
+  allow_in    INTEGER NOT NULL DEFAULT 1 CHECK (allow_in IN (0,1)),
+  allow_out   INTEGER NOT NULL DEFAULT 1 CHECK (allow_out IN (0,1)),
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_family_phone_pstn_contacts_label
+  ON family_phone_pstn_contacts (label);
 `;
 
 export const familyPhoneApp: ApiApp = {
