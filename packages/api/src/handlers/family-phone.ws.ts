@@ -9,7 +9,22 @@ import { authCore, defaultRandomToken } from './family-phone-device-auth.shared.
 import { AuthError } from './auth.shared.ts';
 import { createCallRouter, type CallRouter } from './family-phone-call-router.ts';
 import { createFireOfflineCallWake } from './family-phone-call-wake.ts';
+import type { PlacePstnInput, PlacePstnResult } from './family-phone-place-pstn.ts';
 import type { WsAppContext, WsLike, WsMessageHandler } from '../apps/types.ts';
+
+/**
+ * Async surface the WS handler uses to dial outbound PSTN calls.
+ * Injected from the app's routes() bootstrap when TWILIO_ENABLED=true;
+ * absent on a bare family-phone deploy, in which case the handler
+ * replies with reason='outbound-disabled' to any `call:place-pstn`.
+ */
+export type PlacePstnFn = (input: PlacePstnInput) => Promise<PlacePstnResult>;
+
+function readPlacePstn(msg: unknown): { to: string } | null {
+  if (typeof msg !== 'object' || msg === null) return null;
+  if (!('to' in msg) || typeof msg.to !== 'string') return null;
+  return { to: msg.to };
+}
 
 /**
  * Parse a `{type: 'push:subscribe', endpoint, p256dh, auth}` envelope.
@@ -67,6 +82,14 @@ export interface FamilyPhoneWsHandlerOptions {
    * tests take.
    */
   router?: CallRouter;
+  /**
+   * Outbound-PSTN dialer. When set, `call:place-pstn` envelopes from
+   * authed handsets are forwarded to this function. When omitted —
+   * the bare-family-phone deploy (TWILIO_ENABLED=false) — the handler
+   * replies with reason='outbound-disabled' so the handset can show
+   * a meaningful error rather than silently swallowing the tap.
+   */
+  placePstn?: PlacePstnFn;
 }
 
 export function createFamilyPhoneWsHandler(
@@ -138,6 +161,54 @@ export function createFamilyPhoneWsHandler(
       if (typeof type !== 'string') return;
       const deviceId = router.deviceIdFor(ws.id);
       if (deviceId === undefined) return;
+
+      if (type === 'call:place-pstn') {
+        // Hand off to the outbound dialer; the answer arrives async
+        // (Twilio REST call is a network round-trip) so the WS
+        // handler returns void and the result lands via ws.send
+        // when the promise resolves. The ws object remains valid
+        // because the connection stays open across the await — the
+        // server-factory close handler tears it down on its own.
+        const fields = readPlacePstn(msg);
+        if (!fields) {
+          ws.send(
+            JSON.stringify({ type: 'call:place-pstn-failed', reason: 'bad-shape' }),
+          );
+          return;
+        }
+        if (!options.placePstn) {
+          ws.send(
+            JSON.stringify({
+              type: 'call:place-pstn-failed',
+              reason: 'outbound-disabled',
+            }),
+          );
+          return;
+        }
+        void options
+          .placePstn({ fromDeviceId: deviceId, to: fields.to })
+          .then((res) => {
+            if (res.ok) {
+              ws.send(
+                JSON.stringify({ type: 'call:place-pstn-ack', call_sid: res.callSid }),
+              );
+            } else {
+              ws.send(
+                JSON.stringify({ type: 'call:place-pstn-failed', reason: res.reason }),
+              );
+            }
+          })
+          .catch((err: unknown) => {
+            console.error('[call:place-pstn] unexpected dialer failure:', err);
+            ws.send(
+              JSON.stringify({
+                type: 'call:place-pstn-failed',
+                reason: 'twilio-unreachable',
+              }),
+            );
+          });
+        return;
+      }
 
       if (type.startsWith('call:')) {
         router.submitEvent(ws.id, msg);

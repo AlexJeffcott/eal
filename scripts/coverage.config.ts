@@ -47,6 +47,10 @@ export const config: CoverageConfig = {
       reason: 'thin Elysia .ws shim around createTwilioMediaSession (unit-tested); the upgrade path is exercised by scripts/e2e-pstn-inbound.ts',
       claimedBy: 'packages/api/src/handlers/family-phone-twilio.ws.test.ts',
     },
+    'packages/api/src/apps/family-phone.ts': {
+      reason: 'app composition + env-driven bootstrap (router, Twilio config, REST client, placePstn wiring); the parts that depend on env are exercised by scripts/e2e-pstn-inbound.ts and the unit-tested modules they compose',
+      claimedBy: 'scripts/e2e-pstn-inbound.ts',
+    },
     'packages/api/src/server.ts': {
       reason: 'e2e/multi: server boot is observed by bootApi + curl',
       claimedBy: 'scripts/e2e-tasks-multi.ts',

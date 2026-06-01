@@ -7,9 +7,12 @@ import { pstnContactsHttpRoutes } from '../handlers/family-phone-pstn-contacts.h
 import { twilioHttpRoutes } from '../handlers/family-phone-twilio.http.ts';
 import { twilioMediaWsRoute } from '../handlers/family-phone-twilio.ws.ts';
 import { loadTwilioConfig } from '../twilio/config.ts';
+import { createTwilioRestClient } from '../twilio/rest.ts';
+import { placePstn, type PlacePstnDeps } from '../handlers/family-phone-place-pstn.ts';
 import {
   createFamilyPhoneWsHandler,
   DEFAULT_UNANSWERED_MS,
+  type FamilyPhoneWsHandlerOptions,
 } from '../handlers/family-phone.ws.ts';
 import { createCallRouter, type CallRouter } from '../handlers/family-phone-call-router.ts';
 import { createFireOfflineCallWake } from '../handlers/family-phone-call-wake.ts';
@@ -238,10 +241,14 @@ export const familyPhoneApp: ApiApp = {
   ws: {
     prefix: 'call',
     binaryTag: 0x10,
-    handler: (ctx) =>
-      createFamilyPhoneWsHandler(ctx, ONLINE_DEVICES, FAMILY_PHONE_TOPIC, {
+    handler: (ctx) => {
+      const opts: FamilyPhoneWsHandlerOptions = {
         router: getOrCreateRouter(ctx.db, ctx.ws),
-      }),
+      };
+      const placePstnFn = buildPlacePstn(ctx.db);
+      if (placePstnFn !== undefined) opts.placePstn = placePstnFn;
+      return createFamilyPhoneWsHandler(ctx, ONLINE_DEVICES, FAMILY_PHONE_TOPIC, opts);
+    },
   },
 };
 
@@ -256,6 +263,26 @@ export const familyPhoneApp: ApiApp = {
  * the ApiApp interface.
  */
 const ROUTER_BY_DB = new WeakMap<DatabaseClient, CallRouter>();
+
+/**
+ * Construct the outbound-PSTN dialer for this db. Returns undefined when
+ * TWILIO_ENABLED=false so the WS handler can reply with
+ * reason='outbound-disabled' to any handset tap. The function captures
+ * the Twilio config + the devices repo + the public TwiML URL once at
+ * boot — the call:place-pstn message dispatch is a single async fetch
+ * away after that.
+ */
+function buildPlacePstn(db: DatabaseClient): ((input: { fromDeviceId: number; to: string }) => ReturnType<typeof placePstn>) | undefined {
+  const twilio = loadTwilioConfig();
+  if (twilio === null) return undefined;
+  const origin = process.env['EAL_ORIGIN'];
+  if (origin === undefined || origin === '') return undefined;
+  const restClient = createTwilioRestClient({ config: twilio });
+  const devices = createFamilyPhoneDevicesRepo(db);
+  const twimlBaseUrl = new URL('/api/family-phone/twilio/voice', origin).toString();
+  const deps: PlacePstnDeps = { restClient, devices, twimlBaseUrl };
+  return (input) => placePstn(deps, input);
+}
 
 function getOrCreateRouter(db: DatabaseClient, ws: WsService): CallRouter {
   const existing = ROUTER_BY_DB.get(db);

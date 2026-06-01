@@ -10,8 +10,8 @@ import { formatSqliteDateTime } from '../auth/datetime.ts';
 import {
   CHALLENGE_TTL_MS,
 } from './family-phone-device-auth.shared.ts';
-import { createFamilyPhoneWsHandler } from './family-phone.ws.ts';
-import { delay } from '@eal/shared';
+import { createFamilyPhoneWsHandler, type PlacePstnFn } from './family-phone.ws.ts';
+import { delay, flushMicrotasks } from '@eal/shared';
 import type { WsLike, WsService } from '../apps/types.ts';
 
 /**
@@ -627,5 +627,98 @@ describe('family-phone.ws — call state machine, two authed peers', () => {
     const hungUp = find(harness.send, 'alex-ws', 'call:hung-up');
     expect(hungUp?.['call_id']).toBe(callId);
     expect(hungUp?.['reason']).toBe('peer-disconnect');
+  });
+});
+
+describe('family-phone.ws — call:place-pstn', () => {
+  let db: DatabaseClient;
+  let userId: number;
+
+  beforeEach(() => {
+    db = createDb(':memory:');
+    applySchema(db);
+    userId = createUsersRepo(db).insert({ displayName: 'alex' }).id;
+  });
+
+  async function setupAuthed(opts: { placePstn?: PlacePstnFn } = {}) {
+    const harness = makeHarness();
+    const handler = createFamilyPhoneWsHandler(
+      { db, ws: harness.service },
+      new Set(),
+      'test-topic',
+      opts.placePstn !== undefined ? { placePstn: opts.placePstn } : {},
+    );
+    const alex = await pairDeviceDirect(db, userId, 'handset');
+    const ws = harness.ws('alex-ws');
+    await authConnect(handler, ws, db, alex);
+    harness.send.length = 0;
+    return { harness, handler, alex, ws };
+  }
+
+  function findOnAlex(send: CapturedMessage[], type: string): Record<string, unknown> | undefined {
+    for (const m of send) {
+      if (m.wsId !== 'alex-ws') continue;
+      if (typeof m.payload !== 'object' || m.payload === null) continue;
+      const t = Reflect.get(m.payload, 'type');
+      if (t !== type) continue;
+      const out: Record<string, unknown> = {};
+      for (const k of Object.keys(m.payload)) out[k] = Reflect.get(m.payload, k);
+      return out;
+    }
+    return undefined;
+  }
+
+  test('forwards the dial to placePstn and sends call:place-pstn-ack on success', async () => {
+    const captured: Array<{ fromDeviceId: number; to: string }> = [];
+    const { harness, handler, ws } = await setupAuthed({
+      placePstn: async (input) => {
+        captured.push(input);
+        return { ok: true, callSid: 'CAabc' };
+      },
+    });
+    handler.onMessage(ws, { type: 'call:place-pstn', to: '+12025550100' }, null);
+    await flushMicrotasks();
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toEqual({ fromDeviceId: 1, to: '+12025550100' });
+    const ack = findOnAlex(harness.send, 'call:place-pstn-ack');
+    expect(ack?.['call_sid']).toBe('CAabc');
+  });
+
+  test('a placePstn failure relays the reason verbatim', async () => {
+    const { harness, handler, ws } = await setupAuthed({
+      placePstn: async () => ({ ok: false, reason: 'twilio-rejected' }),
+    });
+    handler.onMessage(ws, { type: 'call:place-pstn', to: '+12025550100' }, null);
+    await flushMicrotasks();
+    const failed = findOnAlex(harness.send, 'call:place-pstn-failed');
+    expect(failed?.['reason']).toBe('twilio-rejected');
+  });
+
+  test('a bad-shape envelope (missing to) is failed with reason="bad-shape"', async () => {
+    const { harness, handler, ws } = await setupAuthed({
+      placePstn: async () => ({ ok: true, callSid: 'CAabc' }),
+    });
+    handler.onMessage(ws, { type: 'call:place-pstn' }, null);
+    const failed = findOnAlex(harness.send, 'call:place-pstn-failed');
+    expect(failed?.['reason']).toBe('bad-shape');
+  });
+
+  test('TWILIO_ENABLED=false (no placePstn injected) yields reason="outbound-disabled"', async () => {
+    const { harness, handler, ws } = await setupAuthed({});
+    handler.onMessage(ws, { type: 'call:place-pstn', to: '+12025550100' }, null);
+    const failed = findOnAlex(harness.send, 'call:place-pstn-failed');
+    expect(failed?.['reason']).toBe('outbound-disabled');
+  });
+
+  test('an unexpected dialer throw degrades to reason="twilio-unreachable"', async () => {
+    const { harness, handler, ws } = await setupAuthed({
+      placePstn: async () => {
+        throw new Error('boom');
+      },
+    });
+    handler.onMessage(ws, { type: 'call:place-pstn', to: '+12025550100' }, null);
+    await flushMicrotasks();
+    const failed = findOnAlex(harness.send, 'call:place-pstn-failed');
+    expect(failed?.['reason']).toBe('twilio-unreachable');
   });
 });
