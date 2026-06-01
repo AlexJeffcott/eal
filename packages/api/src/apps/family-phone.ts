@@ -3,6 +3,7 @@ import { familyPhoneHttpRoutes } from '../handlers/family-phone.http.ts';
 import { familyPhonePairHttpRoutes } from '../handlers/family-phone-pair.http.ts';
 import { familyPhoneDeviceAuthHttpRoutes } from '../handlers/family-phone-device-auth.http.ts';
 import { familyPhoneVoicemailHttpRoutes } from '../handlers/family-phone-voicemail.http.ts';
+import { pstnContactsHttpRoutes } from '../handlers/family-phone-pstn-contacts.http.ts';
 import { createFamilyPhoneWsHandler } from '../handlers/family-phone.ws.ts';
 import type { ApiApp } from './types.ts';
 
@@ -166,7 +167,11 @@ export const familyPhoneApp: ApiApp = {
       db: ctx.db,
       getPrincipal: ctx.getPrincipal,
     });
-    return new Elysia().use(devices).use(pair).use(deviceAuth).use(voicemail);
+    const pstnContacts = pstnContactsHttpRoutes({
+      db: ctx.db,
+      getPrincipal: ctx.getPrincipal,
+    });
+    return new Elysia().use(devices).use(pair).use(deviceAuth).use(voicemail).use(pstnContacts);
   },
   ws: {
     prefix: 'call',

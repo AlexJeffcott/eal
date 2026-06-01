@@ -61,6 +61,10 @@ function makeFakeClient(opts: {
     listAgentRules: notImplemented('listAgentRules'),
     upsertAgentRule: notImplemented('upsertAgentRule'),
     deleteAgentRule: notImplemented('deleteAgentRule'),
+    listPstnContacts: notImplemented('listPstnContacts'),
+    createPstnContact: notImplemented('createPstnContact'),
+    updatePstnContact: notImplemented('updatePstnContact'),
+    deletePstnContact: notImplemented('deletePstnContact'),
     async createAgentPlaceCallAction(input): Promise<AgentAction | null> {
       opts.recorded.placeCallCalls.push({
         targetDeviceId: input.targetDeviceId,

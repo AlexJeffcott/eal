@@ -37,6 +37,9 @@ export type {
   FamilyPhonePairCompleteResult,
   FamilyPhonePairStartResult,
   PostVoiceMessageInput,
+  CreatePstnContactInput,
+  PstnContact,
+  UpdatePstnContactInput,
   UpsertAgentRuleInput,
   VoiceMessage,
 } from './family-phone-types.ts';

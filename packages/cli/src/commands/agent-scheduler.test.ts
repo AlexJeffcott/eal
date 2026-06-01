@@ -101,6 +101,10 @@ function makeFakeClient(state: FakeClientState): EalClient {
       return updated;
     },
     deleteAgentRule: notImplemented('deleteAgentRule'),
+    listPstnContacts: notImplemented('listPstnContacts'),
+    createPstnContact: notImplemented('createPstnContact'),
+    updatePstnContact: notImplemented('updatePstnContact'),
+    deletePstnContact: notImplemented('deletePstnContact'),
     async createAgentPlaceCallAction(input): Promise<AgentAction | null> {
       const recorded: RecordedCreatePlaceCall = {
         targetDeviceId: input.targetDeviceId,

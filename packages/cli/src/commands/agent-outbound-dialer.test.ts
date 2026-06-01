@@ -103,6 +103,10 @@ function makeClient(): FakeClient {
     listAgentRules: notImplemented('listAgentRules'),
     upsertAgentRule: notImplemented('upsertAgentRule'),
     deleteAgentRule: notImplemented('deleteAgentRule'),
+    listPstnContacts: notImplemented('listPstnContacts'),
+    createPstnContact: notImplemented('createPstnContact'),
+    updatePstnContact: notImplemented('updatePstnContact'),
+    deletePstnContact: notImplemented('deletePstnContact'),
     createAgentPlaceCallAction: notImplemented('createAgentPlaceCallAction'),
     async attachAgentCall(actionId, callId): Promise<AgentAction> {
       if (attachFailures > 0) {

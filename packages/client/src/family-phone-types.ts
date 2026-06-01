@@ -69,6 +69,35 @@ export type FamilyPhoneCallEvent =
  */
 export type AgentRuleKind = 'place_call' | 'voice_message';
 
+/**
+ * A row in the household's PSTN phonebook — an E.164 number with a
+ * friendly label and per-direction allow flags. Phase 7's trunk bridge
+ * reads `allowIn` on incoming calls and `allowOut` on dial-out attempts.
+ */
+export interface PstnContact {
+  id: number;
+  e164: string;
+  label: string;
+  allowIn: boolean;
+  allowOut: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreatePstnContactInput {
+  e164: string;
+  label: string;
+  allowIn: boolean;
+  allowOut: boolean;
+}
+
+export interface UpdatePstnContactInput {
+  id: number;
+  label: string;
+  allowIn: boolean;
+  allowOut: boolean;
+}
+
 export interface AgentRule {
   id: number;
   name: string;

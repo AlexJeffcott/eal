@@ -10,6 +10,7 @@ import type {
   CliPairPollResult,
   CliPairStartResult,
   CloneTaskResult,
+  CreatePstnContactInput,
   CreateTaskInput,
   CurrentUser,
   EalClient,
@@ -17,9 +18,11 @@ import type {
   ListTasksInput,
   Message,
   PostVoiceMessageInput,
+  PstnContact,
   Task,
   TaskDetail,
   TaskEvent,
+  UpdatePstnContactInput,
   UpsertAgentRuleInput,
   VoiceMessage,
 } from '@eal/client';
@@ -321,6 +324,43 @@ export function createMockEalClient(): MockEalClient {
     },
 
     async deleteAgentRule(): Promise<void> {
+      /* mock: no-op */
+    },
+
+    async listPstnContacts(): Promise<PstnContact[]> {
+      requireSignedIn();
+      return [];
+    },
+
+    async createPstnContact(input: CreatePstnContactInput): Promise<PstnContact> {
+      requireSignedIn();
+      const now = isoNow();
+      return {
+        id: 1,
+        e164: input.e164,
+        label: input.label,
+        allowIn: input.allowIn,
+        allowOut: input.allowOut,
+        createdAt: now,
+        updatedAt: now,
+      };
+    },
+
+    async updatePstnContact(input: UpdatePstnContactInput): Promise<PstnContact> {
+      requireSignedIn();
+      const now = isoNow();
+      return {
+        id: input.id,
+        e164: '+440000000000',
+        label: input.label,
+        allowIn: input.allowIn,
+        allowOut: input.allowOut,
+        createdAt: now,
+        updatedAt: now,
+      };
+    },
+
+    async deletePstnContact(): Promise<void> {
       /* mock: no-op */
     },
 

@@ -30,6 +30,7 @@ import type {
   AgentActionResult,
   AgentActionTrigger,
   AgentRule,
+  CreatePstnContactInput,
   FamilyPhoneCallEvent,
   FamilyPhoneDevice,
   FamilyPhoneDeviceConnection,
@@ -37,6 +38,8 @@ import type {
   FamilyPhonePairCompleteResult,
   FamilyPhonePairStartResult,
   PostVoiceMessageInput,
+  PstnContact,
+  UpdatePstnContactInput,
   UpsertAgentRuleInput,
   VoiceMessage,
 } from './family-phone-types.ts';
@@ -232,6 +235,16 @@ export interface EalClient {
   upsertAgentRule(input: UpsertAgentRuleInput): Promise<AgentRule>;
   /** Delete a rule. The audit log entries that referenced it survive. */
   deleteAgentRule(id: number): Promise<void>;
+
+  // ── PSTN phonebook (Phase 7A) ────────────────────────────────────────────
+  /** Every PSTN contact, sorted by label then number. */
+  listPstnContacts(): Promise<PstnContact[]>;
+  /** Insert. Rejected as 409 if the e164 is already registered. */
+  createPstnContact(input: CreatePstnContactInput): Promise<PstnContact>;
+  /** Patch label + allow flags. e164 is immutable. */
+  updatePstnContact(input: UpdatePstnContactInput): Promise<PstnContact>;
+  /** Remove a contact by id. */
+  deletePstnContact(id: number): Promise<void>;
 
   // ── Agent actions (audit + lock) ─────────────────────────────────────────
   /**
@@ -948,6 +961,42 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
 
     async deleteAgentRule(id): Promise<void> {
       await deleteJson<{ deleted: true }>(`/api/agent/rules/${id}`);
+    },
+
+    async listPstnContacts(): Promise<PstnContact[]> {
+      const { contacts } = await getJsonOrThrow<{ contacts: PstnContact[] }>(
+        '/api/family-phone/pstn-contacts',
+      );
+      return contacts;
+    },
+
+    async createPstnContact(input): Promise<PstnContact> {
+      const { contact } = await postJson<{ contact: PstnContact }>(
+        '/api/family-phone/pstn-contacts',
+        {
+          e164: input.e164,
+          label: input.label,
+          allowIn: input.allowIn,
+          allowOut: input.allowOut,
+        },
+      );
+      return contact;
+    },
+
+    async updatePstnContact(input): Promise<PstnContact> {
+      const { contact } = await patchJson<{ contact: PstnContact }>(
+        `/api/family-phone/pstn-contacts/${input.id}`,
+        {
+          label: input.label,
+          allowIn: input.allowIn,
+          allowOut: input.allowOut,
+        },
+      );
+      return contact;
+    },
+
+    async deletePstnContact(id): Promise<void> {
+      await deleteJson<{ deleted: true }>(`/api/family-phone/pstn-contacts/${id}`);
     },
 
     async createAgentPlaceCallAction(input): Promise<AgentAction | null> {
