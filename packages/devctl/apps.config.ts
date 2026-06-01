@@ -89,6 +89,20 @@ export const APPS: readonly AppVerification[] = [
       'packages/api/src/db/repos/agent-rules.ts',
     ],
   },
+  {
+    id: 'pstn-contacts',
+    unit: [
+      'packages/api/src/db/repos/family-phone-pstn-contacts.test.ts',
+      'packages/api/src/handlers/family-phone-pstn-contacts.http.test.ts',
+      'packages/web/src/apps/pstn-contacts/actions.test.ts',
+    ],
+    browser: ['packages/web/tests/browser/pstn-contacts.browser.tsx'],
+    e2e: ['packages/e2e-tests/tests/pstn-contacts.spec.ts'],
+    mutate: [
+      'packages/api/src/db/repos/family-phone-pstn-contacts.ts',
+      'packages/api/src/handlers/family-phone-pstn-contacts.http.ts',
+    ],
+  },
 ];
 
 export function appById(id: string): AppVerification | undefined {
