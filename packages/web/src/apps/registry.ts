@@ -4,6 +4,7 @@ import { ShowcasePanel } from './showcase/showcase-panel.tsx';
 import { DevicesPanel } from './devices/devices-panel.tsx';
 import { FamilyPhonePanel } from './family-phone/family-phone-panel.tsx';
 import { AgentRulesPanel } from './agent-rules/agent-rules-panel.tsx';
+import { PstnContactsPanel } from './pstn-contacts/pstn-contacts-panel.tsx';
 
 /**
  * A web app — a feature mounted into the shell at its own path. The shell
@@ -71,6 +72,14 @@ export const WEB_APPS: readonly WebApp[] = [
     description: "Rules for when the assistant calls or messages someone in the household.",
     access: 'authed',
     root: AgentRulesPanel,
+  },
+  {
+    id: 'pstn-contacts',
+    path: '/pstn-contacts',
+    label: 'PSTN',
+    description: 'The household phonebook for external numbers the trunk dials in and out.',
+    access: 'authed',
+    root: PstnContactsPanel,
   },
 ];
 

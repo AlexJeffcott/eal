@@ -20,6 +20,11 @@ import {
   resetAgentRulesStores,
   type AgentRulesStores,
 } from './apps/agent-rules/stores.ts';
+import {
+  createPstnContactsStores,
+  resetPstnContactsStores,
+  type PstnContactsStores,
+} from './apps/pstn-contacts/stores.ts';
 
 /**
  * The composed store bundle handed to every action handler — the shell's
@@ -28,7 +33,12 @@ import {
  * themselves are owned by `shell/stores.ts` and each app's `stores.ts`.
  */
 export interface AppStores
-  extends ShellStores, TasksStores, DevicesStores, FamilyPhoneStores, AgentRulesStores {
+  extends ShellStores,
+    TasksStores,
+    DevicesStores,
+    FamilyPhoneStores,
+    AgentRulesStores,
+    PstnContactsStores {
   client: EalClient;
 }
 
@@ -40,6 +50,7 @@ export function createStores(client: EalClient): AppStores {
     ...createDevicesStores(),
     ...createFamilyPhoneStores(),
     ...createAgentRulesStores(),
+    ...createPstnContactsStores(),
   };
 }
 
@@ -50,4 +61,5 @@ export function resetStoresForTest(): void {
   resetDevicesStores();
   resetFamilyPhoneStores();
   resetAgentRulesStores();
+  resetPstnContactsStores();
 }

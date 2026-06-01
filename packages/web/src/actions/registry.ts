@@ -6,6 +6,7 @@ import { SHOWCASE_ACTIONS } from '../apps/showcase/actions.ts';
 import { DEVICES_ACTIONS } from '../apps/devices/actions.ts';
 import { FAMILY_PHONE_ACTIONS } from '../apps/family-phone/actions.ts';
 import { AGENT_RULES_ACTIONS } from '../apps/agent-rules/actions.ts';
+import { PSTN_CONTACTS_ACTIONS } from '../apps/pstn-contacts/actions.ts';
 
 /**
  * The composed action table the event-delegation dispatcher looks up. The
@@ -19,4 +20,5 @@ export const ACTION_REGISTRY: ActionRegistry<AppStores> = {
   ...DEVICES_ACTIONS,
   ...FAMILY_PHONE_ACTIONS,
   ...AGENT_RULES_ACTIONS,
+  ...PSTN_CONTACTS_ACTIONS,
 };
