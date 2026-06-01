@@ -23,6 +23,7 @@ function makeConnection(): FakeConnection {
     placeCall(targetDeviceId) {
       placeCalls.push(targetDeviceId);
     },
+    placePstn() {},
     acceptCall() {},
     rejectCall() {},
     cancelCall() {},

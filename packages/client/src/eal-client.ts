@@ -890,6 +890,9 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
 
       return {
         deviceId,
+        placePstn(toE164) {
+          sendCall({ type: 'call:place-pstn', to: toE164 });
+        },
         placeCall(targetDeviceId) {
           sendCall({ type: 'call:invite', target_device_id: targetDeviceId });
         },
@@ -1162,6 +1165,18 @@ function parseFamilyPhoneCallEvent(raw: string): FamilyPhoneCallEvent | null {
     'text' in parsed && typeof parsed.text === 'string'
   ) {
     return { type: 'call:text', callId: parsed.call_id, text: parsed.text };
+  }
+  if (
+    t === 'call:place-pstn-ack' &&
+    'call_sid' in parsed && typeof parsed.call_sid === 'string'
+  ) {
+    return { type: 'call:place-pstn-ack', callSid: parsed.call_sid };
+  }
+  if (
+    t === 'call:place-pstn-failed' &&
+    'reason' in parsed && typeof parsed.reason === 'string'
+  ) {
+    return { type: 'call:place-pstn-failed', reason: parsed.reason };
   }
   if (
     t === 'presence:changed' &&

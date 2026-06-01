@@ -54,6 +54,27 @@ export type FamilyPhoneCallEvent =
   | { type: 'call:hung-up'; callId: string; reason?: string }
   | { type: 'call:unanswered'; callId: string }
   | { type: 'call:text'; callId: string; text: string }
+  /**
+   * Server-side ack for `call:place-pstn` (Phase 7C). The CallSid is
+   * Twilio's identifier for the just-queued outbound call; the eventual
+   * `call:incoming` arrives later (when Twilio dials and the media
+   * stream connects) and carries its own family-phone call id.
+   */
+  | { type: 'call:place-pstn-ack'; callSid: string }
+  /**
+   * Server-side rejection for `call:place-pstn`. The `reason` is one of:
+   *   - `bad-shape`       — envelope was missing the `to` field
+   *   - `bad-e164`        — `to` did not match the E.164 shape
+   *   - `not-allowed`     — outbound to that number is denied by the
+   *                          PSTN contacts allowlist (7D)
+   *   - `twilio-rejected` — Twilio returned a 4xx (bad number, blocked)
+   *   - `twilio-unreachable` — 5xx / transport / DNS / TLS
+   *   - `outbound-disabled` — TWILIO_ENABLED=false on this deploy
+   *
+   * The UI maps these to distinct messages so the user knows whether
+   * a retry could help.
+   */
+  | { type: 'call:place-pstn-failed'; reason: string }
   | { type: 'presence:changed'; deviceId: number; online: boolean }
   | { type: 'directory:changed' }
   | { type: 'push:subscribed' }
@@ -191,6 +212,16 @@ export interface FamilyPhoneDeviceConnection {
   deviceId: number;
   /** Place a call to another paired device. */
   placeCall(targetDeviceId: number): void;
+  /**
+   * Phase 7C — dial an outbound PSTN number through the Twilio trunk.
+   * The server acks with `call:place-pstn-ack` (carrying Twilio's
+   * CallSid) once Twilio queues the call, or rejects with
+   * `call:place-pstn-failed`. The eventual `call:incoming` arrives
+   * later through the same call event stream; the UI watches for an
+   * incoming from any PSTN device while in "dialling" state and
+   * auto-accepts.
+   */
+  placePstn(toE164: string): void;
   acceptCall(callId: string): void;
   rejectCall(callId: string): void;
   cancelCall(callId: string): void;

@@ -284,6 +284,7 @@ export function createMockEalClient(): MockEalClient {
       return {
         deviceId: input.deviceId,
         placeCall() {},
+        placePstn() {},
         acceptCall() {},
         rejectCall() {},
         cancelCall() {},

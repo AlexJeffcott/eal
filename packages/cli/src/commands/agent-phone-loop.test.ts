@@ -25,6 +25,7 @@ function makeConn(): FakeConn {
   return {
     deviceId: 99,
     placeCall: () => {},
+    placePstn: () => {},
     acceptCall: (id) => accepted.push(id),
     rejectCall: (id) => rejected.push(id),
     cancelCall: () => {},
