@@ -169,6 +169,30 @@ describe('POST /api/family-phone/twilio/voice — Phase 7D rate limit', () => {
     expect(res.body).not.toContain('<Reject');
   });
 
+  test('an unsigned request does not consume rate-limit budget', async () => {
+    const { limiter, seen } = makeRateLimit([{ allowed: true, count: 1 }]);
+    const app = new Elysia().use(
+      twilioHttpRoutes({ twilio: TWILIO, publicHost: PUBLIC_HOST, rateLimit: limiter }),
+    );
+    const res = await postForm(app, '/api/family-phone/twilio/voice', VALID_FIELDS, null);
+    expect(res.status).toBe(403);
+    // Signature check fails before the limiter is consulted; otherwise
+    // an attacker could pre-flight a forged request to push a real
+    // caller over the limit without ever proving auth.
+    expect(seen).toEqual([]);
+  });
+
+  test('a tampered body does not consume rate-limit budget either', async () => {
+    const { limiter, seen } = makeRateLimit([{ allowed: true, count: 1 }]);
+    const app = new Elysia().use(
+      twilioHttpRoutes({ twilio: TWILIO, publicHost: PUBLIC_HOST, rateLimit: limiter }),
+    );
+    const sig = signFor({ From: '+1' });
+    const res = await postForm(app, '/api/family-phone/twilio/voice', VALID_FIELDS, sig);
+    expect(res.status).toBe(403);
+    expect(seen).toEqual([]);
+  });
+
   test('outbound TwiML callbacks skip the rate limiter — From is our own trunk number', async () => {
     const { limiter, seen } = makeRateLimit([{ allowed: false, count: 99 }]);
     const app = new Elysia().use(

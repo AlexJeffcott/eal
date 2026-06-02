@@ -109,4 +109,63 @@ describe('verifyTwilioSignature', () => {
       }),
     ).toBe(false);
   });
+
+  test('tolerates surrounding whitespace in the header (HTTP intermediaries pad)', () => {
+    const fields = { From: '+1' };
+    const sig = computeTwilioSignature(TOKEN, URL_, fields);
+    expect(
+      verifyTwilioSignature({
+        authToken: TOKEN,
+        url: URL_,
+        formFields: fields,
+        signatureHeader: `  ${sig}  `,
+      }),
+    ).toBe(true);
+  });
+
+  test('rejects a header that is not a 28-char base64 SHA1 digest', () => {
+    const fields = { From: '+1' };
+    // Wrong length (27 chars + =).
+    expect(
+      verifyTwilioSignature({
+        authToken: TOKEN,
+        url: URL_,
+        formFields: fields,
+        signatureHeader: 'A'.repeat(26) + '=',
+      }),
+    ).toBe(false);
+    // Right length, non-base64 character.
+    expect(
+      verifyTwilioSignature({
+        authToken: TOKEN,
+        url: URL_,
+        formFields: fields,
+        signatureHeader: '!'.repeat(27) + '=',
+      }),
+    ).toBe(false);
+    // A SHA-256 digest is 44 chars — also rejected.
+    expect(
+      verifyTwilioSignature({
+        authToken: TOKEN,
+        url: URL_,
+        formFields: fields,
+        signatureHeader: 'A'.repeat(43) + '=',
+      }),
+    ).toBe(false);
+  });
+
+  test('rejects a multi-megabyte garbage header without ever hashing', () => {
+    const huge = 'x'.repeat(10 * 1024 * 1024);
+    const before = Date.now();
+    const result = verifyTwilioSignature({
+      authToken: TOKEN,
+      url: URL_,
+      formFields: { From: '+1' },
+      signatureHeader: huge,
+    });
+    // The shape check is regex-bounded by length; reject must be
+    // effectively instant even for a 10 MB blob.
+    expect(result).toBe(false);
+    expect(Date.now() - before).toBeLessThan(500);
+  });
 });

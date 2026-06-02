@@ -41,10 +41,35 @@ export function constantTimeEqual(a: string, b: string): boolean {
 }
 
 /**
+ * Twilio's signature is a 28-byte HMAC-SHA1 digest base64-encoded —
+ * always 28 chars, always the base64 alphabet (A–Z a–z 0–9 + / =).
+ * Anything that doesn't match the shape is rejected up-front; only a
+ * well-shaped header proceeds to the constant-time compare. The
+ * narrow regex keeps the constant-time path on the legitimate
+ * "well-formed but wrong" hot path rather than every garbage header
+ * a misconfigured client or a fuzzer can send.
+ */
+const TWILIO_SIGNATURE_RE = /^[A-Za-z0-9+/]{27}=$/;
+
+/**
+ * Normalise a raw header value: trim leading/trailing whitespace
+ * (some HTTP intermediaries pad headers), reject anything that
+ * doesn't match Twilio's documented base64-of-SHA1 shape. Returns
+ * null when the header is unusable, so the verifier can treat it
+ * identically to a missing header.
+ */
+function parseSignatureHeader(raw: string | null): string | null {
+  if (raw === null) return null;
+  const trimmed = raw.trim();
+  if (trimmed === '' || !TWILIO_SIGNATURE_RE.test(trimmed)) return null;
+  return trimmed;
+}
+
+/**
  * The standard verify entry point — takes everything from the wire,
  * returns true iff the signature matches. Returns false on missing
- * inputs so callers can treat unauthenticated and forged requests
- * identically.
+ * inputs or a malformed signature header so callers can treat
+ * unauthenticated, malformed, and forged requests identically.
  */
 export function verifyTwilioSignature(input: {
   authToken: string;
@@ -52,7 +77,8 @@ export function verifyTwilioSignature(input: {
   formFields: Record<string, string>;
   signatureHeader: string | null;
 }): boolean {
-  if (input.signatureHeader === null || input.signatureHeader === '') return false;
+  const candidate = parseSignatureHeader(input.signatureHeader);
+  if (candidate === null) return false;
   const expected = computeTwilioSignature(input.authToken, input.url, input.formFields);
-  return constantTimeEqual(expected, input.signatureHeader);
+  return constantTimeEqual(expected, candidate);
 }
