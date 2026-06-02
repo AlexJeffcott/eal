@@ -298,4 +298,47 @@ describe('family-phone voicemail http wire contract', () => {
     const res = await fetchJson(app, 'POST', '/api/family-phone/voice-messages/9999/read');
     expect(res.status).toBe(404);
   });
+
+  test('GET ?device_id=X surfaces household voicemails alongside personal ones', async () => {
+    const app = await createTestApp(db, { principalOverride: alex });
+    // Personal voicemail.
+    await fetchJson(app, 'POST', '/api/family-phone/voice-messages', {
+      to_device_id: targetDeviceId,
+      from_device_id: agentDeviceId,
+      body: 'personal',
+      audio_b64: toBase64([1, 2, 3, 4]),
+    });
+    // Household voicemail — written directly via the repo since the
+    // Phase 7D IVR/recording path is what produces them in real use.
+    const devices = createFamilyPhoneDevicesRepo(db);
+    const household = devices.getHouseholdDevice();
+    db.prepare(
+      `INSERT INTO family_phone_voice_messages
+         (to_device_id, from_device_id, from_external, body, audio_blob, sample_rate, channels, duration_ms)
+       VALUES (?, NULL, '+12025550100', 'household greeting', ?, 24000, 1, 100)`,
+    ).run(household.id, new Uint8Array([9, 9, 9, 9]));
+    const list = await fetchJson(
+      app,
+      'GET',
+      `/api/family-phone/voice-messages?device_id=${targetDeviceId}`,
+    );
+    if (!isVoiceMessagesResponse(list.body)) throw new Error('expected list');
+    const bodies = list.body.voiceMessages.map((v) => v.body).sort();
+    expect(bodies).toEqual(['household greeting', 'personal']);
+  });
+
+  test('GET /:id/audio for a household voicemail is allowed for any paired member', async () => {
+    const app = await createTestApp(db, { principalOverride: alex });
+    const devices = createFamilyPhoneDevicesRepo(db);
+    const household = devices.getHouseholdDevice();
+    const row = db
+      .prepare<{ id: number }, [number, Uint8Array]>(
+        `INSERT INTO family_phone_voice_messages
+           (to_device_id, from_external, body, audio_blob, sample_rate, channels, duration_ms)
+         VALUES (?, '+12025550100', 'house', ?, 24000, 1, 100) RETURNING id`,
+      )
+      .get(household.id, new Uint8Array([1, 2, 3, 4]));
+    const res = await fetchJson(app, 'GET', `/api/family-phone/voice-messages/${row?.id}/audio`);
+    expect(res.status).toBe(200);
+  });
 });

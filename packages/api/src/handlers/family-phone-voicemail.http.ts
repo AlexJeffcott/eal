@@ -197,6 +197,23 @@ export function familyPhoneVoicemailHttpRoutes(ctx: VoicemailRoutesContext) {
       const filter: { toDeviceId?: number; unreadOnly?: boolean } = {};
       if (toDeviceId !== undefined) filter.toDeviceId = toDeviceId;
       if (unreadRaw === '1' || unreadRaw === 'true') filter.unreadOnly = true;
+      // Phase 7D: when the caller scopes to a specific paired device,
+      // also surface voicemails addressed to the singleton household
+      // device — they belong to everyone in the household. Listed
+      // most-recent-first across both inboxes.
+      if (toDeviceId !== undefined) {
+        const household = devices.getHouseholdDevice();
+        const personal = messages.list(filter);
+        const householdFilter: { toDeviceId: number; unreadOnly?: boolean } = {
+          toDeviceId: household.id,
+        };
+        if (filter.unreadOnly === true) householdFilter.unreadOnly = true;
+        const householdRows = messages.list(householdFilter);
+        const combined = [...personal, ...householdRows].sort((a, b) =>
+          b.created_at.localeCompare(a.created_at),
+        );
+        return { voiceMessages: combined.map(toVoiceMessageWire) };
+      }
       return {
         voiceMessages: messages.list(filter).map(toVoiceMessageWire),
       };
@@ -214,7 +231,7 @@ export function familyPhoneVoicemailHttpRoutes(ctx: VoicemailRoutesContext) {
         return { error: `voice message ${id} not found` };
       }
       const target = devices.findById(row.to_device_id);
-      if (!target || target.user_id !== principal.userId) {
+      if (!target || (target.kind !== 'household' && target.user_id !== principal.userId)) {
         set.status = 403;
         return { error: 'caller does not own the target device' };
       }
@@ -236,7 +253,7 @@ export function familyPhoneVoicemailHttpRoutes(ctx: VoicemailRoutesContext) {
         return { error: `voice message ${id} not found` };
       }
       const target = devices.findById(row.to_device_id);
-      if (!target || target.user_id !== principal.userId) {
+      if (!target || (target.kind !== 'household' && target.user_id !== principal.userId)) {
         set.status = 403;
         return { error: 'caller does not own the target device' };
       }
