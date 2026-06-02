@@ -128,7 +128,9 @@ async function main(): Promise<number> {
     assertShape('getTask.task', realDetail.task, mockDetail.task);
 
     // ─── Step 6: listUsers shape — the assignee roster ─────────────────────
-    mock.seedUsers([{ id: seeded.userId, displayName: seeded.displayName }]);
+    mock.seedUsers([
+      { id: seeded.userId, displayName: seeded.displayName, inIvrMenu: false },
+    ]);
     const realUsers = await real.listUsers();
     const mockUsers = await mock.listUsers();
     if (realUsers.length === 0 || mockUsers.length === 0) {

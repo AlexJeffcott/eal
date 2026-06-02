@@ -82,6 +82,7 @@ function makeClient(): FakeClient {
     signOut: notImplemented('signOut'),
     getCurrentUser: notImplemented('getCurrentUser'),
     listUsers: notImplemented('listUsers'),
+    setUserInIvrMenu: notImplemented('setUserInIvrMenu'),
     startCliPair: notImplemented('startCliPair'),
     pollCliPair: notImplemented('pollCliPair'),
     claimCliPair: notImplemented('claimCliPair'),

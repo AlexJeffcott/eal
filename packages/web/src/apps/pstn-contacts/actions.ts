@@ -36,6 +36,34 @@ export const PSTN_CONTACTS_ACTIONS: ActionRegistry<AppStores> = {
     stores.$pstnDraftAllowOut.value = !stores.$pstnDraftAllowOut.value;
   },
 
+  'pstn-contacts:toggle-ivr-menu': async ({ data, stores }) => {
+    const rawId = data['userId'];
+    const rawCurrent = data['current'];
+    if (typeof rawId !== 'string' || typeof rawCurrent !== 'string') return;
+    const id = Number(rawId);
+    if (!Number.isInteger(id) || id <= 0) return;
+    const next = rawCurrent !== 'true';
+    try {
+      await stores.client.setUserInIvrMenu(id, next);
+      const updated = await stores.client.listUsers();
+      stores.$householdUsers.value = updated;
+    } catch (err) {
+      stores.$pstnContactsError.value = describeError(err);
+    }
+  },
+
+  'pstn-contacts:set-intended-user': ({ data, stores }) => {
+    const raw = data['value'];
+    if (typeof raw !== 'string') return;
+    if (raw === '' || raw === 'none') {
+      stores.$pstnDraftIntendedUserId.value = null;
+      return;
+    }
+    const id = Number(raw);
+    if (!Number.isInteger(id) || id <= 0) return;
+    stores.$pstnDraftIntendedUserId.value = id;
+  },
+
   'pstn-contacts:refresh': async ({ stores }) => {
     await refreshPstnContacts(stores);
   },
@@ -51,6 +79,7 @@ export const PSTN_CONTACTS_ACTIONS: ActionRegistry<AppStores> = {
     stores.$pstnDraftLabel.value = contact.label;
     stores.$pstnDraftAllowIn.value = contact.allowIn;
     stores.$pstnDraftAllowOut.value = contact.allowOut;
+    stores.$pstnDraftIntendedUserId.value = contact.intendedUserId;
     stores.$pstnContactsError.value = null;
   },
 
@@ -78,6 +107,7 @@ export const PSTN_CONTACTS_ACTIONS: ActionRegistry<AppStores> = {
         label,
         allowIn: stores.$pstnDraftAllowIn.value,
         allowOut: stores.$pstnDraftAllowOut.value,
+        intendedUserId: stores.$pstnDraftIntendedUserId.value,
       });
       resetPstnContactsDraft();
     } catch (err) {
@@ -103,6 +133,7 @@ export const PSTN_CONTACTS_ACTIONS: ActionRegistry<AppStores> = {
         label,
         allowIn: stores.$pstnDraftAllowIn.value,
         allowOut: stores.$pstnDraftAllowOut.value,
+        intendedUserId: stores.$pstnDraftIntendedUserId.value,
       });
       resetPstnContactsDraft();
     } catch (err) {

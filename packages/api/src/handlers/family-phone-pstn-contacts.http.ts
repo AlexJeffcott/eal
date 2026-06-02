@@ -19,6 +19,9 @@ export interface PstnContact {
   label: string;
   allowIn: boolean;
   allowOut: boolean;
+  /** Household member this caller is calling for (Phase 7D). Null when
+   *  unset → inbound from this contact falls through to the DTMF IVR. */
+  intendedUserId: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -30,6 +33,7 @@ export function toPstnContact(row: PstnContactRow): PstnContact {
     label: row.label,
     allowIn: row.allow_in === 1,
     allowOut: row.allow_out === 1,
+    intendedUserId: row.intended_user_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -87,6 +91,7 @@ export function pstnContactsHttpRoutes(ctx: PstnContactsRoutesContext) {
           label,
           allowIn: body.allowIn,
           allowOut: body.allowOut,
+          intendedUserId: body.intendedUserId ?? null,
         });
         return { contact: toPstnContact(inserted) };
       },
@@ -96,6 +101,7 @@ export function pstnContactsHttpRoutes(ctx: PstnContactsRoutesContext) {
           label: t.String(),
           allowIn: t.Boolean(),
           allowOut: t.Boolean(),
+          intendedUserId: t.Optional(t.Nullable(t.Number())),
         }),
       },
     )
@@ -118,6 +124,7 @@ export function pstnContactsHttpRoutes(ctx: PstnContactsRoutesContext) {
           label,
           allowIn: body.allowIn,
           allowOut: body.allowOut,
+          intendedUserId: body.intendedUserId ?? null,
         });
         if (!updated) {
           set.status = 404;
@@ -130,6 +137,7 @@ export function pstnContactsHttpRoutes(ctx: PstnContactsRoutesContext) {
           label: t.String(),
           allowIn: t.Boolean(),
           allowOut: t.Boolean(),
+          intendedUserId: t.Optional(t.Nullable(t.Number())),
         }),
       },
     )

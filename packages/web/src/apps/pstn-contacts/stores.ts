@@ -14,6 +14,9 @@ export const $pstnDraftE164 = $state<string>('');
 export const $pstnDraftLabel = $state<string>('');
 export const $pstnDraftAllowIn = $state<boolean>(true);
 export const $pstnDraftAllowOut = $state<boolean>(true);
+/** Phase 7D — the user this contact is calling for; null means
+ *  fall through to the DTMF IVR. */
+export const $pstnDraftIntendedUserId = $state<number | null>(null);
 /** null = the form is creating; a number = the form is editing that row. */
 export const $pstnEditingId = $state<number | null>(null);
 
@@ -24,6 +27,7 @@ export interface PstnContactsStores {
   $pstnDraftLabel: typeof $pstnDraftLabel;
   $pstnDraftAllowIn: typeof $pstnDraftAllowIn;
   $pstnDraftAllowOut: typeof $pstnDraftAllowOut;
+  $pstnDraftIntendedUserId: typeof $pstnDraftIntendedUserId;
   $pstnEditingId: typeof $pstnEditingId;
 }
 
@@ -35,6 +39,7 @@ export function createPstnContactsStores(): PstnContactsStores {
     $pstnDraftLabel,
     $pstnDraftAllowIn,
     $pstnDraftAllowOut,
+    $pstnDraftIntendedUserId,
     $pstnEditingId,
   };
 }
@@ -44,6 +49,7 @@ export function resetPstnContactsDraft(): void {
   $pstnDraftLabel.value = '';
   $pstnDraftAllowIn.value = true;
   $pstnDraftAllowOut.value = true;
+  $pstnDraftIntendedUserId.value = null;
   $pstnEditingId.value = null;
 }
 

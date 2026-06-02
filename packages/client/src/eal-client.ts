@@ -185,8 +185,11 @@ export interface EalClient {
   signInWithPasskey(): Promise<CurrentUser>;
   signOut(): Promise<void>;
   getCurrentUser(): Promise<CurrentUser | null>;
-  /** The household roster — used to populate the task assignee picker. */
+  /** The household roster — used to populate the task assignee picker
+   *  and the Phase 7D DTMF IVR opt-in admin. */
   listUsers(): Promise<HouseholdMember[]>;
+  /** Flip the inbound IVR-menu opt-in for a given user (Phase 7D). */
+  setUserInIvrMenu(id: number, inIvrMenu: boolean): Promise<HouseholdMember>;
   startCliPair(): Promise<CliPairStartResult>;
   pollCliPair(input: { deviceCode: string }): Promise<CliPairPollResult>;
   claimCliPair(input: CliPairClaimInput): Promise<{ ok: true }>;
@@ -647,6 +650,14 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
       return result.users;
     },
 
+    async setUserInIvrMenu(id, inIvrMenu): Promise<HouseholdMember> {
+      const result = await patchJson<{ user: HouseholdMember }>(
+        `/api/v1/users/${id}`,
+        { inIvrMenu },
+      );
+      return result.user;
+    },
+
     async startCliPair(): Promise<CliPairStartResult> {
       const raw = await postJson<{
         user_code: string;
@@ -981,6 +992,7 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
           label: input.label,
           allowIn: input.allowIn,
           allowOut: input.allowOut,
+          intendedUserId: input.intendedUserId ?? null,
         },
       );
       return contact;
@@ -993,6 +1005,7 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
           label: input.label,
           allowIn: input.allowIn,
           allowOut: input.allowOut,
+          intendedUserId: input.intendedUserId ?? null,
         },
       );
       return contact;

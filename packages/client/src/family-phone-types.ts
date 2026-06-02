@@ -101,6 +101,10 @@ export interface PstnContact {
   label: string;
   allowIn: boolean;
   allowOut: boolean;
+  /** Phase 7D — when set, inbound calls from this number ring only
+   *  this user's online devices and any voicemail lands in their
+   *  inbox. Null falls through to the DTMF IVR menu. */
+  intendedUserId: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -110,6 +114,7 @@ export interface CreatePstnContactInput {
   label: string;
   allowIn: boolean;
   allowOut: boolean;
+  intendedUserId?: number | null;
 }
 
 export interface UpdatePstnContactInput {
@@ -117,6 +122,7 @@ export interface UpdatePstnContactInput {
   label: string;
   allowIn: boolean;
   allowOut: boolean;
+  intendedUserId?: number | null;
 }
 
 export interface AgentRule {

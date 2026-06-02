@@ -61,6 +61,7 @@ describe('pstn-contacts:start-edit', () => {
         label: 'Nonno',
         allowIn: false,
         allowOut: true,
+        intendedUserId: null,
         createdAt: '2026-06-01T00:00:00Z',
         updatedAt: '2026-06-01T00:00:00Z',
       },
@@ -179,6 +180,55 @@ describe('pstn-contacts:refresh', () => {
     // MockEalClient.listPstnContacts returns [] when nothing is seeded.
     expect(stores.$pstnContacts.value).toEqual([]);
     expect(stores.$pstnContactsError.value).toBeNull();
+  });
+});
+
+describe('pstn-contacts:set-intended-user', () => {
+  test('non-numeric value clears the draft to null', async () => {
+    stores.$pstnDraftIntendedUserId.value = 7;
+    await run('pstn-contacts:set-intended-user', { value: 'none' });
+    expect(stores.$pstnDraftIntendedUserId.value).toBeNull();
+    await run('pstn-contacts:set-intended-user', { value: '' });
+    expect(stores.$pstnDraftIntendedUserId.value).toBeNull();
+  });
+
+  test('numeric value sets the draft', async () => {
+    await run('pstn-contacts:set-intended-user', { value: '5' });
+    expect(stores.$pstnDraftIntendedUserId.value).toBe(5);
+  });
+
+  test('non-positive integer is rejected silently', async () => {
+    stores.$pstnDraftIntendedUserId.value = 7;
+    await run('pstn-contacts:set-intended-user', { value: '0' });
+    expect(stores.$pstnDraftIntendedUserId.value).toBe(7);
+  });
+});
+
+describe('pstn-contacts:toggle-ivr-menu', () => {
+  test('flips the flag via setUserInIvrMenu and refreshes the roster', async () => {
+    mock.seedUsers([
+      { id: 1, displayName: 'alex', inIvrMenu: false },
+      { id: 2, displayName: 'sarah', inIvrMenu: false },
+    ]);
+    await run('pstn-contacts:toggle-ivr-menu', { userId: '1', current: 'false' });
+    const after = stores.$householdUsers.value.find((u) => u.id === 1);
+    expect(after?.inIvrMenu).toBe(true);
+  });
+
+  test('reports an error from setUserInIvrMenu without crashing', async () => {
+    const failing = Object.assign(createMockEalClient(), {
+      async setUserInIvrMenu(): Promise<never> {
+        throw new Error('nope');
+      },
+    });
+    failing.setCurrentUser({ userId: 1, displayName: 'alex' });
+    const s = createStores(failing);
+    await runAction(PSTN_CONTACTS_ACTIONS, 'pstn-contacts:toggle-ivr-menu', {
+      stores: s,
+      data: { userId: '1', current: 'false' },
+      event: fakeEvent(),
+    });
+    expect(s.$pstnContactsError.value).toBe('nope');
   });
 });
 

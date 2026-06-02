@@ -7,6 +7,9 @@ export interface CurrentUser {
 export interface HouseholdMember {
   readonly id: number;
   readonly displayName: string;
+  /** Phase 7D — true when this user is included in the inbound
+   *  DTMF IVR menu strangers hear. Defaults to false. */
+  readonly inIvrMenu: boolean;
 }
 
 export interface CliPairStartResult {

@@ -1,5 +1,6 @@
 import {
   ActionInput,
+  ActionSelect,
   Badge,
   Button,
   Cluster,
@@ -8,16 +9,18 @@ import {
   Text,
 } from '@fairfox/polly/ui';
 import { Show } from '@preact/signals/utils';
-import type { PstnContact } from '@eal/client';
+import type { HouseholdMember, PstnContact } from '@eal/client';
 import {
   $pstnContacts,
   $pstnContactsError,
   $pstnDraftAllowIn,
   $pstnDraftAllowOut,
   $pstnDraftE164,
+  $pstnDraftIntendedUserId,
   $pstnDraftLabel,
   $pstnEditingId,
 } from './stores.ts';
+import { $householdUsers } from '../tasks/stores.ts';
 
 function ErrorBanner(props: { error: string }) {
   return (
@@ -87,6 +90,29 @@ function ContactFormCard() {
             />
           </Cluster>
 
+          <Layout gap="var(--polly-space-xs)">
+            <Text tone="muted">
+              Calling for — inbound rings only this person and any
+              voicemail lands in their inbox. Leave as "Anyone" to use
+              the DTMF menu instead.
+            </Text>
+            <ActionSelect
+              value={
+                $pstnDraftIntendedUserId.value === null
+                  ? 'none'
+                  : String($pstnDraftIntendedUserId.value)
+              }
+              options={[
+                { value: 'none', label: 'Anyone (use DTMF menu)' },
+                ...$householdUsers.value.map((u: HouseholdMember) => ({
+                  value: String(u.id),
+                  label: u.displayName,
+                })),
+              ]}
+              action="pstn-contacts:set-intended-user"
+            />
+          </Layout>
+
           <Cluster gap="var(--polly-space-sm)">
             {isEditing ? (
               <>
@@ -115,8 +141,15 @@ function ContactFormCard() {
   );
 }
 
-function ContactRow(props: { contact: PstnContact }) {
+function intendedUserLabel(contact: PstnContact, users: HouseholdMember[]): string | null {
+  if (contact.intendedUserId === null) return null;
+  const u = users.find((x) => x.id === contact.intendedUserId);
+  return u?.displayName ?? `user #${contact.intendedUserId}`;
+}
+
+function ContactRow(props: { contact: PstnContact; users: HouseholdMember[] }) {
   const { contact } = props;
+  const intended = intendedUserLabel(contact, props.users);
   return (
     <Surface variant="plain" padding="var(--polly-space-sm)">
       <Layout gap="var(--polly-space-xs)" data-pstn-row data-pstn-row-id={String(contact.id)}>
@@ -124,6 +157,7 @@ function ContactRow(props: { contact: PstnContact }) {
           <Cluster gap="var(--polly-space-sm)">
             <Text weight="medium" data-pstn-row-label>{contact.label}</Text>
             <Text tone="muted" data-pstn-row-e164>{contact.e164}</Text>
+            {intended !== null && <Badge variant="info">→ {intended}</Badge>}
           </Cluster>
           <Cluster gap="var(--polly-space-xs)">
             <Button
@@ -159,8 +193,51 @@ function ContactRow(props: { contact: PstnContact }) {
  * (not the whole panel). Pinning the read inside `Show`'s predicate and
  * inside the map below makes the subscription explicit at render time.
  */
+function IvrMenuCard() {
+  const users = $householdUsers.value;
+  return (
+    <Surface variant="callout" padding="var(--polly-space-md)">
+      <Layout gap="var(--polly-space-sm)">
+        <Text as="h2" weight="bold">Inbound DTMF menu</Text>
+        <Text tone="muted">
+          When an unknown number calls the household trunk, the IVR
+          reads out a press-N menu of the people opted in here. Strangers
+          can then route themselves to a specific person instead of
+          ringing every handset.
+        </Text>
+        <Show
+          when={() => users.length > 0}
+          fallback={<Text tone="muted">No household members yet.</Text>}
+        >
+          <Layout gap="var(--polly-space-xs)">
+            {users.map((u) => (
+              <Cluster
+                key={u.id}
+                gap="var(--polly-space-sm)"
+                justify="space-between"
+                className="pstn-contacts-ivr-row"
+              >
+                <Text>{u.displayName}</Text>
+                <Button
+                  tier={u.inIvrMenu ? 'primary' : 'tertiary'}
+                  size="small"
+                  label={u.inIvrMenu ? 'In menu' : 'Off menu'}
+                  data-action="pstn-contacts:toggle-ivr-menu"
+                  data-action-user-id={String(u.id)}
+                  data-action-current={String(u.inIvrMenu)}
+                />
+              </Cluster>
+            ))}
+          </Layout>
+        </Show>
+      </Layout>
+    </Surface>
+  );
+}
+
 function ContactsListCard() {
   const contacts = $pstnContacts.value;
+  const users = $householdUsers.value;
   return (
     <Surface variant="callout" padding="var(--polly-space-md)">
       <Layout gap="var(--polly-space-sm)" data-pstn-list>
@@ -178,7 +255,7 @@ function ContactsListCard() {
         >
           <Layout gap="var(--polly-space-xs)">
             {contacts.map((c) => (
-              <ContactRow key={c.id} contact={c} />
+              <ContactRow key={c.id} contact={c} users={users} />
             ))}
           </Layout>
         </Show>
@@ -205,6 +282,7 @@ export function PstnContactsPanel() {
 
       <ContactFormCard />
       <ContactsListCard />
+      <IvrMenuCard />
     </Layout>
   );
 }

@@ -55,6 +55,7 @@ function contact(id: number, e164: string, label: string, allowIn = true, allowO
     label,
     allowIn,
     allowOut,
+    intendedUserId: null,
     createdAt: '2026-06-01T00:00:00Z',
     updatedAt: '2026-06-01T00:00:00Z',
   };

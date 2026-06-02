@@ -231,6 +231,14 @@ export function createMockEalClient(): MockEalClient {
       return [...seededUsers];
     },
 
+    async setUserInIvrMenu(id, inIvrMenu): Promise<HouseholdMember> {
+      const idx = seededUsers.findIndex((u) => u.id === id);
+      if (idx < 0) throw new Error(`MockEalClient.setUserInIvrMenu: no user with id=${id}`);
+      const next: HouseholdMember = { ...seededUsers[idx]!, inIvrMenu };
+      seededUsers[idx] = next;
+      return next;
+    },
+
     async startCliPair(): Promise<CliPairStartResult> {
       if (cliPairStart === null) {
         throw new Error('MockEalClient.startCliPair: no start registered. Call mockCliPair() first.');
@@ -342,6 +350,7 @@ export function createMockEalClient(): MockEalClient {
         label: input.label,
         allowIn: input.allowIn,
         allowOut: input.allowOut,
+        intendedUserId: input.intendedUserId ?? null,
         createdAt: now,
         updatedAt: now,
       };
@@ -356,6 +365,7 @@ export function createMockEalClient(): MockEalClient {
         label: input.label,
         allowIn: input.allowIn,
         allowOut: input.allowOut,
+        intendedUserId: input.intendedUserId ?? null,
         createdAt: now,
         updatedAt: now,
       };

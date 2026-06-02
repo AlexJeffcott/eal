@@ -198,7 +198,7 @@ describe('Tasks UI (browser)', () => {
     test('assignee condition: filter to a member or to unassigned', async () => {
       signedIn();
       // The value buttons are built from the household roster.
-      $householdUsers.value = [{ id: 1, displayName: 'alex' }];
+      $householdUsers.value = [{ id: 1, displayName: 'alex', inIvrMenu: false }];
       await addTask('unassigned one');
       const mineId = 9001;
       const mine: Task = {
@@ -356,8 +356,8 @@ describe('task detail editor', () => {
   test('choosing an assignee commits it and shows a badge on the row', async () => {
     signedIn();
     $householdUsers.value = [
-      { id: 1, displayName: 'alex' },
-      { id: 2, displayName: 'elisa' },
+      { id: 1, displayName: 'alex', inIvrMenu: false },
+      { id: 2, displayName: 'elisa', inIvrMenu: false },
     ];
     // Use the All view — assigning a task drops it out of the Inbox (Inbox is
     // unassigned tasks), and we want the row to stay visible.
