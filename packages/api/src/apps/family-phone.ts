@@ -204,7 +204,14 @@ export const familyPhoneApp: ApiApp = {
       // Twilio voice webhook: authenticated by the X-Twilio-Signature
       // HMAC the handler verifies before doing anything. The global
       // Bearer gate would reject it before that check could run.
-      pathname === '/api/family-phone/twilio/voice'
+      pathname === '/api/family-phone/twilio/voice' ||
+      // Phase 7D IVR/voicemail callbacks — same X-Twilio-Signature
+      // contract as /voice. Twilio cannot mint a Bearer token, so
+      // the global gate would reject these before the signature
+      // verifier sees them.
+      pathname === '/api/family-phone/twilio/ivr-pick' ||
+      pathname === '/api/family-phone/twilio/after-connect' ||
+      pathname === '/api/family-phone/twilio/recording'
     );
   },
   routes: (ctx) => {
