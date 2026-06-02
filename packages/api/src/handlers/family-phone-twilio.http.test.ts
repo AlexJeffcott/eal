@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { Elysia } from 'elysia';
 import { computeTwilioSignature } from '../twilio/signature.ts';
 import { twilioHttpRoutes } from './family-phone-twilio.http.ts';
+import type { PstnInboundRateLimiter } from './family-phone-pstn-rate-limit.ts';
 
 const TWILIO = {
   accountSid: 'AC0123456789abcdef0123456789abcdef',
@@ -120,5 +121,64 @@ describe('POST /api/family-phone/twilio/voice', () => {
     expect(res.body).not.toContain('<bobby>');
     expect(res.body).toContain('&lt;bobby&gt;');
     expect(res.body).toContain('&quot;');
+  });
+});
+
+describe('POST /api/family-phone/twilio/voice — Phase 7D rate limit', () => {
+  function makeRateLimit(verdicts: Array<{ allowed: boolean; count: number }>): {
+    limiter: PstnInboundRateLimiter;
+    seen: string[];
+  } {
+    const seen: string[] = [];
+    let i = 0;
+    return {
+      seen,
+      limiter: {
+        check(source): { allowed: boolean; count: number; windowMs: number; max: number } {
+          seen.push(source);
+          const v = verdicts[Math.min(i, verdicts.length - 1)] ?? { allowed: true, count: 1 };
+          i++;
+          return { ...v, windowMs: 60_000, max: 10 };
+        },
+      },
+    };
+  }
+
+  test('over-limit inbound returns TwiML <Reject> and does not open the stream', async () => {
+    const { limiter, seen } = makeRateLimit([{ allowed: false, count: 11 }]);
+    const app = new Elysia().use(
+      twilioHttpRoutes({ twilio: TWILIO, publicHost: PUBLIC_HOST, rateLimit: limiter }),
+    );
+    const sig = signFor(VALID_FIELDS);
+    const res = await postForm(app, '/api/family-phone/twilio/voice', VALID_FIELDS, sig);
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('<Reject reason="busy"/>');
+    expect(res.body).not.toContain('<Stream');
+    expect(seen).toEqual([VALID_FIELDS.From]);
+  });
+
+  test('under-limit inbound passes through to the usual <Stream> TwiML', async () => {
+    const { limiter } = makeRateLimit([{ allowed: true, count: 1 }]);
+    const app = new Elysia().use(
+      twilioHttpRoutes({ twilio: TWILIO, publicHost: PUBLIC_HOST, rateLimit: limiter }),
+    );
+    const sig = signFor(VALID_FIELDS);
+    const res = await postForm(app, '/api/family-phone/twilio/voice', VALID_FIELDS, sig);
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('<Stream');
+    expect(res.body).not.toContain('<Reject');
+  });
+
+  test('outbound TwiML callbacks skip the rate limiter — From is our own trunk number', async () => {
+    const { limiter, seen } = makeRateLimit([{ allowed: false, count: 99 }]);
+    const app = new Elysia().use(
+      twilioHttpRoutes({ twilio: TWILIO, publicHost: PUBLIC_HOST, rateLimit: limiter }),
+    );
+    const outboundPath = '/api/family-phone/twilio/voice?direction=outbound&handset=1';
+    const sig = signFor(VALID_FIELDS, outboundPath);
+    const res = await postForm(app, outboundPath, VALID_FIELDS, sig);
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('<Stream');
+    expect(seen).toEqual([]);
   });
 });

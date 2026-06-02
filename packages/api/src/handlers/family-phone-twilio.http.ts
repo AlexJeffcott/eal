@@ -1,6 +1,7 @@
 import { Elysia } from 'elysia';
 import type { TwilioConfig } from '../twilio/config.ts';
 import { verifyTwilioSignature } from '../twilio/signature.ts';
+import type { PstnInboundRateLimiter } from './family-phone-pstn-rate-limit.ts';
 
 export interface TwilioRoutesContext {
   twilio: TwilioConfig;
@@ -10,6 +11,13 @@ export interface TwilioRoutesContext {
    * TwiML response points Twilio at.
    */
   publicHost: string;
+  /**
+   * Per-source rate limiter (Phase 7D). Consulted only on inbound calls
+   * — for outbound dial-outs, Twilio's TwiML fetch carries our own
+   * number as `From`, which would otherwise throttle the household's
+   * own UI. When omitted, no rate-limit gate applies.
+   */
+  rateLimit?: PstnInboundRateLimiter;
 }
 
 interface TwiMLOptions {
@@ -54,6 +62,22 @@ function buildTwiML(opts: TwiMLOptions): string {
     paramTags,
     '    </Stream>',
     '  </Connect>',
+    '</Response>',
+  ].join('\n');
+}
+
+/**
+ * The "drop this call without ringing the household" reply. Twilio
+ * treats `<Reject reason="busy">` as a SIP 486 Busy from our side, so
+ * the dialler hears a busy tone and Twilio bills nothing further. The
+ * webhook still returns 200 — the response status reflects "we
+ * understood the request", not "we accepted the call".
+ */
+function buildRejectTwiML(): string {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<Response>',
+    '  <Reject reason="busy"/>',
     '</Response>',
   ].join('\n');
 }
@@ -137,8 +161,21 @@ export function twilioHttpRoutes(ctx: TwilioRoutesContext) {
         const direction: 'inbound' | 'outbound' =
           requestUrl.searchParams.get('direction') === 'outbound' ? 'outbound' : 'inbound';
         const targetHandsetId = parseHandsetParam(requestUrl.searchParams.get('handset'));
-        const streamUrl = `wss://${ctx.publicHost}/api/family-phone/twilio/media`;
         set.headers['content-type'] = 'text/xml; charset=utf-8';
+        // Phase 7D rate limit — inbound only. The `from` field is the
+        // remote E.164 on inbound calls; on outbound it's our own
+        // trunk number, where throttling would just block the
+        // household's own dial-pad.
+        if (direction === 'inbound' && ctx.rateLimit) {
+          const verdict = ctx.rateLimit.check(from);
+          if (!verdict.allowed) {
+            console.warn(
+              `[twilio] rate-limited inbound call from ${from} (${verdict.count}/${verdict.max} in ${verdict.windowMs}ms)`,
+            );
+            return buildRejectTwiML();
+          }
+        }
+        const streamUrl = `wss://${ctx.publicHost}/api/family-phone/twilio/media`;
         return buildTwiML({ streamUrl, callSid, from, to, direction, targetHandsetId });
       },
       {

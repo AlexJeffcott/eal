@@ -17,6 +17,8 @@ import {
 import { createCallRouter, type CallRouter } from '../handlers/family-phone-call-router.ts';
 import { createFireOfflineCallWake } from '../handlers/family-phone-call-wake.ts';
 import { createFamilyPhoneDevicesRepo } from '../db/repos/family-phone-devices.ts';
+import { createPstnCallsRepo } from '../db/repos/family-phone-pstn-calls.ts';
+import { createPstnInboundRateLimiter } from '../handlers/family-phone-pstn-rate-limit.ts';
 import type { DatabaseClient } from '../db/client.ts';
 import type { WsService } from './types.ts';
 import type { ApiApp } from './types.ts';
@@ -147,6 +149,21 @@ CREATE TABLE IF NOT EXISTS family_phone_pstn_contacts (
 );
 CREATE INDEX IF NOT EXISTS idx_family_phone_pstn_contacts_label
   ON family_phone_pstn_contacts (label);
+
+-- Phase 7D: one row per inbound PSTN call attempt, keyed by the
+-- remote E.164. The voice webhook counts recent rows from a given
+-- source before deciding whether to ring the household or hand
+-- Twilio a <Reject> — a single number that fires fifty times in
+-- a minute is either a misconfigured re-dialer or hostile. Rows
+-- are append-only; a periodic prune (added when the table starts
+-- to matter for disk) can drop anything older than the window.
+CREATE TABLE IF NOT EXISTS family_phone_pstn_calls (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_e164 TEXT    NOT NULL,
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_family_phone_pstn_calls_source_created
+  ON family_phone_pstn_calls (source_e164, created_at);
 `;
 
 export const familyPhoneApp: ApiApp = {
@@ -226,8 +243,11 @@ export const familyPhoneApp: ApiApp = {
       }
       const publicHost = new URL(origin).host;
       const devices = createFamilyPhoneDevicesRepo(ctx.db);
+      const rateLimit = createPstnInboundRateLimiter({
+        calls: createPstnCallsRepo(ctx.db),
+      });
       app = app
-        .use(twilioHttpRoutes({ twilio, publicHost }))
+        .use(twilioHttpRoutes({ twilio, publicHost, rateLimit }))
         .use(
           twilioMediaWsRoute({
             router,
