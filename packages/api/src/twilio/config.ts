@@ -19,6 +19,15 @@ export interface TwilioConfig {
   /** Token verified against the X-Twilio-Signature header on every
    * webhook so an attacker can't spoof inbound calls into the bridge. */
   webhookSigningKey: string;
+  /**
+   * Override for the Twilio REST API base URL. Production omits this
+   * and the REST client uses Twilio's real endpoint. The
+   * `scripts/e2e-pstn-outbound.ts` harness sets `TWILIO_API_BASE_URL`
+   * to point at a local stub so the outbound path can be exercised
+   * without hitting Twilio for real. Undefined means "use the live
+   * endpoint" — explicit, not a silent fallback.
+   */
+  apiBaseUrl?: string;
 }
 
 /**
@@ -63,10 +72,20 @@ export function loadTwilioConfig(env: NodeJS.ProcessEnv = process.env): TwilioCo
       `EAL_API: TWILIO_PHONE_NUMBER="${phoneNumber}" — expected an E.164 number (e.g. +441234567890).`,
     );
   }
-  return {
+  const apiBaseUrl = env['TWILIO_API_BASE_URL'];
+  const config: TwilioConfig = {
     accountSid: accountSid ?? '',
     authToken: authToken ?? '',
     phoneNumber: phoneNumber ?? '',
     webhookSigningKey: webhookSigningKey ?? '',
   };
+  if (apiBaseUrl !== undefined && apiBaseUrl !== '') {
+    if (!/^https?:\/\//.test(apiBaseUrl)) {
+      throw new Error(
+        `EAL_API: TWILIO_API_BASE_URL="${apiBaseUrl}" — expected an http(s) URL.`,
+      );
+    }
+    config.apiBaseUrl = apiBaseUrl;
+  }
+  return config;
 }

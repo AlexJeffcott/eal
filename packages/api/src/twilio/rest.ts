@@ -16,7 +16,7 @@
  */
 import type { TwilioConfig } from './config.ts';
 
-const TWILIO_API_BASE = 'https://api.twilio.com/2010-04-01';
+const DEFAULT_TWILIO_API_BASE = 'https://api.twilio.com/2010-04-01';
 
 export interface PlaceOutboundCallInput {
   /** The E.164 number the trunk should dial. */
@@ -72,8 +72,9 @@ export interface TwilioRestDeps {
 
 export function createTwilioRestClient(deps: TwilioRestDeps): TwilioRestClient {
   const httpFetch = deps.fetch ?? fetch;
-  const { accountSid, authToken, phoneNumber } = deps.config;
-  const callsUrl = `${TWILIO_API_BASE}/Accounts/${accountSid}/Calls.json`;
+  const { accountSid, authToken, phoneNumber, apiBaseUrl } = deps.config;
+  const base = (apiBaseUrl ?? DEFAULT_TWILIO_API_BASE).replace(/\/+$/, '');
+  const callsUrl = `${base}/Accounts/${accountSid}/Calls.json`;
   // HTTP Basic per Twilio's auth scheme: base64(SID:Token). Built once
   // — the credential is stable for the process lifetime.
   const basicAuth = `Basic ${btoa(`${accountSid}:${authToken}`)}`;
