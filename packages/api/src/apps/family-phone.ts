@@ -40,14 +40,20 @@ CREATE TABLE IF NOT EXISTS family_phone_devices (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
   label       TEXT    NOT NULL,
-  kind        TEXT    NOT NULL CHECK (kind IN ('handset','pwa','agent','pstn')),
+  kind        TEXT    NOT NULL CHECK (kind IN ('handset','pwa','agent','pstn','household')),
   created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
   paired_at   TEXT,
-  CHECK (kind = 'pstn' OR user_id IS NOT NULL)
+  CHECK (kind IN ('pstn','household') OR user_id IS NOT NULL)
 );
 CREATE INDEX IF NOT EXISTS idx_family_phone_devices_user_id ON family_phone_devices (user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_family_phone_devices_pstn_label
   ON family_phone_devices (label) WHERE kind = 'pstn';
+-- Phase 7D: at most one kind='household' device per install. The
+-- ensureHouseholdDevice migration seeds it on boot; this partial
+-- unique index keeps a second seed from succeeding if two boots
+-- race against an unmigrated DB.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_family_phone_devices_household_singleton
+  ON family_phone_devices (kind) WHERE kind = 'household';
 
 -- A pair request is a 60s-TTL invite minted by an in-household browser. The
 -- joining device supplies its own label and kind on /pair/complete, so this

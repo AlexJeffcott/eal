@@ -1,12 +1,13 @@
 import type { DatabaseClient } from '../client.ts';
 
-export type FamilyPhoneDeviceKind = 'handset' | 'pwa' | 'agent' | 'pstn';
+export type FamilyPhoneDeviceKind = 'handset' | 'pwa' | 'agent' | 'pstn' | 'household';
 
 export interface FamilyPhoneDeviceRow {
   id: number;
   /**
-   * Owning user. Null only for kind='pstn' rows, which represent a remote
-   * phone number, not a household device — the schema CHECK enforces this.
+   * Owning user. Null only for kind='pstn' (remote phone number) and
+   * kind='household' (the single user-less inbox row for the no-IVR-
+   * selection / unknown-caller path) — the schema CHECK enforces this.
    */
   user_id: number | null;
   label: string;
@@ -31,9 +32,17 @@ export interface FamilyPhoneDevicesRepo {
   insert(input: {
     userId: number;
     label: string;
-    kind: Exclude<FamilyPhoneDeviceKind, 'pstn'>;
+    kind: Exclude<FamilyPhoneDeviceKind, 'pstn' | 'household'>;
     pairedAt?: string;
   }): FamilyPhoneDeviceRow;
+  /**
+   * The singleton kind='household' row provisioned by
+   * `ensureHouseholdDevice` on schema apply. Voicemails for the
+   * unknown-caller / no-IVR-selection path use its id as
+   * `to_device_id`; every paired browser subscribes to it client-
+   * side. Throws if the migration hasn't run.
+   */
+  getHouseholdDevice(): FamilyPhoneDeviceRow;
   /**
    * Materialise (or fetch) the device row that represents an inbound or
    * outbound PSTN counterparty. Keyed by E.164 via the partial unique
@@ -80,8 +89,12 @@ export function createFamilyPhoneDevicesRepo(db: DatabaseClient): FamilyPhoneDev
             u.display_name AS owner_display_name
      FROM family_phone_devices d
      JOIN users u ON u.id = d.user_id
-     WHERE d.kind <> 'pstn'
+     WHERE d.kind NOT IN ('pstn','household')
      ORDER BY u.display_name COLLATE NOCASE, d.id`,
+  );
+  const householdStmt = db.prepare<FamilyPhoneDeviceRow, []>(
+    `SELECT id, user_id, label, kind, created_at, paired_at
+       FROM family_phone_devices WHERE kind = 'household' LIMIT 1`,
   );
   const findByIdStmt = db.prepare<FamilyPhoneDeviceRow, [number]>(
     `SELECT id, user_id, label, kind, created_at, paired_at
@@ -106,6 +119,15 @@ export function createFamilyPhoneDevicesRepo(db: DatabaseClient): FamilyPhoneDev
         input.pairedAt ?? null,
       );
       if (!row) throw new Error('family_phone_devices.insert: RETURNING gave no row');
+      return row;
+    },
+    getHouseholdDevice(): FamilyPhoneDeviceRow {
+      const row = householdStmt.get();
+      if (!row) {
+        throw new Error(
+          'family_phone_devices.getHouseholdDevice: no household row — applySchema must run before this is called.',
+        );
+      }
       return row;
     },
     upsertPstnByE164(e164): FamilyPhoneDeviceRow {

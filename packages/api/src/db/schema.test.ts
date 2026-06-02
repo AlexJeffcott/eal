@@ -106,7 +106,7 @@ describe('applySchema', () => {
     expect(() => applySchema(db)).not.toThrow();
 
     const userCols = columns(db, 'users').map((c) => c.name).sort();
-    expect(userCols).toEqual(['created_at', 'display_name', 'id']);
+    expect(userCols).toEqual(['created_at', 'display_name', 'id', 'in_ivr_menu']);
 
     const taskCols = columns(db, 'tasks').map((c) => c.name);
     // Same set after the second apply.
@@ -155,7 +155,7 @@ describe('applySchema', () => {
     }
     const rows = db
       .prepare<DeviceRow, []>(
-        "SELECT id, user_id, label, kind FROM family_phone_devices ORDER BY id",
+        "SELECT id, user_id, label, kind FROM family_phone_devices WHERE kind <> 'household' ORDER BY id",
       )
       .all();
     expect(rows).toEqual([{ id: 1, user_id: 1, label: 'phone', kind: 'handset' }]);
@@ -199,6 +199,7 @@ describe('applySchema', () => {
       'idx_family_phone_challenges_expires_at',
       'idx_family_phone_device_sessions_device_id',
       'idx_family_phone_device_sessions_expires_at',
+      'idx_family_phone_devices_household_singleton',
       'idx_family_phone_devices_pstn_label',
       'idx_family_phone_devices_user_id',
       'idx_family_phone_pair_expires_at',
@@ -216,5 +217,32 @@ describe('applySchema', () => {
       'idx_tasks_parent_position',
       'idx_tasks_status',
     ]);
+  });
+
+  test('applySchema seeds exactly one kind=household device row, idempotently', () => {
+    applySchema(db);
+    applySchema(db);
+    const rows = db
+      .prepare<{ id: number; label: string; user_id: number | null }, []>(
+        "SELECT id, label, user_id FROM family_phone_devices WHERE kind='household'",
+      )
+      .all();
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.user_id).toBeNull();
+  });
+
+  test('applySchema adds users.in_ivr_menu (default 0) and pstn_contacts.intended_user_id', () => {
+    applySchema(db);
+    interface ColRow { name: string; dflt_value: string | null }
+    const userCols = db
+      .prepare<ColRow, []>('PRAGMA table_info(users)')
+      .all();
+    const ivr = userCols.find((c) => c.name === 'in_ivr_menu');
+    expect(ivr).toBeTruthy();
+    expect(ivr?.dflt_value).toBe('0');
+    const contactCols = db
+      .prepare<ColRow, []>('PRAGMA table_info(family_phone_pstn_contacts)')
+      .all();
+    expect(contactCols.find((c) => c.name === 'intended_user_id')).toBeTruthy();
   });
 });

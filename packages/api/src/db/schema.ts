@@ -95,7 +95,8 @@ export function applySchema(db: DatabaseClient): void {
   // a non-NULL user_id. The Twilio bridge introduces user-less PSTN device
   // rows, so the constraint widens. SQLite cannot ALTER a CHECK, so an
   // older shape needs a table rebuild — done before `app.schema` runs so
-  // the fresh CREATE lands on the new shape.
+  // the fresh CREATE lands on the new shape. The same rebuild also picks
+  // up the Phase 7D widening that adds the kind='household' literal.
   rebuildFamilyPhoneDevicesIfLegacy(db);
 
   db.exec(GLOBAL_SCHEMA);
@@ -104,6 +105,29 @@ export function applySchema(db: DatabaseClient): void {
   }
   // conversations.cleared_before_id was added after the table first shipped.
   ensureColumn(db, 'conversations', 'cleared_before_id', 'INTEGER NOT NULL DEFAULT 0');
+  // Phase 7D: opt-in flag for the DTMF IVR menu. Default 0 so adding the
+  // column doesn't surprise existing households — admin flips each
+  // person on. The CHECK keeps the value to a strict 0/1.
+  ensureColumn(
+    db,
+    'users',
+    'in_ivr_menu',
+    'INTEGER NOT NULL DEFAULT 0 CHECK (in_ivr_menu IN (0,1))',
+  );
+  // Phase 7D: known callers route to the household member they were
+  // calling for. Nullable — a contact without an intended recipient
+  // (or an unknown caller) still falls through to the IVR.
+  ensureColumn(
+    db,
+    'family_phone_pstn_contacts',
+    'intended_user_id',
+    'INTEGER REFERENCES users(id) ON DELETE SET NULL',
+  );
+  // Phase 7D: the single user-less device row voicemails land in when
+  // no household member was specifically being called. Idempotent —
+  // the partial unique index on (label) WHERE kind='household' enforces
+  // there can be at most one.
+  ensureHouseholdDevice(db);
 }
 
 interface TableNameRow { name: string }
@@ -128,7 +152,11 @@ function rebuildFamilyPhoneDevicesIfLegacy(db: DatabaseClient): void {
     )
     .get();
   if (!row || row.sql === null) return;
-  if (row.sql.includes("'pstn'")) return;
+  // The rebuild is needed when any literal added in a later phase is
+  // missing from the on-disk CHECK. Today that's 'pstn' (7B.4d) and
+  // 'household' (7D); a fresh DB built by `app.schema` already has
+  // both and falls through.
+  if (row.sql.includes("'pstn'") && row.sql.includes("'household'")) return;
   db.exec('PRAGMA foreign_keys = OFF');
   try {
     db.exec(`
@@ -136,10 +164,10 @@ function rebuildFamilyPhoneDevicesIfLegacy(db: DatabaseClient): void {
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
         label       TEXT    NOT NULL,
-        kind        TEXT    NOT NULL CHECK (kind IN ('handset','pwa','agent','pstn')),
+        kind        TEXT    NOT NULL CHECK (kind IN ('handset','pwa','agent','pstn','household')),
         created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
         paired_at   TEXT,
-        CHECK (kind = 'pstn' OR user_id IS NOT NULL)
+        CHECK (kind IN ('pstn','household') OR user_id IS NOT NULL)
       );
       INSERT INTO family_phone_devices_new (id, user_id, label, kind, created_at, paired_at)
         SELECT id, user_id, label, kind, created_at, paired_at FROM family_phone_devices;
@@ -149,6 +177,26 @@ function rebuildFamilyPhoneDevicesIfLegacy(db: DatabaseClient): void {
   } finally {
     db.exec('PRAGMA foreign_keys = ON');
   }
+}
+
+interface CountRow { n: number }
+
+/**
+ * Insert the single kind='household' device row if it isn't already
+ * there. Voicemails for the no-IVR-selection / unknown-caller path
+ * land here so every paired browser can see them. Idempotent — a
+ * household already provisioned returns without writing.
+ */
+function ensureHouseholdDevice(db: DatabaseClient): void {
+  const present = db
+    .prepare<CountRow, []>(
+      "SELECT COUNT(*) AS n FROM family_phone_devices WHERE kind='household'",
+    )
+    .get();
+  if ((present?.n ?? 0) > 0) return;
+  db.exec(
+    "INSERT INTO family_phone_devices (user_id, label, kind) VALUES (NULL, 'Household', 'household')",
+  );
 }
 
 function pruneLegacyPairColumns(db: DatabaseClient): void {

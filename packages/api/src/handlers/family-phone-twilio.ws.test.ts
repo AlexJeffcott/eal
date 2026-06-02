@@ -109,16 +109,24 @@ describe('createTwilioMediaSession', () => {
   let cap: Capture;
   let session: TwilioMediaSession;
   let onlineDevices: Set<number>;
+  let handsetId: number;
+  let userId: number;
 
   beforeEach(() => {
     db = createDb(':memory:');
     applySchema(db);
-    db.prepare("INSERT INTO users (display_name) VALUES ('alex')").run();
+    const userRow = db
+      .prepare<{ id: number }, []>(
+        "INSERT INTO users (display_name) VALUES ('alex') RETURNING id",
+      )
+      .get();
+    userId = userRow?.id ?? 0;
     devices = createFamilyPhoneDevicesRepo(db);
     cap = makeCapture();
     const router = createCallRouter({ ws: cap.service, unansweredMs: 60_000 });
     // Online handset registered against the real-WS surface.
-    const handset = devices.insert({ userId: 1, label: 'phone', kind: 'handset' });
+    const handset = devices.insert({ userId, label: 'phone', kind: 'handset' });
+    handsetId = handset.id;
     router.registerRealDevice(handset.id, 'handset-ws');
     onlineDevices = new Set([handset.id]);
     session = createTwilioMediaSession({ router, devices, onlineDevices });
@@ -192,14 +200,14 @@ describe('createTwilioMediaSession', () => {
 
   test('outbound start rings only the named handset, skipping fan-out', () => {
     // Add a second handset that should NOT receive the invite on outbound.
-    const secondHandset = devices.insert({ userId: 1, label: 'tablet', kind: 'handset' });
+    const secondHandset = devices.insert({ userId, label: 'tablet', kind: 'handset' });
     onlineDevices.add(secondHandset.id);
 
     const { ws } = makeWs('twilio-outbound');
     // The PSTN target is the dialed party; the named handset is the one
-    // that placed the call. Use the first handset (id=1, registered as
+    // that placed the call. Use the first handset (registered as
     // 'handset-ws').
-    session.message(ws, outboundStartFrame('+12025550100', 1));
+    session.message(ws, outboundStartFrame('+12025550100', handsetId));
 
     const incomings = cap.sendTo.filter((c) => c.payload['type'] === 'call:incoming');
     expect(incomings).toHaveLength(1);
@@ -219,7 +227,7 @@ describe('createTwilioMediaSession', () => {
     // onlineDevices: the bridge sees an empty target list and shuts
     // down so Twilio drops the call instead of dialling out into the
     // void.
-    const offline = devices.insert({ userId: 1, label: 'tablet', kind: 'handset' });
+    const offline = devices.insert({ userId, label: 'tablet', kind: 'handset' });
     session.message(wsObj, outboundStartFrame('+12025550100', offline.id));
     expect(closed).toBe(true);
   });

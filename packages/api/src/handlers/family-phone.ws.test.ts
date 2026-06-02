@@ -670,7 +670,7 @@ describe('family-phone.ws — call:place-pstn', () => {
 
   test('forwards the dial to placePstn and sends call:place-pstn-ack on success', async () => {
     const captured: Array<{ fromDeviceId: number; to: string }> = [];
-    const { harness, handler, ws } = await setupAuthed({
+    const { harness, handler, ws, alex } = await setupAuthed({
       placePstn: async (input) => {
         captured.push(input);
         return { ok: true, callSid: 'CAabc' };
@@ -679,7 +679,7 @@ describe('family-phone.ws — call:place-pstn', () => {
     handler.onMessage(ws, { type: 'call:place-pstn', to: '+12025550100' }, null);
     await flushMicrotasks();
     expect(captured).toHaveLength(1);
-    expect(captured[0]).toEqual({ fromDeviceId: 1, to: '+12025550100' });
+    expect(captured[0]).toEqual({ fromDeviceId: alex.deviceId, to: '+12025550100' });
     const ack = findOnAlex(harness.send, 'call:place-pstn-ack');
     expect(ack?.['call_sid']).toBe('CAabc');
   });

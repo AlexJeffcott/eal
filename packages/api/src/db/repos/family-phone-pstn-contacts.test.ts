@@ -104,6 +104,57 @@ describe('PstnContactsRepo', () => {
     expect(repo.deleteById(row.id)).toBe(false);
   });
 
+  test('intended_user_id defaults to null and round-trips on insert/update', () => {
+    db.exec("INSERT INTO users (display_name) VALUES ('alex'), ('sarah')");
+    const repo = createPstnContactsRepo(db);
+    const defaulted = repo.insert({
+      e164: '+441234567890',
+      label: 'Nonna',
+      allowIn: true,
+      allowOut: true,
+    });
+    expect(defaulted.intended_user_id).toBeNull();
+    const set = repo.insert({
+      e164: '+391234567890',
+      label: 'Nonno',
+      allowIn: true,
+      allowOut: true,
+      intendedUserId: 1,
+    });
+    expect(set.intended_user_id).toBe(1);
+    const updated = repo.update({
+      id: set.id,
+      label: 'Nonno (Bologna)',
+      allowIn: true,
+      allowOut: true,
+      intendedUserId: 2,
+    });
+    expect(updated?.intended_user_id).toBe(2);
+    const cleared = repo.update({
+      id: set.id,
+      label: 'Nonno (Bologna)',
+      allowIn: true,
+      allowOut: true,
+      intendedUserId: null,
+    });
+    expect(cleared?.intended_user_id).toBeNull();
+  });
+
+  test('deleting the intended user clears intended_user_id (ON DELETE SET NULL)', () => {
+    db.exec("INSERT INTO users (display_name) VALUES ('alex')");
+    const repo = createPstnContactsRepo(db);
+    const row = repo.insert({
+      e164: '+441234567890',
+      label: 'Nonna',
+      allowIn: true,
+      allowOut: true,
+      intendedUserId: 1,
+    });
+    db.exec('PRAGMA foreign_keys = ON');
+    db.exec('DELETE FROM users WHERE id = 1');
+    expect(repo.findById(row.id)?.intended_user_id).toBeNull();
+  });
+
   test('CHECK rejects allow_in and allow_out values outside (0,1)', () => {
     db.exec(`INSERT INTO family_phone_pstn_contacts (e164, label, allow_in, allow_out)
              VALUES ('+441234567890', 'OK', 1, 1)`);

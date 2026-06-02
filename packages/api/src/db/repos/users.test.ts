@@ -51,4 +51,27 @@ describe('UsersRepo', () => {
   test('listAll is empty on a fresh database', () => {
     expect(createUsersRepo(db).listAll()).toEqual([]);
   });
+
+  test('insert defaults in_ivr_menu to 0', () => {
+    const repo = createUsersRepo(db);
+    const row = repo.insert({ displayName: 'alex' });
+    expect(row.in_ivr_menu).toBe(0);
+  });
+
+  test('setInIvrMenu flips the flag and returns the patched row; listInIvrMenu filters on it', () => {
+    const repo = createUsersRepo(db);
+    const a = repo.insert({ displayName: 'alex' });
+    const b = repo.insert({ displayName: 'sarah' });
+    repo.insert({ displayName: 'leo' });
+    const patched = repo.setInIvrMenu(a.id, true);
+    expect(patched?.in_ivr_menu).toBe(1);
+    repo.setInIvrMenu(b.id, true);
+    expect(repo.listInIvrMenu().map((u) => u.display_name)).toEqual(['alex', 'sarah']);
+    repo.setInIvrMenu(a.id, false);
+    expect(repo.listInIvrMenu().map((u) => u.display_name)).toEqual(['sarah']);
+  });
+
+  test('setInIvrMenu on a missing id returns null without throwing', () => {
+    expect(createUsersRepo(db).setInIvrMenu(999, true)).toBeNull();
+  });
 });

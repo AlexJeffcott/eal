@@ -51,4 +51,20 @@ describe('family_phone_devices repo — PSTN surface', () => {
     const fetched = repo.findById(created.id);
     expect(fetched).toEqual(created);
   });
+
+  test('getHouseholdDevice returns the single user-less household row seeded by applySchema', () => {
+    const repo = createFamilyPhoneDevicesRepo(db);
+    const row = repo.getHouseholdDevice();
+    expect(row.kind).toBe('household');
+    expect(row.user_id).toBeNull();
+    expect(row.label).toBe('Household');
+  });
+
+  test('listAllWithOwner also excludes the household row', () => {
+    const repo = createFamilyPhoneDevicesRepo(db);
+    repo.insert({ userId: 1, label: 'phone', kind: 'handset' });
+    const rows = repo.listAllWithOwner();
+    expect(rows.every((r) => r.kind !== 'household')).toBe(true);
+    expect(rows).toHaveLength(1);
+  });
 });
