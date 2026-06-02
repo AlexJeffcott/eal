@@ -56,6 +56,12 @@ export interface FamilyPhoneDevicesRepo {
    * no human owner and the directory UI does not surface them.
    */
   listAllWithOwner(): FamilyPhoneDeviceWithOwner[];
+  /**
+   * Every device owned by a given user, kind in handset/pwa/agent. The
+   * inbound-routing path uses this to ring "the person being called"
+   * across all their devices.
+   */
+  listByUser(userId: number): FamilyPhoneDeviceRow[];
   findById(id: number): FamilyPhoneDeviceRow | null;
   /** Set a new label on an existing device. Returns the patched row,
    * or null when the id doesn't exist. */
@@ -95,6 +101,12 @@ export function createFamilyPhoneDevicesRepo(db: DatabaseClient): FamilyPhoneDev
   const householdStmt = db.prepare<FamilyPhoneDeviceRow, []>(
     `SELECT id, user_id, label, kind, created_at, paired_at
        FROM family_phone_devices WHERE kind = 'household' LIMIT 1`,
+  );
+  const listByUserStmt = db.prepare<FamilyPhoneDeviceRow, [number]>(
+    `SELECT id, user_id, label, kind, created_at, paired_at
+       FROM family_phone_devices
+      WHERE user_id = ? AND kind IN ('handset','pwa','agent')
+      ORDER BY id`,
   );
   const findByIdStmt = db.prepare<FamilyPhoneDeviceRow, [number]>(
     `SELECT id, user_id, label, kind, created_at, paired_at
@@ -141,6 +153,9 @@ export function createFamilyPhoneDevicesRepo(db: DatabaseClient): FamilyPhoneDev
     },
     listAllWithOwner(): FamilyPhoneDeviceWithOwner[] {
       return listAllStmt.all();
+    },
+    listByUser(userId): FamilyPhoneDeviceRow[] {
+      return listByUserStmt.all(userId);
     },
     findById(id): FamilyPhoneDeviceRow | null {
       return findByIdStmt.get(id) ?? null;

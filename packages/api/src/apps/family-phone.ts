@@ -18,6 +18,7 @@ import { createCallRouter, type CallRouter } from '../handlers/family-phone-call
 import { createFireOfflineCallWake } from '../handlers/family-phone-call-wake.ts';
 import { createFamilyPhoneDevicesRepo } from '../db/repos/family-phone-devices.ts';
 import { createPstnCallsRepo } from '../db/repos/family-phone-pstn-calls.ts';
+import { createPstnContactsRepo } from '../db/repos/family-phone-pstn-contacts.ts';
 import { createPstnInboundRateLimiter } from '../handlers/family-phone-pstn-rate-limit.ts';
 import type { DatabaseClient } from '../db/client.ts';
 import type { WsService } from './types.ts';
@@ -249,6 +250,7 @@ export const familyPhoneApp: ApiApp = {
       }
       const publicHost = new URL(origin).host;
       const devices = createFamilyPhoneDevicesRepo(ctx.db);
+      const pstnContacts = createPstnContactsRepo(ctx.db);
       const rateLimit = createPstnInboundRateLimiter({
         calls: createPstnCallsRepo(ctx.db),
       });
@@ -259,6 +261,7 @@ export const familyPhoneApp: ApiApp = {
             router,
             devices,
             onlineDevices: ONLINE_DEVICES,
+            pstnContacts,
           }),
         );
     }

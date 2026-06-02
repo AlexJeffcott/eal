@@ -2,6 +2,7 @@ import { createTwilioBridge, type TwilioBridge } from '../twilio/bridge.ts';
 import { parseTwilioEvent } from '../twilio/protocol.ts';
 import type { CallRouter } from './family-phone-call-router.ts';
 import type { FamilyPhoneDevicesRepo } from '../db/repos/family-phone-devices.ts';
+import type { PstnContactsRepo } from '../db/repos/family-phone-pstn-contacts.ts';
 
 /**
  * Phase 7B.4d — per-connection state machine for the Twilio Media Stream
@@ -28,6 +29,15 @@ export interface TwilioMediaWsContext {
    * the `start` event; first acceptance wins.
    */
   onlineDevices: Set<number>;
+  /**
+   * Phase 7D — PSTN phonebook. On inbound start, the session looks up
+   * the caller's E.164 and, if the contact carries an intended
+   * recipient, rings only that user's online devices instead of the
+   * household fan-out. Unknown callers (and known contacts without an
+   * intended recipient) continue to fan out for now; commit C will
+   * replace the fan-out fallback with the DTMF IVR.
+   */
+  pstnContacts: PstnContactsRepo;
 }
 
 /**
@@ -49,6 +59,24 @@ export interface TwilioMediaSession {
 
 interface BridgeSlot {
   bridge: TwilioBridge;
+}
+
+/**
+ * Inbound routing for the bridge's per-call fan-out target list.
+ *   - Known caller with an intended recipient → just that user's online
+ *     devices. An empty result terminates the bridge upstream so Twilio
+ *     drops the call (the IVR fallback in commit C will replace that
+ *     with a voicemail prompt).
+ *   - Anyone else → household fan-out, preserving today's behaviour.
+ *     Commit C swaps this fallback for the DTMF IVR.
+ */
+function resolveInboundHandsets(ctx: TwilioMediaWsContext, fromE164: string): number[] {
+  const contact = ctx.pstnContacts.findByE164(fromE164);
+  if (contact && contact.intended_user_id !== null) {
+    const owned = ctx.devices.listByUser(contact.intended_user_id);
+    return owned.filter((d) => ctx.onlineDevices.has(d.id)).map((d) => d.id);
+  }
+  return [...ctx.onlineDevices];
 }
 
 export function createTwilioMediaSession(ctx: TwilioMediaWsContext): TwilioMediaSession {
@@ -85,7 +113,7 @@ export function createTwilioMediaSession(ctx: TwilioMediaWsContext): TwilioMedia
           ? [event.targetHandsetId]
           : [];
       } else {
-        handsetIds = [...ctx.onlineDevices];
+        handsetIds = resolveInboundHandsets(ctx, event.from);
       }
       const bridge = createTwilioBridge({
         router: ctx.router,

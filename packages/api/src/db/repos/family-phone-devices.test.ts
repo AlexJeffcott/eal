@@ -60,6 +60,18 @@ describe('family_phone_devices repo — PSTN surface', () => {
     expect(row.label).toBe('Household');
   });
 
+  test('listByUser returns this users handsets/pwas/agents only, ordered by id', () => {
+    db.exec("INSERT INTO users (display_name) VALUES ('sarah')");
+    const repo = createFamilyPhoneDevicesRepo(db);
+    const a = repo.insert({ userId: 1, label: 'phone', kind: 'handset' });
+    const b = repo.insert({ userId: 1, label: 'pwa', kind: 'pwa' });
+    repo.insert({ userId: 2, label: 'phone', kind: 'handset' });
+    repo.upsertPstnByE164('+12025550100');
+    const rows = repo.listByUser(1);
+    expect(rows.map((r) => r.id)).toEqual([a.id, b.id]);
+    expect(rows.every((r) => r.user_id === 1)).toBe(true);
+  });
+
   test('listAllWithOwner also excludes the household row', () => {
     const repo = createFamilyPhoneDevicesRepo(db);
     repo.insert({ userId: 1, label: 'phone', kind: 'handset' });

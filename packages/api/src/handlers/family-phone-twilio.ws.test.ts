@@ -7,6 +7,10 @@ import {
   type FamilyPhoneDevicesRepo,
 } from '../db/repos/family-phone-devices.ts';
 import {
+  createPstnContactsRepo,
+  type PstnContactsRepo,
+} from '../db/repos/family-phone-pstn-contacts.ts';
+import {
   createTwilioMediaSession,
   type TwilioMediaSession,
   type TwilioMediaWs,
@@ -111,6 +115,7 @@ describe('createTwilioMediaSession', () => {
   let onlineDevices: Set<number>;
   let handsetId: number;
   let userId: number;
+  let pstnContacts: PstnContactsRepo;
 
   beforeEach(() => {
     db = createDb(':memory:');
@@ -122,6 +127,7 @@ describe('createTwilioMediaSession', () => {
       .get();
     userId = userRow?.id ?? 0;
     devices = createFamilyPhoneDevicesRepo(db);
+    pstnContacts = createPstnContactsRepo(db);
     cap = makeCapture();
     const router = createCallRouter({ ws: cap.service, unansweredMs: 60_000 });
     // Online handset registered against the real-WS surface.
@@ -129,7 +135,7 @@ describe('createTwilioMediaSession', () => {
     handsetId = handset.id;
     router.registerRealDevice(handset.id, 'handset-ws');
     onlineDevices = new Set([handset.id]);
-    session = createTwilioMediaSession({ router, devices, onlineDevices });
+    session = createTwilioMediaSession({ router, devices, onlineDevices, pstnContacts });
   });
 
   test('start frame upserts the PSTN device and rings every online handset', () => {
@@ -230,6 +236,78 @@ describe('createTwilioMediaSession', () => {
     const offline = devices.insert({ userId, label: 'tablet', kind: 'handset' });
     session.message(wsObj, outboundStartFrame('+12025550100', offline.id));
     expect(closed).toBe(true);
+  });
+
+  test('inbound from a known contact with intended_user_id rings only that user', () => {
+    // Add a second user with a handset of their own; the call is for
+    // alex, so sarah's handset must not ring.
+    const sarahRow = db
+      .prepare<{ id: number }, []>(
+        "INSERT INTO users (display_name) VALUES ('sarah') RETURNING id",
+      )
+      .get();
+    const sarahId = sarahRow?.id ?? 0;
+    const sarahHandset = devices.insert({ userId: sarahId, label: 'phone', kind: 'handset' });
+    onlineDevices.add(sarahHandset.id);
+    // The call router would normally register sarah's WS too; emulate
+    // by pointing both devices at distinct WS ids.
+    const router = createCallRouter({ ws: cap.service, unansweredMs: 60_000 });
+    router.registerRealDevice(handsetId, 'handset-ws');
+    router.registerRealDevice(sarahHandset.id, 'sarah-ws');
+    session = createTwilioMediaSession({ router, devices, onlineDevices, pstnContacts });
+
+    pstnContacts.insert({
+      e164: '+12025550100',
+      label: 'Nonna',
+      allowIn: true,
+      allowOut: true,
+      intendedUserId: userId,
+    });
+    const { ws } = makeWs('twilio-inbound');
+    session.message(ws, startFrame('+12025550100'));
+    const incomings = cap.sendTo.filter((c) => c.payload['type'] === 'call:incoming');
+    expect(incomings.map((c) => c.wsId).sort()).toEqual(['handset-ws']);
+  });
+
+  test('inbound from a known contact whose intended user is offline terminates the bridge', () => {
+    onlineDevices.delete(handsetId);
+    pstnContacts.insert({
+      e164: '+12025550100',
+      label: 'Nonna',
+      allowIn: true,
+      allowOut: true,
+      intendedUserId: userId,
+    });
+    let closed = false;
+    const wsObj = {
+      id: 'twilio-inbound',
+      send() {},
+      close() { closed = true; },
+    };
+    session.message(wsObj, startFrame('+12025550100'));
+    expect(closed).toBe(true);
+  });
+
+  test('inbound from an unknown caller still fans out across the household', () => {
+    // No matching pstn_contacts row → keeps the existing fan-out
+    // behaviour until commit C swaps in the DTMF IVR.
+    const { ws } = makeWs('twilio-inbound');
+    session.message(ws, startFrame('+19999999999'));
+    const incomings = cap.sendTo.filter((c) => c.payload['type'] === 'call:incoming');
+    expect(incomings.map((c) => c.wsId)).toEqual(['handset-ws']);
+  });
+
+  test('inbound from a known contact without an intended recipient also fans out', () => {
+    pstnContacts.insert({
+      e164: '+12025550100',
+      label: 'Pizza place',
+      allowIn: true,
+      allowOut: false,
+    });
+    const { ws } = makeWs('twilio-inbound');
+    session.message(ws, startFrame('+12025550100'));
+    const incomings = cap.sendTo.filter((c) => c.payload['type'] === 'call:incoming');
+    expect(incomings.map((c) => c.wsId)).toEqual(['handset-ws']);
   });
 
   test('a second start for the same E.164 returns the existing PSTN device row', () => {
