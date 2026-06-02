@@ -5,6 +5,8 @@ import {
   $activeCall,
   $callNote,
   $callTranscript,
+  $dialNumber,
+  $dialState,
   $incomingCall,
   $leaveMessage,
 } from './stores.ts';
@@ -70,6 +72,28 @@ function describeError(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
 }
+
+function pstnFailureReason(reason: string): string {
+  switch (reason) {
+    case 'bad-e164':
+      return 'the number must be in E.164 form (+ then country code then number)';
+    case 'not-allowed':
+      return 'this number is not in the outbound allowlist';
+    case 'twilio-rejected':
+      return 'the carrier rejected the number';
+    case 'twilio-unreachable':
+      return 'the trunk provider is unreachable';
+    case 'outbound-disabled':
+      return 'outbound PSTN is disabled on this server';
+    case 'bad-shape':
+      return 'the dial request was malformed';
+    default:
+      return reason;
+  }
+}
+
+const E164_RE = /^\+[1-9][0-9]{6,14}$/;
+const DIAL_KEYS = new Set('0123456789*#');
 
 /**
  * Live audio resources for the current call, owned at module scope because
@@ -146,10 +170,41 @@ export function installCallEventHandlers(event: FamilyPhoneCallEvent): void {
       return;
     }
     case 'call:incoming': {
+      // If we're mid-outbound-PSTN, the only ring that can land is the
+      // Twilio media stream finally connecting back. Auto-accept it
+      // rather than ringing the user's own dial-out at them.
+      if ($dialState.value === 'dialing') {
+        const conn = $deviceConnection.value;
+        if (conn) {
+          $dialState.value = 'idle';
+          $dialNumber.value = '';
+          $activeCall.value = {
+            callId: event.callId,
+            role: 'caller',
+            peerDeviceId: event.fromDeviceId,
+            state: 'pending',
+          };
+          $callTranscript.value = [];
+          conn.acceptCall(event.callId);
+          void startAudioForCall(event.callId, conn).catch(() => { /* note already set */ });
+          return;
+        }
+      }
       $incomingCall.value = { callId: event.callId, fromDeviceId: event.fromDeviceId };
       const { title, body } = callerLabel(event.fromDeviceId);
       ringtone().start();
       notifier().show(title, body);
+      return;
+    }
+    case 'call:place-pstn-ack': {
+      // Twilio queued the call; we'll get a normal `call:incoming` once
+      // the media stream connects, and the branch above auto-accepts it.
+      if ($dialState.value === 'placing') $dialState.value = 'dialing';
+      return;
+    }
+    case 'call:place-pstn-failed': {
+      $dialState.value = 'idle';
+      $callNote.value = `Could not place PSTN call: ${pstnFailureReason(event.reason)}.`;
       return;
     }
     case 'call:accepted': {
@@ -389,6 +444,79 @@ function concatPcm(frames: Uint8Array[]): Uint8Array {
 export const FAMILY_PHONE_ACTIONS: ActionRegistry<AppStores> = {
   'family-phone:dismiss-note': ({ stores }) => {
     stores.$callNote.value = null;
+  },
+
+  'family-phone:dial-key': ({ data, stores }) => {
+    const key = data['key'];
+    if (typeof key !== 'string' || key.length !== 1 || !DIAL_KEYS.has(key)) return;
+    if (stores.$dialState.value !== 'idle') return;
+    const current = stores.$dialNumber.value;
+    // The keypad always feeds an E.164 number; seed the leading `+`
+    // on the first digit so the user never has to find one.
+    if (current.length === 0) {
+      stores.$dialNumber.value = `+${key}`;
+      return;
+    }
+    // Cap length so a stuck key cannot grow the string unboundedly.
+    // E.164 maxes out at 15 digits, so 16 chars including the `+`.
+    if (current.length >= 16) return;
+    stores.$dialNumber.value = `${current}${key}`;
+  },
+
+  'family-phone:dial-backspace': ({ stores }) => {
+    if (stores.$dialState.value !== 'idle') return;
+    const current = stores.$dialNumber.value;
+    if (current.length === 0) return;
+    // A lone `+` is meaningless on its own; clear in one tap.
+    stores.$dialNumber.value = current.length <= 2 ? '' : current.slice(0, -1);
+  },
+
+  'family-phone:dial-clear': ({ stores }) => {
+    if (stores.$dialState.value !== 'idle') return;
+    stores.$dialNumber.value = '';
+  },
+
+  'family-phone:dial-set': ({ data, stores }) => {
+    // Quick-dial buttons (PSTN contacts) and the manual ActionInput both
+    // route through here. We accept anything; validation runs at place
+    // time so partial entries do not error mid-edit.
+    const value = data['value'];
+    if (typeof value !== 'string') return;
+    if (stores.$dialState.value !== 'idle') return;
+    stores.$dialNumber.value = value;
+  },
+
+  'family-phone:dial-place': ({ stores }) => {
+    if (stores.$dialState.value !== 'idle') return;
+    const number = stores.$dialNumber.value.trim();
+    if (!E164_RE.test(number)) {
+      stores.$callNote.value =
+        'Enter the number in E.164 form: + then country code then number (e.g. +441234567890).';
+      return;
+    }
+    const conn = stores.$deviceConnection.value;
+    if (!conn) {
+      stores.$callNote.value = 'Pair this browser in Devices to place a call.';
+      return;
+    }
+    if (stores.$activeCall.value !== null || stores.$incomingCall.value !== null) {
+      stores.$callNote.value = 'Already in a call.';
+      return;
+    }
+    stores.$callTranscript.value = [];
+    stores.$leaveMessage.value = null;
+    void stopLeaveMessageCapture();
+    primeSpeechSynthesis();
+    stores.$dialState.value = 'placing';
+    conn.placePstn(number);
+  },
+
+  'family-phone:dial-cancel': ({ stores }) => {
+    // Only the local placing/dialing latch resets — the server has no
+    // "cancel before answer" path for an in-flight Calls.json POST. If
+    // Twilio still rings later, the call:incoming branch will route it
+    // to the regular incoming-call banner instead of auto-accepting.
+    stores.$dialState.value = 'idle';
   },
 
   'family-phone:place-call': ({ data, stores }) => {

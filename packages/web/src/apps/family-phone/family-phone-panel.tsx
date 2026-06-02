@@ -1,4 +1,5 @@
 import {
+  ActionInput,
   Badge,
   Button,
   Cluster,
@@ -7,12 +8,14 @@ import {
   Text,
 } from '@fairfox/polly/ui';
 import { Show } from '@preact/signals/utils';
-import type { FamilyPhoneDevice, VoiceMessage } from '@eal/client';
+import type { FamilyPhoneDevice, PstnContact, VoiceMessage } from '@eal/client';
 import {
   $activeCall,
   $callNote,
   $callTranscript,
   $diagnosticsResult,
+  $dialNumber,
+  $dialState,
   $incomingCall,
   $leaveMessage,
   $playingVoiceMessageId,
@@ -22,8 +25,10 @@ import {
   type ActiveCall,
   type CallTranscriptEntry,
   type DiagnosticsResult,
+  type DialState,
   type LeaveMessage,
 } from './stores.ts';
+import { $pstnContacts } from '../pstn-contacts/stores.ts';
 import {
   $deviceConnection,
   $devices,
@@ -262,6 +267,147 @@ function PairFirstNotice() {
   );
 }
 
+const DIAL_KEYS: ReadonlyArray<ReadonlyArray<string>> = [
+  ['1', '2', '3'],
+  ['4', '5', '6'],
+  ['7', '8', '9'],
+  ['*', '0', '#'],
+];
+
+function dialStatusText(state: DialState, number: string): string | null {
+  if (state === 'placing') return 'Placing call…';
+  if (state === 'dialing') return `Dialling ${number}…`;
+  return null;
+}
+
+function PstnQuickDialRow(props: { contact: PstnContact; disabled: boolean }) {
+  return (
+    <Cluster gap="var(--polly-space-sm)" justify="space-between" className="family-phone-quick-dial-row">
+      <Cluster gap="var(--polly-space-xs)">
+        <Text weight="medium">{props.contact.label}</Text>
+        <Text tone="muted">{props.contact.e164}</Text>
+      </Cluster>
+      <Button
+        tier="tertiary"
+        size="small"
+        label="Dial"
+        disabled={props.disabled}
+        data-action="family-phone:dial-set"
+        data-action-value={props.contact.e164}
+      />
+    </Cluster>
+  );
+}
+
+function DialpadCard(props: {
+  hasConnection: boolean;
+  hasActiveCall: boolean;
+  hasIncoming: boolean;
+}) {
+  const number = $dialNumber.value;
+  const state = $dialState.value;
+  const status = dialStatusText(state, number);
+  const e164 = /^\+[1-9][0-9]{6,14}$/.test(number.trim());
+  const busy = props.hasActiveCall || props.hasIncoming;
+  const placing = state !== 'idle';
+  const canPlace =
+    props.hasConnection && !busy && state === 'idle' && e164;
+  const placeReason = !props.hasConnection
+    ? 'Pair this browser in Devices to place a call.'
+    : busy
+      ? 'Already in a call.'
+      : !e164 && number.length > 0
+        ? 'Number must be E.164 (+ then country code then digits).'
+        : undefined;
+  const outboundContacts = $pstnContacts.value.filter((c) => c.allowOut);
+
+  return (
+    <Surface
+      variant="callout"
+      padding="var(--polly-space-md)"
+      className="family-phone-dialpad"
+    >
+      <Layout gap="var(--polly-space-sm)">
+        <Cluster gap="var(--polly-space-sm)" justify="space-between">
+          <Text as="h2" weight="bold">Dial a number</Text>
+          {status !== null && <Badge variant="info">{status}</Badge>}
+        </Cluster>
+
+        <ActionInput
+          saveOn="input"
+          value={number}
+          action="family-phone:dial-set"
+          placeholder="+441234567890"
+          ariaLabel="Outbound phone number"
+          disabled={placing}
+        />
+
+        <Layout gap="var(--polly-space-xs)" className="family-phone-keypad">
+          {DIAL_KEYS.map((row, rowIndex) => (
+            <Cluster key={rowIndex} gap="var(--polly-space-xs)" className="family-phone-keypad-row">
+              {row.map((key) => (
+                <Button
+                  key={key}
+                  tier="secondary"
+                  label={key}
+                  disabled={placing}
+                  className="family-phone-keypad-key"
+                  data-action="family-phone:dial-key"
+                  data-action-key={key}
+                />
+              ))}
+            </Cluster>
+          ))}
+        </Layout>
+
+        <Cluster gap="var(--polly-space-sm)" justify="space-between">
+          <Cluster gap="var(--polly-space-xs)">
+            <Button
+              tier="tertiary"
+              label="⌫"
+              aria-label="Backspace"
+              disabled={placing || number.length === 0}
+              data-action="family-phone:dial-backspace"
+            />
+            <Button
+              tier="tertiary"
+              label="Clear"
+              disabled={placing || number.length === 0}
+              data-action="family-phone:dial-clear"
+            />
+          </Cluster>
+          {placing ? (
+            <Button
+              tier="primary"
+              color="danger"
+              label="Cancel"
+              data-action="family-phone:dial-cancel"
+            />
+          ) : (
+            <Button
+              tier="primary"
+              color="success"
+              label="Call"
+              disabled={!canPlace}
+              {...(placeReason ? { title: placeReason } : {})}
+              data-action="family-phone:dial-place"
+            />
+          )}
+        </Cluster>
+
+        <Show when={() => outboundContacts.length > 0}>
+          <Layout gap="var(--polly-space-xs)" className="family-phone-quick-dial">
+            <Text tone="muted">Quick dial</Text>
+            {outboundContacts.map((c) => (
+              <PstnQuickDialRow key={c.id} contact={c} disabled={placing || busy || !props.hasConnection} />
+            ))}
+          </Layout>
+        </Show>
+      </Layout>
+    </Surface>
+  );
+}
+
 function CallableDeviceRow(props: {
   device: FamilyPhoneDevice;
   paired: PairedThisSession | null;
@@ -485,6 +631,14 @@ export function FamilyPhonePanel() {
 
       <Show when={() => $pairedThisSession.value === null}>
         <PairFirstNotice />
+      </Show>
+
+      <Show when={() => $pairedThisSession.value !== null}>
+        <DialpadCard
+          hasConnection={hasConnection}
+          hasActiveCall={hasActiveCall}
+          hasIncoming={$incomingCall.value !== null}
+        />
       </Show>
 
       <Show when={() => $pairedThisSession.value !== null}>

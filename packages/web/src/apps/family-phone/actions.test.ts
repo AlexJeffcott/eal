@@ -132,3 +132,102 @@ describe('family-phone action wiring — ringtone + notifier reactions', () => {
     expect(notifications.length).toBe(0);
   });
 });
+
+const { FAMILY_PHONE_ACTIONS } = await import('./actions.ts');
+const { createMockEalClient } = await import('@eal/client-mock');
+const { resetStoresForTest, createStores } = await import('../../stores.ts');
+const { runAction } = await import('@fairfox/polly/actions');
+type AppStores = import('../../stores.ts').AppStores;
+type DialState = import('./stores.ts').DialState;
+type FamilyPhoneDeviceConnection = import('@eal/client').FamilyPhoneDeviceConnection;
+
+interface ConnStub {
+  conn: FamilyPhoneDeviceConnection;
+  placed: Array<{ kind: 'pstn'; to: string } | { kind: 'accept'; callId: string }>;
+}
+
+function readDialState(signal: AppStores['$dialState']): DialState {
+  return signal.value;
+}
+
+function makeConnStub(): ConnStub {
+  const placed: ConnStub['placed'] = [];
+  const conn: FamilyPhoneDeviceConnection = {
+    deviceId: 1,
+    placeCall: () => undefined,
+    placePstn: (to) => { placed.push({ kind: 'pstn', to }); },
+    acceptCall: (callId) => { placed.push({ kind: 'accept', callId }); },
+    rejectCall: () => undefined,
+    cancelCall: () => undefined,
+    hangup: () => undefined,
+    sendAudio: () => undefined,
+    sendText: () => undefined,
+    subscribe: () => () => undefined,
+    subscribeAudio: () => () => undefined,
+    subscribePush: async () => undefined,
+    unsubscribePush: async () => undefined,
+    close: () => undefined,
+  };
+  return { conn, placed };
+}
+
+describe('family-phone dial-pad actions', () => {
+  let stores: AppStores;
+
+  beforeEach(() => {
+    resetStoresForTest();
+    stores = createStores(createMockEalClient());
+  });
+
+  test('dial-key seeds a leading + on the first digit', async () => {
+    await runAction(FAMILY_PHONE_ACTIONS, 'family-phone:dial-key', { stores, data: { key: '4' } });
+    expect(stores.$dialNumber.value).toBe('+4');
+    await runAction(FAMILY_PHONE_ACTIONS, 'family-phone:dial-key', { stores, data: { key: '4' } });
+    expect(stores.$dialNumber.value).toBe('+44');
+  });
+
+  test('dial-key rejects non-keypad characters', async () => {
+    await runAction(FAMILY_PHONE_ACTIONS, 'family-phone:dial-key', { stores, data: { key: 'a' } });
+    expect(stores.$dialNumber.value).toBe('');
+  });
+
+  test('dial-backspace clears the lone + in one tap', async () => {
+    stores.$dialNumber.value = '+4';
+    await runAction(FAMILY_PHONE_ACTIONS, 'family-phone:dial-backspace', { stores, data: {} });
+    expect(stores.$dialNumber.value).toBe('');
+  });
+
+  test('dial-place refuses a malformed number with a helpful note', async () => {
+    const { conn } = makeConnStub();
+    stores.$deviceConnection.value = conn;
+    stores.$dialNumber.value = '+12';
+    await runAction(FAMILY_PHONE_ACTIONS, 'family-phone:dial-place', { stores, data: {} });
+    expect(stores.$dialState.value).toBe('idle');
+    expect(stores.$callNote.value).toContain('E.164');
+  });
+
+  test('dial-place sends placePstn and transitions placing → dialing → idle on ack + incoming', async () => {
+    const { conn, placed } = makeConnStub();
+    stores.$deviceConnection.value = conn;
+    stores.$dialNumber.value = '+441234567890';
+    await runAction(FAMILY_PHONE_ACTIONS, 'family-phone:dial-place', { stores, data: {} });
+    expect(placed[0]).toEqual({ kind: 'pstn', to: '+441234567890' });
+    expect(stores.$dialState.value).toBe('placing');
+    installCallEventHandlers({ type: 'call:place-pstn-ack', callSid: 'CA1' });
+    expect(stores.$dialState.value).toBe('dialing');
+    installCallEventHandlers({ type: 'call:incoming', callId: 'c9', fromDeviceId: 42 });
+    expect(stores.$dialState.value).toBe('idle');
+    expect(stores.$dialNumber.value).toBe('');
+    expect(placed.some((p) => p.kind === 'accept' && p.callId === 'c9')).toBe(true);
+    expect(stores.$activeCall.value?.role).toBe('caller');
+    expect(stores.$incomingCall.value).toBeNull();
+  });
+
+  test('call:place-pstn-failed surfaces a reason and returns to idle', () => {
+    const dial = stores.$dialState;
+    dial.value = 'placing';
+    installCallEventHandlers({ type: 'call:place-pstn-failed', reason: 'not-allowed' });
+    expect(readDialState(dial)).toBe('idle');
+    expect(stores.$callNote.value).toContain('not in the outbound allowlist');
+  });
+});

@@ -64,6 +64,23 @@ export interface DiagnosticsResult {
 }
 export const $diagnosticsResult = $state<DiagnosticsResult | null>(null);
 
+/** Outbound PSTN dial-pad — the digits the user has tapped/typed so far,
+ *  in E.164 shape (the leading `+`, then country code, then number).
+ *  The keypad maintains the `+`; if the user clears it back to empty,
+ *  we re-seed it on the next tap. */
+export const $dialNumber = $state<string>('');
+
+/** Outbound PSTN dial lifecycle:
+ *   - `idle`: keypad is the resting state;
+ *   - `placing`: `call:place-pstn` is on the wire, waiting for the
+ *     server's ack/failure;
+ *   - `dialing`: server acked; Twilio is dialling. The eventual
+ *     `call:incoming` from the PSTN virtual device will be auto-accepted.
+ *  Cleared when the call lands (incoming auto-accept routes through
+ *  the normal active-call surface) or the user cancels. */
+export type DialState = 'idle' | 'placing' | 'dialing';
+export const $dialState = $state<DialState>('idle');
+
 /** Voicemails addressed to the device this browser is paired as. The
  *  list is mirrored from `/api/family-phone/voice-messages?device_id=…`
  *  on every route entry plus after the audio handler stamps a row read. */
@@ -88,6 +105,8 @@ export interface FamilyPhoneStores {
   $voiceMessagesError: typeof $voiceMessagesError;
   $playingVoiceMessageId: typeof $playingVoiceMessageId;
   $voiceMessageAudioUrl: typeof $voiceMessageAudioUrl;
+  $dialNumber: typeof $dialNumber;
+  $dialState: typeof $dialState;
 }
 
 export function createFamilyPhoneStores(): FamilyPhoneStores {
@@ -102,6 +121,8 @@ export function createFamilyPhoneStores(): FamilyPhoneStores {
     $voiceMessagesError,
     $playingVoiceMessageId,
     $voiceMessageAudioUrl,
+    $dialNumber,
+    $dialState,
   };
 }
 
@@ -123,4 +144,6 @@ export function resetFamilyPhoneStores(): void {
     }
   }
   $voiceMessageAudioUrl.value = null;
+  $dialNumber.value = '';
+  $dialState.value = 'idle';
 }

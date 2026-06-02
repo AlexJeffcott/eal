@@ -73,6 +73,50 @@
   word-break: break-word;
 }
 
+.family-phone-dialpad {
+  border-left: 4px solid var(--polly-color-success, #2c7);
+}
+
+.family-phone-keypad {
+  /* The keypad must fit inside a 350 px viewport with the panel's
+   * md padding on each side, so cap its own width and centre it. */
+  max-width: 18rem;
+  width: 100%;
+  align-self: center;
+}
+
+.family-phone-keypad-row {
+  width: 100%;
+}
+
+.family-phone-keypad-row > * {
+  /* Every key shares the row's width — three columns, no horizontal
+   * scroll on the narrow viewport. */
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.family-phone-keypad-key {
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+  /* Tap target floor: at least 44 px square so a thumb on a small
+   * phone can hit a digit without missing. */
+  min-height: 2.75rem;
+}
+
+.family-phone-quick-dial {
+  margin-top: var(--polly-space-xs);
+}
+
+.family-phone-quick-dial-row {
+  padding: var(--polly-space-xs) var(--polly-space-sm);
+  border-radius: var(--polly-radius-sm, 0.25rem);
+}
+
+.family-phone-quick-dial-row:hover {
+  background: var(--polly-color-surface-hover, rgba(0, 0, 0, 0.04));
+}
+
 .family-phone-transcript {
   margin-top: var(--polly-space-sm);
   padding: var(--polly-space-sm);
