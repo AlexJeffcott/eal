@@ -60,7 +60,29 @@ describe('parseTwilioEvent — start', () => {
       to: '+441234567890',
       direction: 'inbound',
       targetHandsetId: null,
+      routedUserId: null,
     });
+  });
+
+  test('reads routed_user_id when the IVR action threads it in', () => {
+    const parsed = parseTwilioEvent(
+      asJson({
+        event: 'start',
+        start: {
+          streamSid: 'MZ001',
+          callSid: 'CA001',
+          customParameters: {
+            from: '+12025550100',
+            to: '+441234567890',
+            direction: 'inbound',
+            routed_user_id: '7',
+          },
+        },
+      }),
+    );
+    if (parsed?.type !== 'start') throw new Error('expected start');
+    expect(parsed.routedUserId).toBe(7);
+    expect(parsed.targetHandsetId).toBeNull();
   });
 
   test('reads direction=outbound + handset id from customParameters', () => {

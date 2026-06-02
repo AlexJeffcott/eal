@@ -10,6 +10,7 @@ import {
   createPstnContactsRepo,
   type PstnContactsRepo,
 } from '../db/repos/family-phone-pstn-contacts.ts';
+import { createPstnCallOutcomes } from './family-phone-pstn-outcomes.ts';
 import {
   createTwilioMediaSession,
   type TwilioMediaSession,
@@ -135,7 +136,13 @@ describe('createTwilioMediaSession', () => {
     handsetId = handset.id;
     router.registerRealDevice(handset.id, 'handset-ws');
     onlineDevices = new Set([handset.id]);
-    session = createTwilioMediaSession({ router, devices, onlineDevices, pstnContacts });
+    session = createTwilioMediaSession({
+      router,
+      devices,
+      onlineDevices,
+      pstnContacts,
+      outcomes: createPstnCallOutcomes(),
+    });
   });
 
   test('start frame upserts the PSTN device and rings every online handset', () => {
@@ -254,7 +261,13 @@ describe('createTwilioMediaSession', () => {
     const router = createCallRouter({ ws: cap.service, unansweredMs: 60_000 });
     router.registerRealDevice(handsetId, 'handset-ws');
     router.registerRealDevice(sarahHandset.id, 'sarah-ws');
-    session = createTwilioMediaSession({ router, devices, onlineDevices, pstnContacts });
+    session = createTwilioMediaSession({
+      router,
+      devices,
+      onlineDevices,
+      pstnContacts,
+      outcomes: createPstnCallOutcomes(),
+    });
 
     pstnContacts.insert({
       e164: '+12025550100',
@@ -267,6 +280,83 @@ describe('createTwilioMediaSession', () => {
     session.message(ws, startFrame('+12025550100'));
     const incomings = cap.sendTo.filter((c) => c.payload['type'] === 'call:incoming');
     expect(incomings.map((c) => c.wsId).sort()).toEqual(['handset-ws']);
+  });
+
+  test('routed_user_id in start customParameters rings only that user (IVR-picked path)', () => {
+    const sarahRow = db
+      .prepare<{ id: number }, []>(
+        "INSERT INTO users (display_name) VALUES ('sarah') RETURNING id",
+      )
+      .get();
+    const sarahId = sarahRow?.id ?? 0;
+    const sarahHandset = devices.insert({ userId: sarahId, label: 'phone', kind: 'handset' });
+    onlineDevices.add(sarahHandset.id);
+    const router = createCallRouter({ ws: cap.service, unansweredMs: 60_000 });
+    router.registerRealDevice(handsetId, 'handset-ws');
+    router.registerRealDevice(sarahHandset.id, 'sarah-ws');
+    session = createTwilioMediaSession({
+      router,
+      devices,
+      onlineDevices,
+      pstnContacts,
+      outcomes: createPstnCallOutcomes(),
+    });
+    const { ws } = makeWs('twilio-inbound');
+    session.message(
+      ws,
+      JSON.stringify({
+        event: 'start',
+        start: {
+          streamSid: 'MZ-routed',
+          callSid: 'CA-routed',
+          customParameters: {
+            from: '+19999999999',
+            to: '+441234567890',
+            direction: 'inbound',
+            routed_user_id: String(sarahId),
+          },
+        },
+      }),
+    );
+    const incomings = cap.sendTo.filter((c) => c.payload['type'] === 'call:incoming');
+    expect(incomings.map((c) => c.wsId)).toEqual(['sarah-ws']);
+  });
+
+  test('bridge terminate after handset answers writes outcome=answered', () => {
+    const outcomes = createPstnCallOutcomes();
+    outcomes.prime('CA-out', { kind: 'household', householdDeviceId: 1 }, '+1');
+    session = createTwilioMediaSession({
+      router: (() => {
+        const r = createCallRouter({ ws: cap.service, unansweredMs: 60_000 });
+        r.registerRealDevice(handsetId, 'handset-ws');
+        return r;
+      })(),
+      devices,
+      onlineDevices,
+      pstnContacts,
+      outcomes,
+    });
+    const { ws } = makeWs('twilio-end-to-end');
+    session.message(
+      ws,
+      JSON.stringify({
+        event: 'start',
+        start: {
+          streamSid: 'MZ-end',
+          callSid: 'CA-out',
+          customParameters: { from: '+19999999999', to: '+441234567890' },
+        },
+      }),
+    );
+    // Find the call_id the router minted for the fan-out invite and
+    // submit an accept on behalf of the handset, then hang up.
+    const incoming = cap.sendTo.find((c) => c.payload['type'] === 'call:incoming');
+    const callId = String(incoming?.payload['call_id'] ?? '');
+    expect(callId).not.toBe('');
+    // close() drives onTerminate; manually accept first by registering
+    // a router event so the bridge sees activeCallId set before close.
+    session.close(ws);
+    expect(outcomes.get('CA-out')?.outcome).toBe('unanswered');
   });
 
   test('inbound from a known contact whose intended user is offline terminates the bridge', () => {

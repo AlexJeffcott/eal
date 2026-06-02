@@ -53,6 +53,7 @@ function startEvent(streamSid = 'MZ123') {
     to: '+390000000002',
     direction: 'inbound' as const,
     targetHandsetId: null,
+    routedUserId: null,
   };
 }
 

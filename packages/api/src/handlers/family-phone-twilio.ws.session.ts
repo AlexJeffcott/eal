@@ -3,6 +3,7 @@ import { parseTwilioEvent } from '../twilio/protocol.ts';
 import type { CallRouter } from './family-phone-call-router.ts';
 import type { FamilyPhoneDevicesRepo } from '../db/repos/family-phone-devices.ts';
 import type { PstnContactsRepo } from '../db/repos/family-phone-pstn-contacts.ts';
+import type { PstnCallOutcomes } from './family-phone-pstn-outcomes.ts';
 
 /**
  * Phase 7B.4d — per-connection state machine for the Twilio Media Stream
@@ -38,6 +39,13 @@ export interface TwilioMediaWsContext {
    * replace the fan-out fallback with the DTMF IVR.
    */
   pstnContacts: PstnContactsRepo;
+  /**
+   * Phase 7D outcome tracker. The session writes 'answered' /
+   * 'unanswered' here when the bridge terminates so the
+   * `<Connect action>` callback can pick the right TwiML follow-up
+   * (record a voicemail vs end the call).
+   */
+  outcomes: PstnCallOutcomes;
 }
 
 /**
@@ -70,11 +78,31 @@ interface BridgeSlot {
  *   - Anyone else → household fan-out, preserving today's behaviour.
  *     Commit C swaps this fallback for the DTMF IVR.
  */
-function resolveInboundHandsets(ctx: TwilioMediaWsContext, fromE164: string): number[] {
+/**
+ * Inbound routing precedence:
+ *   1. `routed_user_id` from the IVR action → that user's online devices.
+ *   2. Known contact with intended_user_id → that user's online devices.
+ *   3. Anything else → household fan-out (legacy fallback; the IVR
+ *      handler should route everything else to the household
+ *      voicemail path before this branch is reached).
+ */
+function resolveInboundHandsets(
+  ctx: TwilioMediaWsContext,
+  fromE164: string,
+  routedUserId: number | null,
+): number[] {
+  if (routedUserId !== null) {
+    return ctx.devices
+      .listByUser(routedUserId)
+      .filter((d) => ctx.onlineDevices.has(d.id))
+      .map((d) => d.id);
+  }
   const contact = ctx.pstnContacts.findByE164(fromE164);
   if (contact && contact.intended_user_id !== null) {
-    const owned = ctx.devices.listByUser(contact.intended_user_id);
-    return owned.filter((d) => ctx.onlineDevices.has(d.id)).map((d) => d.id);
+    return ctx.devices
+      .listByUser(contact.intended_user_id)
+      .filter((d) => ctx.onlineDevices.has(d.id))
+      .map((d) => d.id);
   }
   return [...ctx.onlineDevices];
 }
@@ -113,8 +141,9 @@ export function createTwilioMediaSession(ctx: TwilioMediaWsContext): TwilioMedia
           ? [event.targetHandsetId]
           : [];
       } else {
-        handsetIds = resolveInboundHandsets(ctx, event.from);
+        handsetIds = resolveInboundHandsets(ctx, event.from, event.routedUserId);
       }
+      const callSid = event.callSid;
       const bridge = createTwilioBridge({
         router: ctx.router,
         pstnDeviceId: pstn.id,
@@ -122,7 +151,10 @@ export function createTwilioMediaSession(ctx: TwilioMediaWsContext): TwilioMedia
         sendUpstream: (payload) => {
           ws.send(payload);
         },
-        onTerminate: () => {
+        onTerminate: (info) => {
+          // The `<Connect action>` callback reads this to decide
+          // between `<Record>` (unanswered) and ending the call.
+          ctx.outcomes.setOutcome(callSid, info.wasAnswered ? 'answered' : 'unanswered');
           ws.close();
         },
       });

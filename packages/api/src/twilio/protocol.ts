@@ -32,6 +32,14 @@ export type TwilioEvent =
       to: string;
       direction: 'inbound' | 'outbound';
       targetHandsetId: number | null;
+      /**
+       * Phase 7D: inbound DTMF IVR routing. When the caller picks a
+       * household member from the menu, the action URL threads their
+       * user_id through the next `<Connect><Stream>` as
+       * `customParameters.routed_user_id`. The session rings every
+       * online device that user owns.
+       */
+      routedUserId: number | null;
     }
   | { type: 'media'; streamSid: string; track: 'inbound'; payload: string }
   | { type: 'mark'; streamSid: string; name: string }
@@ -116,7 +124,17 @@ function parseStart(record: Record<string, unknown>): TwilioEvent | null {
   const directionRaw = getString(custom, 'direction');
   const direction: 'inbound' | 'outbound' = directionRaw === 'outbound' ? 'outbound' : 'inbound';
   const targetHandsetId = parseIntStrict(getString(custom, 'handset'));
-  return { type: 'start', streamSid, callSid, from, to, direction, targetHandsetId };
+  const routedUserId = parseIntStrict(getString(custom, 'routed_user_id'));
+  return {
+    type: 'start',
+    streamSid,
+    callSid,
+    from,
+    to,
+    direction,
+    targetHandsetId,
+    routedUserId,
+  };
 }
 
 function parseIntStrict(s: string | null): number | null {

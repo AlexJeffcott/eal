@@ -2,6 +2,16 @@ import { Elysia } from 'elysia';
 import type { TwilioConfig } from '../twilio/config.ts';
 import { verifyTwilioSignature } from '../twilio/signature.ts';
 import type { PstnInboundRateLimiter } from './family-phone-pstn-rate-limit.ts';
+import type { IvrDeps } from './family-phone-pstn-ivr.ts';
+import {
+  buildConnectStreamTwiML,
+  buildIvrGatherTwiML,
+  buildAfterConnectAnsweredTwiML,
+  buildAfterConnectVoicemailTwiML,
+  downloadAndExtractRecording,
+  pickMenuUser,
+  pickVoicemailTarget,
+} from './family-phone-pstn-ivr.ts';
 
 export interface TwilioRoutesContext {
   twilio: TwilioConfig;
@@ -18,61 +28,34 @@ export interface TwilioRoutesContext {
    * own UI. When omitted, no rate-limit gate applies.
    */
   rateLimit?: PstnInboundRateLimiter;
+  /**
+   * Phase 7D IVR + voicemail. When omitted, the voice webhook still
+   * works but the IVR branch + voicemail recording are unavailable —
+   * useful for the inbound-only tests that don't exercise the menu.
+   */
+  ivr?: IvrDeps;
 }
 
-interface TwiMLOptions {
-  streamUrl: string;
+/** Constant-folded "no IVR" answer for the few legacy tests that still
+ *  mount the routes without an IVR bundle. */
+function buildPlainConnectStreamTwiML(opts: {
+  publicHost: string;
   callSid: string;
   from: string;
   to: string;
   direction: 'inbound' | 'outbound';
-  /**
-   * Only set on outbound calls. The handset that placed the call: the
-   * bridge binds the media stream to this device id, skipping fan-out.
-   */
   targetHandsetId: number | null;
+}): string {
+  return buildConnectStreamTwiML({
+    publicHost: opts.publicHost,
+    callSid: opts.callSid,
+    from: opts.from,
+    to: opts.to,
+    direction: opts.direction,
+    ...(opts.targetHandsetId !== null ? { targetHandsetId: opts.targetHandsetId } : {}),
+  });
 }
 
-/**
- * The TwiML response Twilio fetches on every call: ask Twilio to open
- * a bidirectional Media Stream to our WS endpoint and bridge it with
- * the caller. The `customParameters` carry every per-call field the
- * bridge needs — caller-id, direction, and (on outbound) the bound
- * handset — so the WS side does not have to parse separate events
- * for them.
- */
-function buildTwiML(opts: TwiMLOptions): string {
-  const parameters: Array<[string, string]> = [
-    ['callSid', opts.callSid],
-    ['from', opts.from],
-    ['to', opts.to],
-    ['direction', opts.direction],
-  ];
-  if (opts.targetHandsetId !== null) {
-    parameters.push(['handset', String(opts.targetHandsetId)]);
-  }
-  const paramTags = parameters
-    .map(([name, value]) => `      <Parameter name="${name}" value="${escapeAttribute(value)}"/>`)
-    .join('\n');
-  return [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    '<Response>',
-    '  <Connect>',
-    `    <Stream url="${escapeAttribute(opts.streamUrl)}">`,
-    paramTags,
-    '    </Stream>',
-    '  </Connect>',
-    '</Response>',
-  ].join('\n');
-}
-
-/**
- * The "drop this call without ringing the household" reply. Twilio
- * treats `<Reject reason="busy">` as a SIP 486 Busy from our side, so
- * the dialler hears a busy tone and Twilio bills nothing further. The
- * webhook still returns 200 — the response status reflects "we
- * understood the request", not "we accepted the call".
- */
 function buildRejectTwiML(): string {
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -82,27 +65,6 @@ function buildRejectTwiML(): string {
   ].join('\n');
 }
 
-/**
- * Minimal XML attribute escape — Twilio's parser is strict about the
- * five XML attribute-unsafe chars. The values come from Twilio in the
- * first place (call SID, caller-id) and are already E.164/uuid-shaped,
- * but escaping is cheap and forecloses an injection if Twilio ever
- * relaxes its caller-id normalisation.
- */
-function escapeAttribute(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
-/**
- * Convert an URLSearchParams instance into the plain Record the
- * signature module wants. Each parameter appears once — Twilio does
- * not send repeated keys for voice webhooks.
- */
 function parseHandsetParam(raw: string | null): number | null {
   if (raw === null || raw === '') return null;
   if (!/^\d+$/.test(raw)) return null;
@@ -126,21 +88,34 @@ function publicUrl(request: Request): string {
   return request.url;
 }
 
+/** Verify the X-Twilio-Signature on a form-encoded POST and parse the
+ *  fields out. Returns null on auth failure so callers can branch to
+ *  a 403 response identically. */
+function verifyAndParse(
+  request: Request,
+  raw: string,
+  authToken: string,
+): Record<string, string> | null {
+  const fields = searchParamsToFields(new URLSearchParams(raw));
+  const signatureHeader = request.headers.get('x-twilio-signature');
+  const ok = verifyTwilioSignature({
+    authToken,
+    url: publicUrl(request),
+    formFields: fields,
+    signatureHeader,
+  });
+  return ok ? fields : null;
+}
+
 export function twilioHttpRoutes(ctx: TwilioRoutesContext) {
+  const ivr = ctx.ivr;
   return new Elysia({ prefix: '/api/family-phone/twilio' })
     .post(
       '/voice',
       ({ body, request, set }) => {
         const raw = typeof body === 'string' ? body : '';
-        const fields = searchParamsToFields(new URLSearchParams(raw));
-        const signatureHeader = request.headers.get('x-twilio-signature');
-        const ok = verifyTwilioSignature({
-          authToken: ctx.twilio.authToken,
-          url: publicUrl(request),
-          formFields: fields,
-          signatureHeader,
-        });
-        if (!ok) {
+        const fields = verifyAndParse(request, raw, ctx.twilio.authToken);
+        if (fields === null) {
           set.status = 403;
           return 'forbidden';
         }
@@ -151,21 +126,12 @@ export function twilioHttpRoutes(ctx: TwilioRoutesContext) {
           set.status = 400;
           return 'missing required Twilio voice fields';
         }
-        // Outbound calls come back through this same webhook with a
-        // `direction=outbound&handset=<id>` query string the
-        // place-call handler (7C.4) puts on the TwiML URL it sends
-        // Twilio. Twilio signs the full URL — query included — so
-        // the verifier above has already proved the params are
-        // exactly the ones we requested.
         const requestUrl = new URL(request.url);
         const direction: 'inbound' | 'outbound' =
           requestUrl.searchParams.get('direction') === 'outbound' ? 'outbound' : 'inbound';
         const targetHandsetId = parseHandsetParam(requestUrl.searchParams.get('handset'));
         set.headers['content-type'] = 'text/xml; charset=utf-8';
-        // Phase 7D rate limit — inbound only. The `from` field is the
-        // remote E.164 on inbound calls; on outbound it's our own
-        // trunk number, where throttling would just block the
-        // household's own dial-pad.
+        // Phase 7D rate limit — inbound only.
         if (direction === 'inbound' && ctx.rateLimit) {
           const verdict = ctx.rateLimit.check(from);
           if (!verdict.allowed) {
@@ -175,14 +141,199 @@ export function twilioHttpRoutes(ctx: TwilioRoutesContext) {
             return buildRejectTwiML();
           }
         }
-        const streamUrl = `wss://${ctx.publicHost}/api/family-phone/twilio/media`;
-        return buildTwiML({ streamUrl, callSid, from, to, direction, targetHandsetId });
+        // Outbound: bridge straight to the stream as before.
+        if (direction === 'outbound') {
+          return buildPlainConnectStreamTwiML({
+            publicHost: ctx.publicHost,
+            callSid,
+            from,
+            to,
+            direction,
+            targetHandsetId,
+          });
+        }
+        // Inbound without IVR wiring — keep the legacy path so old
+        // mounts still work.
+        if (!ivr) {
+          return buildPlainConnectStreamTwiML({
+            publicHost: ctx.publicHost,
+            callSid,
+            from,
+            to,
+            direction,
+            targetHandsetId,
+          });
+        }
+        // Known caller with an intended recipient: ring just them.
+        const contact = ivr.pstnContacts.findByE164(from);
+        if (contact && contact.intended_user_id !== null) {
+          ivr.outcomes.prime(
+            callSid,
+            pickVoicemailTarget(
+              { devices: ivr.devices },
+              { kind: 'user', userId: contact.intended_user_id },
+            ),
+            from,
+          );
+          return buildConnectStreamTwiML({
+            publicHost: ctx.publicHost,
+            callSid,
+            from,
+            to,
+            direction: 'inbound',
+            routedUserId: contact.intended_user_id,
+          });
+        }
+        // Unknown caller (or known but no recipient): DTMF menu.
+        const menu = ivr.users.listInIvrMenu();
+        return buildIvrGatherTwiML({ publicHost: ctx.publicHost, menu });
       },
-      {
-        // Twilio sends application/x-www-form-urlencoded; we read the
-        // raw text body ourselves so the signature verifier sees the
-        // same bytes Twilio signed.
-        parse: 'text',
+      { parse: 'text' },
+    )
+    .post(
+      '/ivr-pick',
+      ({ body, request, set }) => {
+        const raw = typeof body === 'string' ? body : '';
+        const fields = verifyAndParse(request, raw, ctx.twilio.authToken);
+        if (fields === null) {
+          set.status = 403;
+          return 'forbidden';
+        }
+        if (!ivr) {
+          set.status = 500;
+          return 'IVR not configured';
+        }
+        const callSid = fields['CallSid'] ?? '';
+        const from = fields['From'] ?? '';
+        const to = fields['To'] ?? '';
+        const digits = fields['Digits'] ?? '';
+        set.headers['content-type'] = 'text/xml; charset=utf-8';
+        const picked = pickMenuUser(ivr.users.listInIvrMenu(), digits);
+        if (!picked) {
+          // No / unknown digit → household voicemail.
+          ivr.outcomes.prime(
+            callSid,
+            pickVoicemailTarget({ devices: ivr.devices }, { kind: 'household' }),
+            from,
+          );
+          // Fall through to a household-record TwiML by reusing the
+          // gather builder's fallback shape: skip the gather, emit
+          // just the record.
+          return buildIvrGatherTwiML({
+            publicHost: ctx.publicHost,
+            menu: [],
+            householdName: 'household',
+          });
+        }
+        ivr.outcomes.prime(
+          callSid,
+          pickVoicemailTarget({ devices: ivr.devices }, { kind: 'user', userId: picked.id }),
+          from,
+        );
+        return buildConnectStreamTwiML({
+          publicHost: ctx.publicHost,
+          callSid,
+          from,
+          to,
+          direction: 'inbound',
+          routedUserId: picked.id,
+        });
       },
+      { parse: 'text' },
+    )
+    .post(
+      '/after-connect',
+      ({ body, request, set }) => {
+        const raw = typeof body === 'string' ? body : '';
+        const fields = verifyAndParse(request, raw, ctx.twilio.authToken);
+        if (fields === null) {
+          set.status = 403;
+          return 'forbidden';
+        }
+        if (!ivr) {
+          set.status = 500;
+          return 'IVR not configured';
+        }
+        const callSid = fields['CallSid'] ?? '';
+        const record = ivr.outcomes.get(callSid);
+        set.headers['content-type'] = 'text/xml; charset=utf-8';
+        if (!record || record.outcome === 'answered') {
+          return buildAfterConnectAnsweredTwiML();
+        }
+        return buildAfterConnectVoicemailTwiML({
+          publicHost: ctx.publicHost,
+          callSid,
+        });
+      },
+      { parse: 'text' },
+    )
+    .post(
+      '/recording',
+      async ({ body, request, set }) => {
+        const raw = typeof body === 'string' ? body : '';
+        const fields = verifyAndParse(request, raw, ctx.twilio.authToken);
+        if (fields === null) {
+          set.status = 403;
+          return 'forbidden';
+        }
+        if (!ivr) {
+          set.status = 500;
+          return 'IVR not configured';
+        }
+        const recordingUrl = fields['RecordingUrl'] ?? '';
+        const callSid = fields['CallSid'] ?? '';
+        const from = fields['From'] ?? '';
+        const requestUrl = new URL(request.url);
+        const targetParam = requestUrl.searchParams.get('target') ?? '';
+        if (recordingUrl === '') {
+          set.status = 400;
+          return 'missing RecordingUrl';
+        }
+        let target: ReturnType<typeof pickVoicemailTarget> | null = null;
+        const primed = ivr.outcomes.get(callSid);
+        if (targetParam === 'household' || !primed) {
+          target = pickVoicemailTarget({ devices: ivr.devices }, { kind: 'household' });
+        } else {
+          target = primed.voicemailTarget;
+        }
+        try {
+          const audio = await downloadAndExtractRecording(ivr, recordingUrl);
+          const body = `Voicemail from ${from || 'unknown'}`;
+          if (target.kind === 'household') {
+            ivr.voicemails.insert({
+              toDeviceId: target.householdDeviceId,
+              fromDeviceId: null,
+              fromExternal: from || null,
+              body,
+              audio: audio.pcm,
+              sampleRate: audio.sampleRate,
+              channels: audio.channels,
+              durationMs: audio.durationMs,
+            });
+          } else {
+            // Fan-out one row per device the recipient owns.
+            for (const deviceId of target.deviceIds) {
+              ivr.voicemails.insert({
+                toDeviceId: deviceId,
+                fromDeviceId: null,
+                fromExternal: from || null,
+                body,
+                audio: audio.pcm,
+                sampleRate: audio.sampleRate,
+                channels: audio.channels,
+                durationMs: audio.durationMs,
+              });
+            }
+          }
+        } catch (err) {
+          console.error('[twilio] /recording failed to persist voicemail:', err);
+          set.status = 500;
+          return 'recording persistence failed';
+        }
+        ivr.outcomes.drop(callSid);
+        set.headers['content-type'] = 'text/xml; charset=utf-8';
+        return '<?xml version="1.0" encoding="UTF-8"?>\n<Response/>';
+      },
+      { parse: 'text' },
     );
 }

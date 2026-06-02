@@ -19,7 +19,11 @@ import { createFireOfflineCallWake } from '../handlers/family-phone-call-wake.ts
 import { createFamilyPhoneDevicesRepo } from '../db/repos/family-phone-devices.ts';
 import { createPstnCallsRepo } from '../db/repos/family-phone-pstn-calls.ts';
 import { createPstnContactsRepo } from '../db/repos/family-phone-pstn-contacts.ts';
+import { createUsersRepo } from '../db/repos/users.ts';
+import { createFamilyPhoneVoiceMessagesRepo } from '../db/repos/family-phone-voice-messages.ts';
 import { createPstnInboundRateLimiter } from '../handlers/family-phone-pstn-rate-limit.ts';
+import { createPstnCallOutcomes } from '../handlers/family-phone-pstn-outcomes.ts';
+import type { IvrDeps } from '../handlers/family-phone-pstn-ivr.ts';
 import type { DatabaseClient } from '../db/client.ts';
 import type { WsService } from './types.ts';
 import type { ApiApp } from './types.ts';
@@ -251,17 +255,30 @@ export const familyPhoneApp: ApiApp = {
       const publicHost = new URL(origin).host;
       const devices = createFamilyPhoneDevicesRepo(ctx.db);
       const pstnContacts = createPstnContactsRepo(ctx.db);
+      const users = createUsersRepo(ctx.db);
+      const voicemails = createFamilyPhoneVoiceMessagesRepo(ctx.db);
       const rateLimit = createPstnInboundRateLimiter({
         calls: createPstnCallsRepo(ctx.db),
       });
+      const outcomes = getOrCreateOutcomes();
+      const ivr: IvrDeps = {
+        twilio,
+        users,
+        pstnContacts,
+        devices,
+        voicemails,
+        outcomes,
+        publicHost,
+      };
       app = app
-        .use(twilioHttpRoutes({ twilio, publicHost, rateLimit }))
+        .use(twilioHttpRoutes({ twilio, publicHost, rateLimit, ivr }))
         .use(
           twilioMediaWsRoute({
             router,
             devices,
             onlineDevices: ONLINE_DEVICES,
             pstnContacts,
+            outcomes,
           }),
         );
     }
@@ -292,6 +309,19 @@ export const familyPhoneApp: ApiApp = {
  * the ApiApp interface.
  */
 const ROUTER_BY_DB = new WeakMap<DatabaseClient, CallRouter>();
+
+/**
+ * Shared per-process outcomes tracker for the Twilio bridge ↔ HTTP
+ * <Connect action> handshake. Held outside `routes` so the WS route
+ * and the HTTP routes see the same Map — they're constructed in the
+ * same call but the tracker would otherwise be re-allocated per
+ * Elysia app instance.
+ */
+let OUTCOMES: ReturnType<typeof createPstnCallOutcomes> | null = null;
+function getOrCreateOutcomes(): ReturnType<typeof createPstnCallOutcomes> {
+  if (OUTCOMES === null) OUTCOMES = createPstnCallOutcomes();
+  return OUTCOMES;
+}
 
 /**
  * Construct the outbound-PSTN dialer for this db. Returns undefined when

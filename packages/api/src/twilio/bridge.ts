@@ -62,9 +62,11 @@ export interface TwilioBridgeDeps {
    * invite was rejected/unanswered, or the active call hung up, or
    * Twilio sent a `stop`. The WS handler closes the upstream socket
    * in response. Idempotent on the caller's side — the bridge fires
-   * at most once.
+   * at most once. `wasAnswered` is true iff at least one handset
+   * `call:accepted` before terminate — used by the `<Connect action>`
+   * webhook to decide whether to follow up with `<Record>`.
    */
-  onTerminate(): void;
+  onTerminate(info: { wasAnswered: boolean }): void;
 }
 
 export interface TwilioBridge {
@@ -91,6 +93,7 @@ export function createTwilioBridge(deps: TwilioBridgeDeps): TwilioBridge {
    */
   const pendingCallIds = new Set<string>();
   let activeCallId: string | null = null;
+  let everAnswered = false;
   let terminated = false;
 
   function fireTerminate(): void {
@@ -102,7 +105,7 @@ export function createTwilioBridge(deps: TwilioBridgeDeps): TwilioBridge {
     }
     pendingCallIds.clear();
     activeCallId = null;
-    onTerminate();
+    onTerminate({ wasAnswered: everAnswered });
   }
 
   const sinks: VirtualDeviceSinks = {
@@ -118,6 +121,7 @@ export function createTwilioBridge(deps: TwilioBridgeDeps): TwilioBridge {
           if (activeCallId !== null) return;
           if (!pendingCallIds.has(callId)) return;
           activeCallId = callId;
+          everAnswered = true;
           pendingCallIds.delete(callId);
           // Cancel the losing invites. The virtual side is the caller
           // on every fan-out call, so `call:cancel` is the right verb.
