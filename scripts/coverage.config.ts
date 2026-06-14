@@ -1,38 +1,25 @@
 /**
- * Per-file coverage policy. Read by `scripts/enforce-coverage.ts`.
+ * Per-file coverage policy, applied by `devctl test unit` through the engine
+ * shipped in `@fairfox/polly/test/coverage` (the `CoverageConfig` type below).
  *
+ * - `srcDir: 'packages'`: this is a monorepo — every policy-bearing file lives
+ *   under `packages/<pkg>/src/…`, so the engine reads coverage rows beneath
+ *   `packages/`, not the single-package default `src`.
  * - `defaultThreshold`: applied to every covered file not listed in `exempt`.
  *   Both `lines` and `funcs` must meet or exceed it.
  * - `exempt`: files NOT subject to the unit-tier threshold. Each entry must
  *   carry both `reason` (why) and `claimedBy` (which test file makes the
- *   "covered elsewhere" claim true). The enforcer fails if either path
- *   doesn't exist on disk so a dead exemption can't silently rot.
+ *   "covered elsewhere" claim true). The engine fails if either path doesn't
+ *   exist on disk so a dead exemption can't silently rot.
  *
  * The shape is intentionally TS code (not JSON) so the rules participate in
  * `tsc --noEmit` — a typo in a file path is a type error.
  */
 
-export interface FileThreshold {
-  lines: number;
-  funcs: number;
-}
-
-export interface ExemptEntry {
-  reason: string;
-  /**
-   * Path (repo-relative) to the test or script that exercises this file at a
-   * higher tier. Verified to exist by `enforce-coverage.ts`. Use
-   * `'n/a — <reason>'` for genuine waivers (e.g. unused code).
-   */
-  claimedBy: string;
-}
-
-export interface CoverageConfig {
-  defaultThreshold: FileThreshold;
-  exempt: Record<string, ExemptEntry>;
-}
+import type { CoverageConfig } from '@fairfox/polly/test/coverage';
 
 export const config: CoverageConfig = {
+  srcDir: 'packages',
   defaultThreshold: { lines: 80, funcs: 80 },
   exempt: {
     'packages/api/src/handlers/auth.shared.ts': {

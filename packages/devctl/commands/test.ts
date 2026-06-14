@@ -1,6 +1,13 @@
 import { spawn } from 'bun';
 import { resolve } from 'node:path';
+import {
+  type CoverageFindings,
+  evaluateCoverage,
+  hasFailure,
+  parseCoverageTable,
+} from '@fairfox/polly/test/coverage';
 import { APPS, appById } from '../apps.config.ts';
+import { config as coverageConfig } from '../../../scripts/coverage.config.ts';
 
 const ROOT = resolve(import.meta.dir, '../../..');
 
@@ -124,15 +131,43 @@ async function runUnit(): Promise<number> {
   const testExit = await proc.exited;
   if (testExit !== 0) return testExit;
 
-  const enforcer = spawn(['bun', 'scripts/enforce-coverage.ts'], {
-    cwd: ROOT,
-    stdin: 'pipe',
-    stdout: 'inherit',
-    stderr: 'inherit',
-  });
-  enforcer.stdin.write(stderrText);
-  await enforcer.stdin.end();
-  return await enforcer.exited;
+  // Apply the per-file coverage policy in-process via Polly's shipped engine
+  // (@fairfox/polly/test/coverage) against scripts/coverage.config.ts. Bun
+  // prints the coverage table to stderr; parse the combined output so it
+  // doesn't matter which stream it lands on. Orphan detection is deliberately
+  // not surfaced — with `srcDir: 'packages'` it spans tooling, browser-only and
+  // e2e-only packages and isn't a meaningful unit-tier gate here.
+  const srcDir = coverageConfig.srcDir ?? 'src';
+  const rows = parseCoverageTable(`${stdoutText}\n${stderrText}`, srcDir);
+  if (rows.length === 0) {
+    console.error('coverage: no rows parsed from the `bun test --coverage` table.');
+    return 1;
+  }
+  const findings = await evaluateCoverage(ROOT, rows, coverageConfig);
+  reportCoverage(findings);
+  return hasFailure(findings, false) ? 1 : 0;
+}
+
+/** Print the coverage-policy failures (orphans stay advisory, see runUnit). */
+function reportCoverage(f: CoverageFindings): void {
+  for (const m of f.missingExemptFiles) {
+    console.error(`coverage: exempt source missing: ${m}`);
+  }
+  for (const { file, claimedBy } of f.missingClaimedBy) {
+    console.error(`coverage: ${file} → claimedBy missing: ${claimedBy}`);
+  }
+  for (const s of f.staleExempts) {
+    console.error(
+      `coverage: exempt file now meets the floor — promote it (remove from coverage.config.ts): ${s}`,
+    );
+  }
+  for (const v of f.violations) {
+    console.error(`coverage: ${v.file} ${v.metric}=${v.observed.toFixed(2)}% (need ≥ ${v.required}%)`);
+  }
+  if (!hasFailure(f, false)) {
+    const exemptCount = Object.keys(coverageConfig.exempt ?? {}).length;
+    console.log(`coverage: ok (${f.rowCount} files, ${exemptCount} exempt)`);
+  }
 }
 
 async function runBrowser(): Promise<number> {
