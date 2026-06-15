@@ -50,7 +50,20 @@ async function runMutation(): Promise<number> {
     stdout: 'inherit',
     stderr: 'inherit',
   });
-  return await proc.exited;
+  const code = await proc.exited;
+  if (code !== 0) return code;
+
+  // The bun runner emits reports/mutation/mutation.json (json reporter). Read
+  // the kill matrix backwards via Polly's shipped analysis: gaps (NoCoverage),
+  // theatre (Survived), and — when the patched runner records every killer —
+  // redundant/subsumed tests. Advisory: a clean run still exits 0.
+  const report = spawn(['bunx', 'polly', 'mutate', 'report'], {
+    cwd: ROOT,
+    stdout: 'inherit',
+    stderr: 'inherit',
+  });
+  await report.exited;
+  return 0;
 }
 
 /** Run one app's full verification surface (see apps.config.ts). */

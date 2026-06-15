@@ -1,13 +1,20 @@
 {
   "$schema": "../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
   "packageManager": "npm",
-  "testRunner": "command",
-  "commandRunner": {
-    "command": "SKIP_TLS=1 bun test packages/web/src/actions packages/web/src/apps/tasks"
+  "testRunner": "bun",
+  "plugins": ["stryker-mutator-bun-runner"],
+  "bun": {
+    "testFiles": [
+      "packages/web/src/actions/**/*.test.ts",
+      "packages/web/src/apps/tasks/**/*.test.ts"
+    ],
+    "env": { "SKIP_TLS": "1" },
+    "timeout": 30000
   },
-  "coverageAnalysis": "off",
+  "coverageAnalysis": "all",
+  "disableBail": true,
   "checkers": [],
-  "reporters": ["clear-text", "progress"],
+  "reporters": ["json", "clear-text", "progress"],
   "mutate": [
     "packages/web/src/actions/registry.ts",
     "packages/web/src/apps/tasks/filter.ts"
@@ -17,7 +24,8 @@
     "**/node_modules/**",
     "**/dist/**",
     "**/.git/**",
-    "**/.stryker-tmp/**"
+    "**/.stryker-tmp/**",
+    "**/reports/**"
   ],
   "timeoutMS": 30000,
   "concurrency": 2

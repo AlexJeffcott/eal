@@ -1,13 +1,18 @@
 {
   "$schema": "../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
   "packageManager": "npm",
-  "testRunner": "command",
-  "commandRunner": {
-    "command": "SKIP_TLS=1 bun test packages/api/src/specs"
+  "testRunner": "bun",
+  "plugins": ["stryker-mutator-bun-runner", "@fairfox/polly/stryker"],
+  "ignorers": ["polly-verify"],
+  "bun": {
+    "testFiles": ["packages/api/src/specs/**/*.test.ts"],
+    "env": { "SKIP_TLS": "1" },
+    "timeout": 30000
   },
-  "coverageAnalysis": "off",
+  "coverageAnalysis": "all",
+  "disableBail": true,
   "checkers": [],
-  "reporters": ["clear-text", "progress"],
+  "reporters": ["json", "clear-text", "progress"],
   "mutate": [
     "packages/api/src/specs/auth-machine.ts",
     "packages/api/src/specs/auth-gate-machine.ts",
@@ -21,7 +26,8 @@
     "**/node_modules/**",
     "**/dist/**",
     "**/.git/**",
-    "**/.stryker-tmp/**"
+    "**/.stryker-tmp/**",
+    "**/reports/**"
   ],
   "timeoutMS": 30000,
   "concurrency": 2

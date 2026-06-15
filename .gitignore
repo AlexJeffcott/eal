@@ -30,6 +30,8 @@ coverage/
 
 # Stryker mutation testing
 .stryker-tmp/
+reports/
+.polly/test-debt/*.sqlite
 
 # Env
 .env

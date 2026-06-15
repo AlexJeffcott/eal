@@ -17,7 +17,9 @@
     "mutation:shared": "stryker run stryker/shared.conf.json",
     "mutation:cli-lib": "stryker run stryker/cli-lib.conf.json",
     "mutation:web-logic": "stryker run stryker/web-logic.conf.json",
-    "mutation:handlers-shared": "stryker run stryker/handlers-shared.conf.json"
+    "mutation:handlers-shared": "stryker run stryker/handlers-shared.conf.json",
+    "mutation:report": "polly mutate report",
+    "mutation:verify": "polly mutate verify"
   },
   "devDependencies": {
     "@eal/shared": "workspace:*",
@@ -26,7 +28,11 @@
     "@types/web-push": "^3.6.4",
     "fast-check": "^4.8.0",
     "puppeteer": "^25.0.4",
+    "stryker-mutator-bun-runner": "0.4.0",
     "typescript": "6.0.3"
+  },
+  "patchedDependencies": {
+    "stryker-mutator-bun-runner@0.4.0": "patches/stryker-mutator-bun-runner@0.4.0.patch"
   },
   "catalog": {
     "typescript": "6.0.3",
@@ -34,6 +40,6 @@
   },
   "dependencies": {
     "@automerge/automerge": "^3.2.6",
-    "@fairfox/polly": "0.80.0"
+    "@fairfox/polly": "0.81.0"
   }
 }
