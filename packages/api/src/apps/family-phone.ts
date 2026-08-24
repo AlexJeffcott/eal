@@ -245,7 +245,7 @@ export const familyPhoneApp: ApiApp = {
     // fails the boot loudly. The wss:// URL is derived from EAL_ORIGIN
     // (already required for WebAuthn) so the trunk does not duplicate
     // the public-host config.
-    const twilio = loadTwilioConfig();
+    const twilio = loadTwilioConfig(ctx.env);
     let app = new Elysia()
       .use(devices)
       .use(pair)
@@ -253,7 +253,7 @@ export const familyPhoneApp: ApiApp = {
       .use(voicemail)
       .use(pstnContacts);
     if (twilio !== null) {
-      const origin = process.env['EAL_ORIGIN'];
+      const origin = ctx.env['EAL_ORIGIN'];
       if (origin === undefined || origin === '') {
         throw new Error(
           'EAL_API: TWILIO_ENABLED=true requires EAL_ORIGIN so Twilio can be told the wss:// media URL.',
@@ -298,7 +298,7 @@ export const familyPhoneApp: ApiApp = {
       const opts: FamilyPhoneWsHandlerOptions = {
         router: getOrCreateRouter(ctx.db, ctx.ws),
       };
-      const placePstnFn = buildPlacePstn(ctx.db);
+      const placePstnFn = buildPlacePstn(ctx.db, ctx.env);
       if (placePstnFn !== undefined) opts.placePstn = placePstnFn;
       return createFamilyPhoneWsHandler(ctx, ONLINE_DEVICES, FAMILY_PHONE_TOPIC, opts);
     },
@@ -338,10 +338,13 @@ function getOrCreateOutcomes(): ReturnType<typeof createPstnCallOutcomes> {
  * boot — the call:place-pstn message dispatch is a single async fetch
  * away after that.
  */
-function buildPlacePstn(db: DatabaseClient): ((input: { fromDeviceId: number; to: string }) => ReturnType<typeof placePstn>) | undefined {
-  const twilio = loadTwilioConfig();
+function buildPlacePstn(
+  db: DatabaseClient,
+  env: NodeJS.ProcessEnv,
+): ((input: { fromDeviceId: number; to: string }) => ReturnType<typeof placePstn>) | undefined {
+  const twilio = loadTwilioConfig(env);
   if (twilio === null) return undefined;
-  const origin = process.env['EAL_ORIGIN'];
+  const origin = env['EAL_ORIGIN'];
   if (origin === undefined || origin === '') return undefined;
   const restClient = createTwilioRestClient({ config: twilio });
   const devices = createFamilyPhoneDevicesRepo(db);

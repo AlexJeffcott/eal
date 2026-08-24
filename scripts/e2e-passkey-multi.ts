@@ -17,7 +17,7 @@ import puppeteer, { type Browser } from 'puppeteer';
 import { rm, mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { bootApi } from './lib/boot-api.ts';
-import { waitForText, NAV_TIMEOUT_MS } from './lib/e2e-config.ts';
+import { waitForSignedInAs, waitForText, NAV_TIMEOUT_MS } from './lib/e2e-config.ts';
 import {
   addCredential,
   attachVirtualAuthenticator,
@@ -54,7 +54,7 @@ async function main(): Promise<number> {
 
     await pageA.locator('input[name="displayName"]').fill(DISPLAY_NAME);
     await pageA.locator('[data-action="auth:register"]').click();
-    await waitForText(pageA, DISPLAY_NAME);
+    await waitForSignedInAs(pageA, DISPLAY_NAME);
 
     // Capture the credential from A's virtual authenticator so we can inject it into B.
     const credentials = await getCredentials(vaA);
@@ -83,16 +83,12 @@ async function main(): Promise<number> {
     await waitForText(pageB, 'Sign in');
 
     await pageB.locator('[data-action="auth:sign-in"]').click();
-    await waitForText(pageB, DISPLAY_NAME);
+    await waitForSignedInAs(pageB, DISPLAY_NAME);
 
-    // Sanity: the sign-in should NOT have created a second user — same identity.
-    const currentUser = await pageB.evaluate(() => {
-      const el = document.querySelector('[data-current-user]');
-      return el?.textContent ?? null;
-    });
-    if (currentUser !== DISPLAY_NAME) {
-      throw new Error(`expected currentUser=${DISPLAY_NAME}, got ${String(currentUser)}`);
-    }
+    // The sanity check that the sign-in did NOT create a second user is the
+    // assertion above: `waitForSignedInAs` reads the badge in B's own drawer
+    // and fails unless it carries A's display name. Re-reading the badge here
+    // would find nothing — the helper leaves the drawer closed again.
 
     console.log(`Browser B signed in as ${DISPLAY_NAME} using A's credential`);
     console.log('e2e-passkey-multi: OK');

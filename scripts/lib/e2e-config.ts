@@ -37,3 +37,39 @@ export async function waitForText(page: Page, text: string, timeoutMs: number = 
     { timeoutMs, description: `text "${text}"` },
   );
 }
+
+/**
+ * Wait until the shell shows `displayName` as the signed-in user.
+ *
+ * The badge lives in the nav drawer (`web/src/shell/nav-drawer.tsx`), which is
+ * a Modal the shell keeps closed, so the name is in no page text until the
+ * drawer opens. The Menu button that opens it renders only for a signed-in
+ * session, so the click waits out the passkey ceremony too. Close the drawer
+ * again afterwards, so the caller gets the page back the way it found it.
+ */
+export async function waitForSignedInAs(
+  page: Page,
+  displayName: string,
+  timeoutMs: number = SHORT_TIMEOUT_MS,
+): Promise<void> {
+  await page.locator('[data-action="shell:nav-toggle"]').click();
+  await waitFor(
+    async () => {
+      const badge = await page.evaluate(
+        () => document.querySelector('[data-current-user]')?.textContent ?? '',
+      );
+      return badge.includes(displayName);
+    },
+    { timeoutMs, description: `signed in as "${displayName}"` },
+  );
+  // Dismiss through the backdrop, the same path `nav.browser.tsx` drives. The
+  // drawer panel covers the middle of the backdrop, so click it in the DOM
+  // rather than aiming a pointer at it.
+  await page.evaluate(() => {
+    document.querySelector<HTMLElement>('[data-polly-modal-backdrop]')?.click();
+  });
+  await waitFor(
+    async () => await page.evaluate(() => document.querySelector('[data-app-nav]') === null),
+    { description: 'nav drawer closed' },
+  );
+}

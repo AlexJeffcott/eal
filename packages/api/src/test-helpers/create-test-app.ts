@@ -37,6 +37,15 @@ interface CreateTestAppOptions {
    * composition) in isolation from the production registry.
    */
   apps?: readonly ApiApp[];
+  /**
+   * The environment the installed apps read their own config from. Defaults to
+   * an empty environment, not `process.env`: Bun auto-loads the developer's
+   * `.env`, and family-phone reads the Twilio trunk out of it at construction,
+   * so inheriting it would let a local half-filled trunk fail the boot inside
+   * tests that have nothing to do with PSTN. Pass an explicit env to exercise
+   * a configured app.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 function resolveGetPrincipal(
@@ -72,6 +81,7 @@ export function createTestApp(db: DatabaseClient, options: CreateTestAppOptions 
   const noopSpa = skipSpa ? new Elysia() : undefined;
   return createAppInternal(db, resolveGetPrincipal(db, options.principalOverride), {
     rp: TEST_RP,
+    env: options.env ?? {},
     ...(noopSpa ? { spa: noopSpa } : {}),
     ...(options.apps ? { apps: options.apps } : {}),
   });

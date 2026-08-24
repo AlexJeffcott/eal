@@ -102,6 +102,10 @@ export const SHELL_ACTIONS: ActionRegistry<AppStores> = {
     stores.$wsError.value = null;
     await stores.client.signOut();
     stores.$currentUser.value = null;
+    // Sign-out is only reachable from inside the drawer, and the drawer does
+    // not close itself. Left open it covers the sign-in surface with an
+    // overlay that swallows every pointer event.
+    stores.$navOpen.value = false;
   },
 
   'cli-pair:claim': async ({ stores }) => {

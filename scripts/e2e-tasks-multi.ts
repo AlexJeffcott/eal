@@ -16,7 +16,7 @@ import puppeteer, { type Browser, type Page } from 'puppeteer';
 import { rm, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { bootApi } from './lib/boot-api.ts';
-import { NAV_TIMEOUT_MS, waitForText } from './lib/e2e-config.ts';
+import { NAV_TIMEOUT_MS, waitForSignedInAs } from './lib/e2e-config.ts';
 import { seedCliToken } from './lib/seed-cli-token.ts';
 
 const ROOT = resolve(import.meta.dir, '..');
@@ -139,10 +139,10 @@ async function main(): Promise<number> {
         try { localStorage.setItem('eal-token', seedToken); } catch { /* ignore */ }
       }, tokens[i]!);
       await page.goto(api.url, { waitUntil: 'networkidle0', timeout: NAV_TIMEOUT_MS });
-      // The display name in the header proves the seeded session worked and the
+      // The display name in the drawer proves the seeded session worked and the
       // WS handshake succeeded. `/` is the shell launcher — open the Tasks app
       // from it so the tasks panel mounts.
-      await waitForText(page, labels[i]!);
+      await waitForSignedInAs(page, labels[i]!);
       await page.locator('[data-landing-app="tasks"] [data-action="shell:navigate"]').click();
       await page.waitForSelector('[data-tasks-panel]', { timeout: NAV_TIMEOUT_MS });
     }

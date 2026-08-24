@@ -65,7 +65,6 @@ const DEFAULT_TIMEOUT_MS = 5_000;
 const TWILIO_ACCOUNT_SID = 'AC00000000000000000000000000000002';
 const TWILIO_AUTH_TOKEN = 'e2e-outbound-auth-token';
 const TWILIO_PHONE_NUMBER = '+441234567890';
-const TWILIO_WEBHOOK_SIGNING_KEY = 'e2e-outbound-signing-key';
 const PSTN_TO = '+12025550199';
 const CALL_SID = 'CA00000000000000000000000000000002';
 const STREAM_SID = 'MZ00000000000000000000000000000002';
@@ -257,17 +256,23 @@ async function main(): Promise<void> {
   await rm(ARTIFACTS, { recursive: true, force: true });
   await rm(DB_PATH, { force: true });
   process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';
-  process.env['TWILIO_ENABLED'] = 'true';
-  process.env['TWILIO_ACCOUNT_SID'] = TWILIO_ACCOUNT_SID;
-  process.env['TWILIO_AUTH_TOKEN'] = TWILIO_AUTH_TOKEN;
-  process.env['TWILIO_PHONE_NUMBER'] = TWILIO_PHONE_NUMBER;
-  process.env['TWILIO_WEBHOOK_SIGNING_KEY'] = TWILIO_WEBHOOK_SIGNING_KEY;
 
   const twilio = startFakeTwilio();
   console.log(`[e2e] fake Twilio REST up at ${twilio.url}`);
-  process.env['TWILIO_API_BASE_URL'] = twilio.url;
 
-  const api = await bootApi({ database: DB_PATH });
+  // The trunk goes to the api process only, never to this one: `bootApi`
+  // drops any ambient TWILIO_* so a developer's own `.env` cannot change what
+  // this script boots.
+  const api = await bootApi({
+    database: DB_PATH,
+    env: {
+      TWILIO_ENABLED: 'true',
+      TWILIO_ACCOUNT_SID,
+      TWILIO_AUTH_TOKEN,
+      TWILIO_PHONE_NUMBER,
+      TWILIO_API_BASE_URL: twilio.url,
+    },
+  });
   console.log(`[e2e] api up at ${api.url}`);
   try {
     const seed = seedCliToken({
@@ -450,4 +455,14 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+// Force a deterministic exit: the live handset connection keeps a
+// reconnect timer pending, so a bare `await main()` prints OK but never
+// returns control. A verification artefact must exit 0 on success / 1 on
+// failure so it can be run in one command and trusted.
+main().then(
+  () => process.exit(0),
+  (err: unknown) => {
+    console.error(err);
+    process.exit(1);
+  },
+);

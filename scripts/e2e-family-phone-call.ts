@@ -192,4 +192,14 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+// Force a deterministic exit: a live WS connection keeps a reconnect timer
+// pending, so a bare `await main()` prints OK but never returns control. A
+// verification artefact must exit 0 on success / 1 on failure so it can be
+// run in one command and trusted.
+main().then(
+  () => process.exit(0),
+  (err: unknown) => {
+    console.error(err);
+    process.exit(1);
+  },
+);

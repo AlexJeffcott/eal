@@ -27,7 +27,7 @@ import { spawn } from 'bun';
 import { resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { bootApi } from './lib/boot-api.ts';
-import { waitForText, NAV_TIMEOUT_MS } from './lib/e2e-config.ts';
+import { waitForSignedInAs, waitForText, NAV_TIMEOUT_MS } from './lib/e2e-config.ts';
 import { attachVirtualAuthenticator, closeBrowserQuietly } from './lib/puppeteer-webauthn.ts';
 
 const ROOT = resolve(import.meta.dir, '..');
@@ -117,7 +117,7 @@ async function main(): Promise<number> {
 
     await page.locator('input[name="displayName"]').fill(DISPLAY_NAME);
     await page.locator('[data-action="auth:register"]').click();
-    await waitForText(page, DISPLAY_NAME);
+    await waitForSignedInAs(page, DISPLAY_NAME);
 
     // ─── 2. CLI: start pairing, scrape user_code from stdout ─────────────────
     const pair = spawn(
@@ -184,7 +184,7 @@ async function main(): Promise<number> {
     // and the tasks panel is mounted to render the row. `/` is the shell
     // launcher — the panel only mounts once the Tasks app is open.
     await page.goto(api.url, { waitUntil: 'networkidle0', timeout: NAV_TIMEOUT_MS });
-    await waitForText(page, DISPLAY_NAME);
+    await waitForSignedInAs(page, DISPLAY_NAME);
     await page.locator('[data-landing-app="tasks"] [data-action="shell:navigate"]').click();
     await page.waitForSelector('[data-tasks-panel]', { timeout: NAV_TIMEOUT_MS });
 

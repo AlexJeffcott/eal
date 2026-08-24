@@ -79,6 +79,13 @@ describe('SignIn (browser)', () => {
     await waitFor(() => stores.$currentUser.value === null);
     await waitFor(() => document.querySelector('[data-sign-in]') !== null);
     expect(document.querySelector('[data-current-user]')).toBeNull();
+
+    // The drawer has to go with it. Sign-out is only reachable from inside the
+    // drawer, so a drawer left open lands its overlay on top of the sign-in
+    // surface and swallows every click aimed at it.
+    await waitFor(() => document.querySelector('[data-app-nav]') === null);
+    expect(document.querySelector('[data-polly-modal-backdrop]')).toBeNull();
+    expect(stores.$navOpen.value).toBe(false);
   });
 
   test('sign-in failure renders the friendly mapped message and stays on SignIn', async () => {

@@ -44,6 +44,10 @@ function bootEntrypoint(): Subprocess {
       // SKIP_TLS: this test exercises Litestream, not TLS — bind plain HTTP so
       // there's no cert dependency. A legitimate unit/test-tier use of the flag.
       SKIP_TLS: '1',
+      // Pin the PSTN trunk off. The api auto-loads `.env`, and a half-filled
+      // trunk there stops it booting; this script exercises Litestream, not
+      // PSTN. An explicit value here wins — `.env` never overwrites one.
+      TWILIO_ENABLED: 'false',
       LITESTREAM_CONFIG: 'deploy/litestream-dev.yml',
       LITESTREAM_DEV_REPLICA_PATH: REPLICA_PATH,
     },

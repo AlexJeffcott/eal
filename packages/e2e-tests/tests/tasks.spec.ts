@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { attachVirtualAuthenticator } from './lib/virtual-authenticator.ts';
+import { expectSignedInAs } from './lib/shell.ts';
 
 /**
  * Tasks golden path — the workflow a person actually does, end to end, against
@@ -17,7 +18,7 @@ test('tasks golden path: register, capture, organise, complete', async ({ page }
     await page.goto('/');
     await page.locator('input[name="displayName"]').fill('pat');
     await page.locator('[data-action="auth:register"]').click();
-    await expect(page.locator('[data-current-user]')).toHaveText('pat', { timeout: 10_000 });
+    await expectSignedInAs(page, 'pat');
   });
 
   await test.step('open the Tasks app from the landing launcher', async () => {

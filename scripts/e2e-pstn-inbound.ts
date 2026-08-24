@@ -47,7 +47,6 @@ const DEFAULT_TIMEOUT_MS = 5_000;
 const TWILIO_ACCOUNT_SID = 'AC00000000000000000000000000000001';
 const TWILIO_AUTH_TOKEN = 'e2e-auth-token';
 const TWILIO_PHONE_NUMBER = '+441234567890';
-const TWILIO_WEBHOOK_SIGNING_KEY = 'e2e-signing-key';
 const PSTN_FROM = '+12025550100';
 const CALL_SID = 'CA00000000000000000000000000000001';
 const STREAM_SID = 'MZ00000000000000000000000000000001';
@@ -186,13 +185,19 @@ async function main(): Promise<void> {
   await rm(ARTIFACTS, { recursive: true, force: true });
   await rm(DB_PATH, { force: true });
   process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';
-  process.env['TWILIO_ENABLED'] = 'true';
-  process.env['TWILIO_ACCOUNT_SID'] = TWILIO_ACCOUNT_SID;
-  process.env['TWILIO_AUTH_TOKEN'] = TWILIO_AUTH_TOKEN;
-  process.env['TWILIO_PHONE_NUMBER'] = TWILIO_PHONE_NUMBER;
-  process.env['TWILIO_WEBHOOK_SIGNING_KEY'] = TWILIO_WEBHOOK_SIGNING_KEY;
 
-  const api = await bootApi({ database: DB_PATH });
+  // The trunk goes to the api process only, never to this one: `bootApi`
+  // drops any ambient TWILIO_* so a developer's own `.env` cannot change what
+  // this script boots.
+  const api = await bootApi({
+    database: DB_PATH,
+    env: {
+      TWILIO_ENABLED: 'true',
+      TWILIO_ACCOUNT_SID,
+      TWILIO_AUTH_TOKEN,
+      TWILIO_PHONE_NUMBER,
+    },
+  });
   console.log(`[e2e] api up at ${api.url}`);
   try {
     const seed = seedCliToken({
@@ -203,6 +208,24 @@ async function main(): Promise<void> {
 
     const handset = await pairAndConnect(api.url, seed.token, "Alex's handset");
     console.log(`[e2e] handset #${handset.deviceId} paired and online`);
+
+    // Phase 7D routes inbound PSTN by caller: an unknown number lands in
+    // the DTMF menu / voicemail, only a known caller with an intended
+    // recipient bridges straight to `<Connect><Stream>`. Register
+    // PSTN_FROM as a known caller pointing at the paired handset's user so
+    // this script exercises the real Stream + media round-trip it asserts.
+    const admin = createEalClient(api.url, { token: seed.token });
+    const me = await admin.getCurrentUser();
+    if (!me) throw new Error('seed token did not sign in');
+    await admin.createPstnContact({
+      e164: PSTN_FROM,
+      label: 'Known caller (e2e)',
+      allowIn: true,
+      allowOut: false,
+      intendedUserId: me.userId,
+    });
+    console.log(`[e2e] registered ${PSTN_FROM} as a known caller → user #${me.userId}`);
+    await admin.disconnect();
 
     // Step 1: verify the voice webhook hands back a TwiML <Stream>.
     const voicePath = '/api/family-phone/twilio/voice';
@@ -318,4 +341,14 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+// Force a deterministic exit: the live handset connection keeps a
+// reconnect timer pending, so a bare `await main()` prints OK but never
+// returns control. A verification artefact must exit 0 on success / 1 on
+// failure so it can be run in one command and trusted.
+main().then(
+  () => process.exit(0),
+  (err: unknown) => {
+    console.error(err);
+    process.exit(1);
+  },
+);

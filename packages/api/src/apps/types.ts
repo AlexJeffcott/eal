@@ -44,6 +44,14 @@ export interface WsService {
 export interface WsAppContext {
   db: DatabaseClient;
   ws: WsService;
+  /**
+   * The environment this app reads its own config from — the trunk config for
+   * family-phone, for example. Passed in rather than read from `process.env`
+   * at the point of use, so a test can build an app whose configuration it
+   * chose, exactly as it already chooses the WebAuthn RP. Production passes
+   * `process.env`.
+   */
+  env: NodeJS.ProcessEnv;
 }
 
 /**
@@ -81,6 +89,8 @@ export interface ApiAppContext {
   getPrincipal: GetPrincipalFn;
   broadcastTask: (event: TaskEvent) => void;
   ws: WsService;
+  /** See `WsAppContext.env`. */
+  env: NodeJS.ProcessEnv;
 }
 
 /**

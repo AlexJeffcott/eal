@@ -92,6 +92,12 @@ export interface AppInternalOptions {
    * isolation.
    */
   apps?: readonly ApiApp[];
+  /**
+   * The environment apps read their own config from — see `ApiAppContext.env`.
+   * Production omits this and gets `process.env`; tests pass what they mean to
+   * configure, so a developer's `.env` cannot decide whether an app boots.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 /**
@@ -202,6 +208,7 @@ export async function createAppInternal(
   // App routes are composed from the registry; global concerns (auth, users,
   // the chat relay) are mounted directly — they are not apps.
   const apps = options.apps ?? API_APPS;
+  const appEnv = options.env ?? process.env;
 
   // The WsService exposes the connection-registry to apps without leaking
   // the underlying Maps. Implementation reuses the same maps used internally.
@@ -270,11 +277,17 @@ export async function createAppInternal(
       binaryTagToApp.set(app.ws.binaryTag, app.id);
     }
     prefixToApp.set(app.ws.prefix, app.id);
-    const wsCtx: WsAppContext = { db, ws: wsService };
+    const wsCtx: WsAppContext = { db, ws: wsService, env: appEnv };
     appWsHandlers.set(app.id, app.ws.handler(wsCtx));
   }
 
-  const apiCtx: ApiAppContext = { db, getPrincipal: getPrincipalFn, broadcastTask, ws: wsService };
+  const apiCtx: ApiAppContext = {
+    db,
+    getPrincipal: getPrincipalFn,
+    broadcastTask,
+    ws: wsService,
+    env: appEnv,
+  };
   let builder: AnyElysia = new Elysia()
     .decorate('db', db)
     .use(authMiddleware(getPrincipalFn))

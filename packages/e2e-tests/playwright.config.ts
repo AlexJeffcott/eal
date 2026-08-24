@@ -38,6 +38,11 @@ export default defineConfig({
       // and port the browser hits, or WebAuthn rejects the passkey ceremony.
       EAL_ORIGIN: BASE_URL,
       NODE_TLS_REJECT_UNAUTHORIZED: '0',
+      // Pin the PSTN trunk off. Bun auto-loads the developer's `.env`, and a
+      // half-filled trunk there (`TWILIO_ENABLED=true` with the number still
+      // to buy) stops the server booting at all. No spec here drives PSTN;
+      // `scripts/e2e-pstn-*.ts` own that path and boot their own trunk.
+      TWILIO_ENABLED: 'false',
     },
   },
 

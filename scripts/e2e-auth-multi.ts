@@ -5,7 +5,7 @@ import { spawn } from 'bun';
 import { resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { bootApi } from './lib/boot-api.ts';
-import { waitForText, NAV_TIMEOUT_MS } from './lib/e2e-config.ts';
+import { waitForSignedInAs, waitForText, NAV_TIMEOUT_MS } from './lib/e2e-config.ts';
 import { seedCliToken } from './lib/seed-cli-token.ts';
 
 const ROOT = resolve(import.meta.dir, '..');
@@ -63,7 +63,12 @@ async function main(): Promise<number> {
         try { localStorage.setItem('eal-token', seedToken); } catch { /* ignore */ }
       }, browserA.token);
       await page.goto(api.url, { waitUntil: 'networkidle0', timeout: NAV_TIMEOUT_MS });
-      await waitForText(page, 'browser-a');
+      await waitForSignedInAs(page, 'browser-a');
+      // `/` is the shell launcher. Open the Tasks app so the panel is mounted
+      // to render the broadcast row asserted below, and so its WS subscription
+      // is live before the CLI-token write fires.
+      await page.locator('[data-landing-app="tasks"] [data-action="shell:navigate"]').click();
+      await page.waitForSelector('[data-tasks-panel]', { timeout: NAV_TIMEOUT_MS });
     }
 
     // Browser B: anonymous — must see the SignIn surface, must NOT see the broadcast.
