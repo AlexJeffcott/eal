@@ -10,7 +10,6 @@ const GOOD = {
   TWILIO_ACCOUNT_SID: 'AC0123456789abcdef0123456789abcdef',
   TWILIO_AUTH_TOKEN: 'token-of-fixed-length',
   TWILIO_PHONE_NUMBER: '+441234567890',
-  TWILIO_WEBHOOK_SIGNING_KEY: 'sig-key',
 };
 
 describe('loadTwilioConfig — gating', () => {
@@ -36,7 +35,7 @@ describe('loadTwilioConfig — required vars', () => {
   test('throws naming every missing var when enabled but underspecified', () => {
     expect(() =>
       loadTwilioConfig(env({ TWILIO_ENABLED: 'true' })),
-    ).toThrow(/TWILIO_ACCOUNT_SID.*TWILIO_AUTH_TOKEN.*TWILIO_PHONE_NUMBER.*TWILIO_WEBHOOK_SIGNING_KEY/);
+    ).toThrow(/TWILIO_ACCOUNT_SID.*TWILIO_AUTH_TOKEN.*TWILIO_PHONE_NUMBER/);
   });
 
   test('an empty-string value counts as missing — no silent default', () => {
@@ -65,6 +64,24 @@ describe('loadTwilioConfig — happy path', () => {
     expect(cfg?.accountSid).toBe(GOOD.TWILIO_ACCOUNT_SID);
     expect(cfg?.authToken).toBe(GOOD.TWILIO_AUTH_TOKEN);
     expect(cfg?.phoneNumber).toBe(GOOD.TWILIO_PHONE_NUMBER);
-    expect(cfg?.webhookSigningKey).toBe(GOOD.TWILIO_WEBHOOK_SIGNING_KEY);
+  });
+});
+
+describe('loadTwilioConfig — outbound caller ID', () => {
+  test('defaults callerId to the trunk DID when TWILIO_CALLER_ID is unset', () => {
+    const cfg = loadTwilioConfig(env(GOOD));
+    expect(cfg?.callerId).toBe(GOOD.TWILIO_PHONE_NUMBER);
+  });
+
+  test('a valid TWILIO_CALLER_ID overrides the caller ID without touching the DID', () => {
+    const cfg = loadTwilioConfig(env({ ...GOOD, TWILIO_CALLER_ID: '+12025550199' }));
+    expect(cfg?.phoneNumber).toBe(GOOD.TWILIO_PHONE_NUMBER);
+    expect(cfg?.callerId).toBe('+12025550199');
+  });
+
+  test('rejects a malformed TWILIO_CALLER_ID rather than silently using the DID', () => {
+    expect(() =>
+      loadTwilioConfig(env({ ...GOOD, TWILIO_CALLER_ID: '0612345678' })),
+    ).toThrow(/E\.164/);
   });
 });

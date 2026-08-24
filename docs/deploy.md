@@ -41,6 +41,28 @@ Every value is required — the server has no fallbacks and fails loud at boot.
 The replica config (`deploy/litestream.yml`) is plain S3 driven by these env
 vars — Fly's **Tigris** is the natural fit, but any S3-compatible store works.
 
+### Twilio PSTN trunk (Phase 7)
+
+The family-phone PSTN trunk is **off by default**. It mounts only when
+`TWILIO_ENABLED=true`; with the flag unset or `false`, the Twilio handlers
+do not register and the rest of eal boots unchanged. When the flag is `true`,
+`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_PHONE_NUMBER` all become
+required — `loadTwilioConfig()` fails loud at boot if any is missing or
+malformed (no half-configured trunk). `TWILIO_CALLER_ID` stays optional and
+defaults to the trunk DID.
+
+| Variable | Secret? | Example | Notes |
+|---|---|---|---|
+| `TWILIO_ENABLED` | no | `true` | Mounts the PSTN trunk. Unset/`false` = off; when `true` the three required vars below must be set. Set in `fly.toml` `[env]`. |
+| `TWILIO_ACCOUNT_SID` | **yes** | `AC…` | REST account SID (the `AC…`-prefixed 34-char id, pairs with the token). |
+| `TWILIO_AUTH_TOKEN` | **yes** | — | Auth token; also the key that verifies the `X-Twilio-Signature` webhook header. |
+| `TWILIO_PHONE_NUMBER` | no | `+39…` | E.164 trunk number — the inbound DID, and the default outbound caller ID. Not secret (it's a published number), but set via `fly secrets` alongside the pair for simplicity. |
+| `TWILIO_CALLER_ID` | no | `+44…` | Optional outbound caller ID (Twilio `From`). Defaults to `TWILIO_PHONE_NUMBER`. Set to a **non-Italian** number when the DID is Italian: AGCOM blocks internationally-routed calls bearing an Italian CLI (see `docs/family-phone.md` Phase 7). |
+
+Secrets go via `fly secrets set TWILIO_AUTH_TOKEN=… TWILIO_ACCOUNT_SID=…`,
+never in `fly.toml` (which is committed). Locally they live in the gitignored
+`.env`, which Bun auto-loads.
+
 ## Fly.io
 
 1. `fly launch --no-deploy` — accept `fly.toml`; it sets `app` and the region.

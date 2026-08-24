@@ -72,7 +72,7 @@ export interface TwilioRestDeps {
 
 export function createTwilioRestClient(deps: TwilioRestDeps): TwilioRestClient {
   const httpFetch = deps.fetch ?? fetch;
-  const { accountSid, authToken, phoneNumber, apiBaseUrl } = deps.config;
+  const { accountSid, authToken, callerId, apiBaseUrl } = deps.config;
   const base = (apiBaseUrl ?? DEFAULT_TWILIO_API_BASE).replace(/\/+$/, '');
   const callsUrl = `${base}/Accounts/${accountSid}/Calls.json`;
   // HTTP Basic per Twilio's auth scheme: base64(SID:Token). Built once
@@ -82,7 +82,10 @@ export function createTwilioRestClient(deps: TwilioRestDeps): TwilioRestClient {
   return {
     async placeOutboundCall(input): Promise<PlaceOutboundCallResult> {
       const body = new URLSearchParams({
-        From: phoneNumber,
+        // `From` is the caller ID, which may differ from the inbound DID
+        // (`config.phoneNumber`) — see TwilioConfig.callerId for the
+        // Italy/AGCOM reason. It defaults to the DID when unset.
+        From: callerId,
         To: input.to,
         Url: input.twimlUrl,
       });

@@ -16,7 +16,7 @@ const TWILIO = {
   accountSid: 'AC0123456789abcdef0123456789abcdef',
   authToken: 'test-auth-token',
   phoneNumber: '+441234567890',
-  webhookSigningKey: 'unused-in-this-test',
+  callerId: '+441234567890',
 };
 
 const PUBLIC_HOST = 'eal.example.com';

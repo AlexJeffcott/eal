@@ -160,7 +160,9 @@ Each phase is shippable on its own. If the project stops at any point, you still
 
    Each inbound or outbound call materialises a row in `family_phone_devices` with `kind='pstn'` and the remote E.164 as its label; the existing call state machine then drives the conversation unchanged. Inbound calls fan out a `placeCall` to every handset and the first to accept wins (others get `call:cancelled`). Codec gap: Twilio Media Streams carry G.711 μ-law 8 kHz; the relay carries 24 kHz PCM. A bridge module decodes/resamples in both directions.
 
-   Required env vars: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `TWILIO_WEBHOOK_SIGNING_KEY`. With `TWILIO_ENABLED=true` and any missing, the api refuses to boot — no silent disable.
+   Required env vars: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`. With `TWILIO_ENABLED=true` and any missing, the api refuses to boot — no silent disable. An optional `TWILIO_CALLER_ID` overrides the outbound `From` and defaults to `TWILIO_PHONE_NUMBER` (see the AGCOM note below). Webhook authenticity is verified against the `X-Twilio-Signature` header, which Twilio's classic scheme signs with the auth token — there is no separate webhook signing key.
+
+   **Italy / AGCOM caller-ID constraint.** Italy's AGCOM anti-spoofing filter (2025) blocks any internationally-routed call that presents an Italian caller ID — geographic CLI from 19 Aug 2025, mobile CLI from 19 Nov 2025. Twilio is a foreign carrier, so a Twilio-originated call *into* Italy bearing an Italian number as `From` is dropped at the recipient's operator, and Twilio's own guidance offers no whitelist workaround. Inbound is unaffected — the Italian DID only ever *receives* — but outbound to Italian numbers must present a non-Italian caller ID. The trunk therefore splits the two: `TWILIO_PHONE_NUMBER` is the inbound DID; the optional `TWILIO_CALLER_ID` (defaulting to the DID) is the outbound `From`. For an Italian household: keep an Italian DID for inbound, set `TWILIO_CALLER_ID` to a non-Italian number for outbound — the call rings, the recipient just sees a foreign number. 7C's dial-pad and any agent-initiated PSTN call into Italy depend on this; verify outbound separately from inbound.
 
    Sub-phases, each shippable and each with a committed verification script under `scripts/`:
 
@@ -168,7 +170,7 @@ Each phase is shippable on its own. If the project stops at any point, you still
    - **7B** — Twilio inbound: webhook handler at `/api/family-phone/twilio/voice` returns TwiML with `<Stream>`; WS handler `/twilio/media` decodes G.711 μ-law base64 frames; codec module (pcmu↔pcm, 8↔24 kHz resample); virtual-device bridge fans out the invite, first-accept-wins. `scripts/e2e-pstn-inbound.ts` mocks the Twilio media stream and a real handset; audio round-trips.
    - **7C** — Twilio outbound: dial-pad UI (350 px keypad), REST POST to `Calls.json` with a stable TwiML URL, media WS in the reverse direction, sharing 7B's bridge. `scripts/e2e-pstn-outbound.ts`.
    - **7D** — Abuse defaults: 30 s no-answer → voicemail via the existing `family_phone_voice_messages` inbox (the virtual PSTN device is the `fromDeviceId`); per-source-number rate limit in a new `pstn_calls` table; webhook HMAC-SHA1 signature verification.
-   - **7E** — Production wire-up: buy the number, point the webhook at the Tailscale Funnel URL, real-phone smoke test.
+   - **7E** — Production wire-up: buy the number, point the webhook at the Tailscale Funnel URL, set `TWILIO_CALLER_ID` to a non-Italian number if the DID is Italian (AGCOM, above), real-phone smoke test of inbound *and* outbound.
 
    Provider tradeoff: Twilio is ~$0.0085/min inbound + $1/number/month — fine for one household phone. A SIP trunk (Voxbone/Anveo) is ~3-5× cheaper but needs Asterisk on the Pi; revisit when there are multiple numbers.
 

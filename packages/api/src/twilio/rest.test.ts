@@ -6,7 +6,7 @@ const CONFIG: TwilioConfig = {
   accountSid: 'AC00000000000000000000000000000001',
   authToken: 'auth-token-secret',
   phoneNumber: '+441234567890',
-  webhookSigningKey: 'unused-here',
+  callerId: '+441234567890',
 };
 
 interface CapturedRequest {
@@ -52,11 +52,27 @@ describe('createTwilioRestClient.placeOutboundCall', () => {
     expect(req.method).toBe('POST');
     expect(req.headers.get('content-type')).toBe('application/x-www-form-urlencoded');
     const form = new URLSearchParams(req.body);
-    expect(form.get('From')).toBe(CONFIG.phoneNumber);
+    expect(form.get('From')).toBe(CONFIG.callerId);
     expect(form.get('To')).toBe('+12025550100');
     expect(form.get('Url')).toBe(
       'https://eal.example.com/api/family-phone/twilio/voice?direction=outbound',
     );
+  });
+
+  test('uses callerId as From when it differs from the inbound DID (AGCOM)', async () => {
+    const { fetch, captured } = makeFetch(() => ({
+      status: 201,
+      body: JSON.stringify({ sid: 'CA00000000000000000000000000000002', status: 'queued' }),
+    }));
+    // Italian inbound DID, non-Italian caller ID — the shape Italy's
+    // AGCOM anti-spoofing filter forces for an outbound call to ring.
+    const client = createTwilioRestClient({
+      config: { ...CONFIG, phoneNumber: '+390612345678', callerId: '+441234567890' },
+      fetch,
+    });
+    await client.placeOutboundCall({ to: '+390698765432', twimlUrl: 'https://x/y' });
+    const form = new URLSearchParams(captured[0]!.body);
+    expect(form.get('From')).toBe('+441234567890');
   });
 
   test('sends HTTP Basic auth as base64(accountSid:authToken)', async () => {

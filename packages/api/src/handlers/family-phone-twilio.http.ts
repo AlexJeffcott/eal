@@ -84,8 +84,19 @@ function searchParamsToFields(params: URLSearchParams): Record<string, string> {
  * dialled, including the query string, so the URL the verifier sees
  * must match byte-for-byte.
  */
-function publicUrl(request: Request): string {
-  return request.url;
+/**
+ * Reconstruct the public URL Twilio signed. Twilio computes
+ * X-Twilio-Signature over the exact webhook URL configured in its console —
+ * always `https://<public-host>/…`. Behind a TLS-terminating proxy (Fly with
+ * SKIP_TLS, a Tailscale Funnel) the api receives the forwarded request as
+ * `http://…` and/or an internal host, so the raw `request.url` no longer
+ * matches what Twilio hashed and every inbound call would 403. Rebuild the
+ * URL from the configured publicHost (same source the TwiML `<Stream>` URLs
+ * use) and the request's own path + query, which the proxy preserves.
+ */
+function publicUrl(request: Request, publicHost: string): string {
+  const { pathname, search } = new URL(request.url);
+  return `https://${publicHost}${pathname}${search}`;
 }
 
 /** Verify the X-Twilio-Signature on a form-encoded POST and parse the
@@ -95,12 +106,13 @@ function verifyAndParse(
   request: Request,
   raw: string,
   authToken: string,
+  publicHost: string,
 ): Record<string, string> | null {
   const fields = searchParamsToFields(new URLSearchParams(raw));
   const signatureHeader = request.headers.get('x-twilio-signature');
   const ok = verifyTwilioSignature({
     authToken,
-    url: publicUrl(request),
+    url: publicUrl(request, publicHost),
     formFields: fields,
     signatureHeader,
   });
@@ -114,7 +126,7 @@ export function twilioHttpRoutes(ctx: TwilioRoutesContext) {
       '/voice',
       ({ body, request, set }) => {
         const raw = typeof body === 'string' ? body : '';
-        const fields = verifyAndParse(request, raw, ctx.twilio.authToken);
+        const fields = verifyAndParse(request, raw, ctx.twilio.authToken, ctx.publicHost);
         if (fields === null) {
           set.status = 403;
           return 'forbidden';
@@ -194,7 +206,7 @@ export function twilioHttpRoutes(ctx: TwilioRoutesContext) {
       '/ivr-pick',
       ({ body, request, set }) => {
         const raw = typeof body === 'string' ? body : '';
-        const fields = verifyAndParse(request, raw, ctx.twilio.authToken);
+        const fields = verifyAndParse(request, raw, ctx.twilio.authToken, ctx.publicHost);
         if (fields === null) {
           set.status = 403;
           return 'forbidden';
@@ -245,7 +257,7 @@ export function twilioHttpRoutes(ctx: TwilioRoutesContext) {
       '/after-connect',
       ({ body, request, set }) => {
         const raw = typeof body === 'string' ? body : '';
-        const fields = verifyAndParse(request, raw, ctx.twilio.authToken);
+        const fields = verifyAndParse(request, raw, ctx.twilio.authToken, ctx.publicHost);
         if (fields === null) {
           set.status = 403;
           return 'forbidden';
@@ -271,7 +283,7 @@ export function twilioHttpRoutes(ctx: TwilioRoutesContext) {
       '/recording',
       async ({ body, request, set }) => {
         const raw = typeof body === 'string' ? body : '';
-        const fields = verifyAndParse(request, raw, ctx.twilio.authToken);
+        const fields = verifyAndParse(request, raw, ctx.twilio.authToken, ctx.publicHost);
         if (fields === null) {
           set.status = 403;
           return 'forbidden';

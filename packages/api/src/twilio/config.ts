@@ -13,12 +13,22 @@ export interface TwilioConfig {
   accountSid: string;
   /** Auth token paired with the account; signs webhook callbacks. */
   authToken: string;
-  /** The household's E.164 trunk number — both the inbound DID and the
-   * outbound caller ID. */
+  /** The household's E.164 trunk number — the inbound DID, and the
+   * default outbound caller ID. */
   phoneNumber: string;
-  /** Token verified against the X-Twilio-Signature header on every
-   * webhook so an attacker can't spoof inbound calls into the bridge. */
-  webhookSigningKey: string;
+  /**
+   * Caller ID presented on outbound calls (the `From` field on Twilio's
+   * Calls.json). Defaults to `phoneNumber` — standard Twilio behaviour,
+   * and correct for most regions. It is split out because Italy's AGCOM
+   * anti-spoofing filter (2025) blocks any internationally-routed call
+   * that presents an Italian CLI: a Twilio-originated call into Italy
+   * carrying an Italian trunk number as caller ID is dropped, with no
+   * whitelist workaround. Where the DID is Italian, set `TWILIO_CALLER_ID`
+   * to a non-Italian number so outbound calls ring (the recipient sees a
+   * foreign number) while inbound keeps the Italian `phoneNumber` DID.
+   * See docs/family-phone.md Phase 7.
+   */
+  callerId: string;
   /**
    * Override for the Twilio REST API base URL. Production omits this
    * and the REST client uses Twilio's real endpoint. The
@@ -29,6 +39,9 @@ export interface TwilioConfig {
    */
   apiBaseUrl?: string;
 }
+
+/** E.164: `+`, a country-code digit (1–9), then 6–14 more digits. */
+const E164 = /^\+[1-9]\d{6,14}$/;
 
 /**
  * Build the trunk config from the process environment. Returns `null`
@@ -48,14 +61,10 @@ export function loadTwilioConfig(env: NodeJS.ProcessEnv = process.env): TwilioCo
   const accountSid = env['TWILIO_ACCOUNT_SID'];
   const authToken = env['TWILIO_AUTH_TOKEN'];
   const phoneNumber = env['TWILIO_PHONE_NUMBER'];
-  const webhookSigningKey = env['TWILIO_WEBHOOK_SIGNING_KEY'];
   const missing: string[] = [];
   if (accountSid === undefined || accountSid === '') missing.push('TWILIO_ACCOUNT_SID');
   if (authToken === undefined || authToken === '') missing.push('TWILIO_AUTH_TOKEN');
   if (phoneNumber === undefined || phoneNumber === '') missing.push('TWILIO_PHONE_NUMBER');
-  if (webhookSigningKey === undefined || webhookSigningKey === '') {
-    missing.push('TWILIO_WEBHOOK_SIGNING_KEY');
-  }
   if (missing.length > 0) {
     throw new Error(
       `EAL_API: TWILIO_ENABLED=true but these required env vars are missing or empty: ${missing.join(', ')}. ` +
@@ -67,17 +76,32 @@ export function loadTwilioConfig(env: NodeJS.ProcessEnv = process.env): TwilioCo
       `EAL_API: TWILIO_ACCOUNT_SID="${accountSid}" — expected an AC… SID of 34 chars.`,
     );
   }
-  if (!/^\+[1-9]\d{6,14}$/.test(phoneNumber ?? '')) {
+  if (!E164.test(phoneNumber ?? '')) {
     throw new Error(
       `EAL_API: TWILIO_PHONE_NUMBER="${phoneNumber}" — expected an E.164 number (e.g. +441234567890).`,
     );
+  }
+  // Outbound caller ID. Optional: when unset it defaults to the trunk
+  // DID (standard Twilio behaviour). When set it must be a valid E.164 —
+  // an explicit-but-malformed value fails loud rather than silently
+  // reverting to the DID. See the `callerId` field doc for the Italy
+  // (AGCOM) reason this is separable from the inbound number.
+  const callerIdRaw = env['TWILIO_CALLER_ID'];
+  let callerId = phoneNumber ?? '';
+  if (callerIdRaw !== undefined && callerIdRaw !== '') {
+    if (!E164.test(callerIdRaw)) {
+      throw new Error(
+        `EAL_API: TWILIO_CALLER_ID="${callerIdRaw}" — expected an E.164 number (e.g. +441234567890).`,
+      );
+    }
+    callerId = callerIdRaw;
   }
   const apiBaseUrl = env['TWILIO_API_BASE_URL'];
   const config: TwilioConfig = {
     accountSid: accountSid ?? '',
     authToken: authToken ?? '',
     phoneNumber: phoneNumber ?? '',
-    webhookSigningKey: webhookSigningKey ?? '',
+    callerId,
   };
   if (apiBaseUrl !== undefined && apiBaseUrl !== '') {
     if (!/^https?:\/\//.test(apiBaseUrl)) {
