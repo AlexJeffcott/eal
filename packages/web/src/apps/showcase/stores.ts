@@ -24,6 +24,9 @@ export const $showcaseDropdownOpen = $state<boolean>(false);
 export const $showcaseSelectSingle = $state<Set<string>>(new Set(['comet']));
 /** Selection for the multi-select <Select> specimen. */
 export const $showcaseSelectMulti = $state<Set<string>>(new Set(['comet', 'nebula']));
+/** Selection for the clearable single-select <Select> specimen. Starts empty
+ *  so the "Any …" clear option is the active row. */
+export const $showcaseSelectClearable = $state<Set<string>>(new Set());
 /** The live, signal-bound <Checkbox> specimen. */
 export const $showcaseChecked = $state<boolean>(true);
 /** The controlled <TextInput> specimen value. */
@@ -63,6 +66,7 @@ export function resetShowcaseStores(): void {
   $showcaseDropdownOpen.value = false;
   $showcaseSelectSingle.value = new Set(['comet']);
   $showcaseSelectMulti.value = new Set(['comet', 'nebula']);
+  $showcaseSelectClearable.value = new Set();
   $showcaseChecked.value = true;
   $showcaseText.value = 'Controlled value';
   $showcaseCommitted.value = '—';

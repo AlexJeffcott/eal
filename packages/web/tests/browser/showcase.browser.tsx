@@ -97,6 +97,48 @@ describe('showcase — a public, web-only app', () => {
     openButton.click();
     await waitFor(() => document.querySelector('[data-polly-modal-backdrop]') !== null);
   });
+
+  // polly 0.79.0 affordances: typed/validated TextInput and clearable Select.
+  test('TextInput specimens render the native type and bounds from inputType', () => {
+    visit('/showcase', { signedIn: false });
+
+    const email = document.querySelector<HTMLInputElement>('input[name="demo-email"]');
+    expect(email?.getAttribute('type')).toBe('email');
+
+    const number = document.querySelector<HTMLInputElement>('input[name="demo-number"]');
+    expect(number?.getAttribute('type')).toBe('number');
+    expect(number?.getAttribute('min')).toBe('0');
+    expect(number?.getAttribute('max')).toBe('10');
+    expect(number?.getAttribute('step')).toBe('1');
+  });
+
+  test('the error slot marks the field invalid and links its message', () => {
+    visit('/showcase', { signedIn: false });
+
+    const input = document.querySelector<HTMLInputElement>('input[name="demo-error"]');
+    expect(input?.getAttribute('aria-invalid')).toBe('true');
+
+    const describedBy = input?.getAttribute('aria-describedby');
+    expect(describedBy).not.toBeNull();
+    const message = describedBy ? document.getElementById(describedBy) : null;
+    expect(message?.getAttribute('role')).toBe('alert');
+    expect(message?.textContent).toBe('Enter a valid email address.');
+  });
+
+  test('a clearable Select offers an "Any …" row back to empty', async () => {
+    visit('/showcase', { signedIn: false });
+
+    // The clearable specimen starts empty, so its trigger shows the placeholder.
+    const trigger = document.querySelector<HTMLElement>('button[title="Any object"]');
+    if (!trigger) throw new Error('no clearable-select trigger');
+    trigger.click();
+
+    await waitFor(() => document.querySelector('[data-polly-select-clear]') !== null);
+    const clearRow = document.querySelector('[data-polly-select-clear]');
+    expect(clearRow?.getAttribute('role')).toBe('option');
+    expect(clearRow?.getAttribute('aria-selected')).toBe('true');
+    expect(clearRow?.textContent).toContain('Any object');
+  });
 });
 
 done();

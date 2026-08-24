@@ -26,6 +26,7 @@ import {
   $showcaseCommitted,
   $showcaseDropdownOpen,
   $showcaseModalOpen,
+  $showcaseSelectClearable,
   $showcaseSelectMulti,
   $showcaseSelectSingle,
   $showcaseTab,
@@ -416,7 +417,9 @@ export const SHOWCASE_SECTIONS: readonly ShowcaseSection[] = [
   {
     id: 'text-input',
     title: 'TextInput',
-    summary: 'Signal-friendly native input. A plain string is uncontrolled; a Signal is controlled.',
+    summary:
+      'Signal-friendly native input. A plain string is uncontrolled; a Signal is controlled. ' +
+      'inputType picks the native keyboard and validation; error renders a linked message.',
     render: () => (
       <>
         <Specimen caption='variant="single" with placeholder'>
@@ -424,6 +427,18 @@ export const SHOWCASE_SECTIONS: readonly ShowcaseSection[] = [
         </Specimen>
         <Specimen caption='variant="multi"'>
           <TextInput name="demo-multi" variant="multi" rows={3} placeholder="Multiple lines…" />
+        </Specimen>
+        <Specimen caption='inputType="email"'>
+          <TextInput name="demo-email" inputType="email" placeholder="ada@example.com" />
+        </Specimen>
+        <Specimen caption='inputType="number" with min/max/step'>
+          <TextInput name="demo-number" inputType="number" min={0} max={10} step={1} value="5" />
+        </Specimen>
+        <Specimen caption="error — linked message, marks invalid">
+          <TextInput name="demo-error" value="not-an-email" error="Enter a valid email address." />
+        </Specimen>
+        <Specimen caption="title — native hover tooltip">
+          <TextInput name="demo-title" placeholder="Hover me" title="A hint beyond the placeholder." />
         </Specimen>
         <Specimen caption="invalid">
           <TextInput name="demo-invalid" value="not-an-email" invalid />
@@ -443,7 +458,9 @@ export const SHOWCASE_SECTIONS: readonly ShowcaseSection[] = [
   {
     id: 'select',
     title: 'Select',
-    summary: 'Dropdown of options bound to a Signal<Set>. Single replaces, multi toggles.',
+    summary:
+      'Dropdown of options bound to a Signal<Set>. Single replaces, multi toggles. ' +
+      'clearable prepends an "Any …" row so an optional filter has a path back to unset.',
     render: () => (
       <>
         <Specimen caption="single-select">
@@ -455,6 +472,19 @@ export const SHOWCASE_SECTIONS: readonly ShowcaseSection[] = [
               { value: 'quasar', label: 'Quasar' },
             ]}
             selected={$showcaseSelectSingle}
+          />
+        </Specimen>
+        <Specimen caption="clearable — single-select with an “Any …” row">
+          <Select
+            label="Filter by"
+            placeholder="Any object"
+            clearable
+            options={[
+              { value: 'comet', label: 'Comet' },
+              { value: 'nebula', label: 'Nebula' },
+              { value: 'quasar', label: 'Quasar' },
+            ]}
+            selected={$showcaseSelectClearable}
           />
         </Specimen>
         <Specimen caption="multiSelect">
