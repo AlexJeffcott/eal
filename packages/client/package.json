@@ -10,10 +10,9 @@
   "dependencies": {
     "@elysiajs/eden": "1.4.9",
     "@eal/api": "workspace:*",
-    "@simplewebauthn/browser": "11.0.0",
-    "@simplewebauthn/types": "11.0.0"
+    "@simplewebauthn/browser": "13.3.0"
   },
   "peerDependencies": {
-    "elysia": "1.4.28"
+    "elysia": "1.4.29"
   }
 }

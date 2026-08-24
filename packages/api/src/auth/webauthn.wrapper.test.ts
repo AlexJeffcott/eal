@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import type {
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
-} from '@simplewebauthn/types';
+} from '@simplewebauthn/server';
 import { createDb, type DatabaseClient } from '../db/client.ts';
 import { applySchema } from '../db/schema.ts';
 import { createUsersRepo } from '../db/repos/users.ts';

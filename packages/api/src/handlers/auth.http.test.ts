@@ -2,7 +2,7 @@ import { describe, expect, test, beforeEach } from 'bun:test';
 import { createDb, type DatabaseClient } from '../db/client.ts';
 import { applySchema } from '../db/schema.ts';
 import { createTestApp } from '../test-helpers/create-test-app.ts';
-import type { PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/types';
+import type { PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/server';
 
 function readErrorField(parsed: unknown): string | undefined {
   if (typeof parsed !== 'object' || parsed === null) return undefined;

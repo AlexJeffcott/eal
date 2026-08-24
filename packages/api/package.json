@@ -10,9 +10,8 @@
   },
   "dependencies": {
     "@eal/shared": "workspace:*",
-    "@simplewebauthn/server": "11.0.0",
-    "@simplewebauthn/types": "11.0.0",
-    "elysia": "1.4.28",
+    "@simplewebauthn/server": "13.3.2",
+    "elysia": "1.4.29",
     "web-push": "^3.6.7"
   }
 }

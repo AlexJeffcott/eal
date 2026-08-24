@@ -8,7 +8,7 @@ import type {
   AuthenticatorTransportFuture,
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
-} from '@simplewebauthn/types';
+} from '@simplewebauthn/server';
 import type { DatabaseClient } from '../db/client.ts';
 import { createCredentialsRepo } from '../db/repos/credentials.ts';
 import { createUsersRepo } from '../db/repos/users.ts';

@@ -3,7 +3,7 @@ import type {
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
   RegistrationResponseJSON,
-} from '@simplewebauthn/types';
+} from '@simplewebauthn/server';
 import type { WebAuthnAdapter } from '../auth/webauthn.ts';
 import type { SessionsRepo } from '../auth/sessions.ts';
 import type { Principal } from '../auth/principals.ts';

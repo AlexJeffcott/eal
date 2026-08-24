@@ -2,7 +2,7 @@ import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 import type {
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
-} from '@simplewebauthn/types';
+} from '@simplewebauthn/browser';
 import type {
   CliPairClaimInput,
   CliPairPollResult,

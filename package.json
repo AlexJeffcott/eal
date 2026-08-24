@@ -12,6 +12,7 @@
     "verify": "bun packages/devctl/index.ts verify",
     "verify:estimate": "bunx polly verify --estimate",
     "verify:validate": "bunx polly verify --validate",
+    "gallery": "polly gallery",
     "mutation": "stryker run",
     "mutation:specs": "stryker run stryker/specs.conf.json",
     "mutation:shared": "stryker run stryker/shared.conf.json",
@@ -24,10 +25,10 @@
   "devDependencies": {
     "@eal/shared": "workspace:*",
     "@stryker-mutator/core": "^9.6.1",
-    "@types/bun": "1.3.13",
+    "@types/bun": "1.4.0",
     "@types/web-push": "^3.6.4",
-    "fast-check": "^4.8.0",
-    "puppeteer": "^25.0.4",
+    "fast-check": "^4.9.0",
+    "puppeteer": "^25.8.0",
     "stryker-mutator-bun-runner": "0.4.0",
     "typescript": "6.0.3"
   },
@@ -36,10 +37,10 @@
   },
   "catalog": {
     "typescript": "6.0.3",
-    "@types/bun": "1.3.13"
+    "@types/bun": "1.4.0"
   },
   "dependencies": {
-    "@automerge/automerge": "^3.2.6",
-    "@fairfox/polly": "0.81.0"
+    "@automerge/automerge": "^3.4.1",
+    "@fairfox/polly": "0.85.1"
   }
 }
