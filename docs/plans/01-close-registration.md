@@ -116,7 +116,9 @@ curl -si -X POST https://eal.fly.dev/public/auth/register/options \
 The curl above reads `HTTP/2 403`, and you can still register a new device with
 the code in hand.
 
-## Not measured
+## Checked after the deploy
 
-I have not read the deployed database. Before shipping, list the users on the
-live instance and confirm no stranger already holds an account.
+The door was open for three months, so the gate only helps if nobody had
+already walked in. The production `users` table holds two rows — `Alex` and
+`Alex 2`, both created 26 May 2026 — and two credentials. No stranger holds an
+account.
