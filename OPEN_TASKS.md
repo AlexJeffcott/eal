@@ -12,15 +12,20 @@ rather than a commit belongs in `~/projects/TODO.md`.
 failure. The pre-push hook runs `devctl check` and then that command; the
 pre-commit hook runs `devctl check` and the unit tier only.
 
-| Command | Passing count, 2026-08-24 | Runs in the pre-push sweep |
+| Command | Passing count, 2026-08-25 | Runs in the pre-push sweep |
 |---|---|---|
 | `bun devctl check` | tsc + 7 lint scripts | yes |
-| `bun devctl test unit` | 1047 tests, 97 files; coverage ok, 128 files, 28 exempt | yes |
-| `bun devctl test browser` | 66 tests | yes |
-| `bun devctl test e2e` | 24 Playwright tests | yes |
-| `bun devctl test multi` | 18 `scripts/e2e-*.ts`, each exiting 0 | yes |
+| `bun devctl test unit` | 1079 tests, 98 files; coverage ok, 129 files, 27 exempt | yes |
+| `bun devctl test browser` | 68 tests | yes |
+| `bun devctl test e2e` | 38 Playwright tests, 2 projects | yes |
+| `bun devctl test multi` | 20 `scripts/e2e-*.ts`, each exiting 0 | yes |
 | `bun devctl test mutation` | see below — not part of `all` | no |
 | `bun devctl verify` | TLC model checking; needs Docker | no |
+
+The multi tier now includes `e2e-registration-closed.ts` (the registration
+gate) and `e2e-tasks-reconnect.ts` (the WS drop and resync). The latter drops a
+live socket from inside the page, so it fails if the reconnect handler is
+removed — checked, not assumed.
 
 Every tier runs with the developer's own `.env` in place and needs no
 environment override. Tests take their config explicitly: `createTestApp`
@@ -28,6 +33,71 @@ defaults `env` to `{}`, and `bootApi`, the Playwright `webServer` and the
 Litestream entrypoint each pin `TWILIO_ENABLED=false`. Keep it that way — do
 not add a `[test] preload` to `bunfig.toml`, which was tried and breaks the
 polly browser runner.
+
+## Phone-first daily use
+
+The target: a todo app used every day from the phone and the laptop, one
+household member for now. Most of the stack is already there. The app is
+deployed and healthy at `https://eal.fly.dev`, it installs as a PWA, tasks
+carry four views, composable filters, subtasks, assignees, dates and WS
+broadcast, and the assistant path runs web chat → WS relay → `eal agent` →
+`claude` → `eal mcp` → six task tools.
+
+Seven items stand between that and daily use. Each has a plan under
+`docs/plans/`. Sizes are estimates and are not measured.
+
+**01, 02, 03 and 07 are the smallest set that makes both devices usable** —
+about 3 to 5 days. **04** is the item that keeps the app in use after that.
+
+- [>] **01 — Close registration.** Registration was open to anyone who found
+      the hostname, and `authorize()` grants every principal every action on
+      every task (`auth/policy.ts:29`). `EAL_INVITE_CODE` now gates it and
+      fails closed when unset (`packages/api/src/auth/registration.ts`, landed
+      2026-08-25). **Still open: `fly secrets set EAL_INVITE_CODE=…`, redeploy,
+      and confirm `https://eal.fly.dev` answers 403 to an uninvited POST.**
+      Until that runs the deployed instance is unchanged. →
+      `docs/plans/01-close-registration.md`
+- [x] **02 — Reconnect and resync the browser WS.** Done 2026-08-25. The
+      browser socket had no `close` listener, `$wsState` was written
+      `'connected'` once, and `seedSessionData` ran only at boot — a phone that
+      suspended its tab silently stopped updating. The client now reconnects
+      with backoff, re-subscribes, and the shell re-seeds on every reconnect;
+      `visibilitychange` and `online` skip the backoff. Proved by
+      `scripts/e2e-tasks-reconnect.ts`, which fails without the fix. →
+      `docs/plans/02-ws-reconnect-resync.md`
+- [ ] **03 — Keep the assistant online.** The relay answers `No assistant is
+      online` when no `eal agent` WS is connected (`server-factory.ts:434`), so
+      the assistant dies with the laptop lid. Needs a decision — always-on
+      machine at home (recommended) against `claude` credentials in the Fly
+      image — then a service unit and an availability signal in the UI. →
+      `docs/plans/03-always-on-agent.md` · decision + ~1 day
+- [ ] **04 — Due-date reminders.** Push is configured
+      (`handlers/push.http.ts:36`) but the only sender is the missed-call wake
+      path, subscriptions are stored against a family-phone device
+      (`apps/family-phone.ts:112`), and `due_at` triggers nothing. Needs a
+      user-level subscription table, the two subscribe routes that
+      `push.http.ts`'s own header comment already promises, and a 60-second
+      scan in the api process. → `docs/plans/04-due-date-reminders.md` ·
+      ~2–3 days
+- [ ] **05 — Recurring tasks.** No recurrence column, route field or control.
+      Deferred deliberately at v1 (`docs/tasks-v1.md`). A small fixed rule set
+      with a `basis: 'due' | 'completed'` anchor, not RFC 5545. →
+      `docs/plans/05-recurring-tasks.md` · ~2–4 days
+- [ ] **06 — Offline shell and capture.** The service worker caches nothing by
+      explicit decision (`spa.ts`, `serviceWorker` source), so no signal means a
+      blank page and no capture. Network-first precache with a kill switch,
+      then an IndexedDB outbox. → `docs/plans/06-offline-capture.md` ·
+      ~3–5 days
+- [x] **07 — Prove the tasks surface at 350px.** Done 2026-08-25. The tasks
+      panel, the expanded detail, the filter builder and the assistant sheet
+      each have a 350px case, and a second Playwright project (`mobile-350`,
+      touch, 350×750) runs them on a mobile profile. Nothing overflowed; the
+      touch targets did — complete 38×27, expand 209×24, quick-add 64×37, all
+      now ≥44px. → `docs/plans/07-mobile-viewport-proof.md`
+
+Each plan names the verification artefact it must commit under `scripts/`,
+per the rule in `~/projects/CLAUDE.md`: a green test tier is not proof that a
+user-facing feature works.
 
 ## Testing
 
