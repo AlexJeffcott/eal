@@ -1,0 +1,38 @@
+# eal agent — systemd unit for a Linux always-on machine.
+#
+# The assistant answers only while an `eal agent` process holds a WebSocket to
+# the api, so this worker's uptime IS the assistant's availability. It makes
+# only outbound connections: no open ports, no static address.
+#
+# Install as a user unit, so it runs with the same `claude` login the person
+# uses:
+#   cp deploy/eal-agent.service ~/.config/systemd/user/
+#   # edit the paths below first
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now eal-agent
+#   loginctl enable-linger $USER      # keeps it running with nobody logged in
+#
+# Read the log:  journalctl --user -u eal-agent -f
+#
+# The worker needs a paired eal token (`eal auth pair --label=agent-<hostname>`)
+# and a logged-in `claude` CLI on this machine.
+
+[Unit]
+Description=eal assistant worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/REPLACE/WITH/PATH/TO/eal
+ExecStart=/usr/local/bin/bun packages/cli/src/index.ts agent --api-url=https://eal.fly.dev
+
+# Restart on every exit, whatever the reason. The worker has its own reconnect
+# backoff for a socket that merely drops; this covers the process dying.
+Restart=always
+# Do not restart faster than this: a worker that fails at startup (no token, no
+# `claude`) would otherwise spin as fast as systemd can fork it.
+RestartSec=30
+
+[Install]
+WantedBy=default.target

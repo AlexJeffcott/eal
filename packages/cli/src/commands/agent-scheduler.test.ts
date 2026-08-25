@@ -51,6 +51,8 @@ function makeFakeClient(state: FakeClientState): EalClient {
     connectionState: notImplemented('connectionState'),
     subscribeConnectionState: notImplemented('subscribeConnectionState'),
     reconnectNow: notImplemented('reconnectNow'),
+    getAgentStatus: notImplemented('getAgentStatus'),
+    subscribeAgentStatus: notImplemented('subscribeAgentStatus'),
     registerPasskey: notImplemented('registerPasskey'),
     signInWithPasskey: notImplemented('signInWithPasskey'),
     signOut: notImplemented('signOut'),

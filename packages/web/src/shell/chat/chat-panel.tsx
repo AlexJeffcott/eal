@@ -1,5 +1,6 @@
 import { Badge, Button, Layout, Modal, Surface, Text, TextInput } from '@fairfox/polly/ui';
 import {
+  $agentOnline,
   $chatBusy,
   $chatError,
   $chatInput,
@@ -40,6 +41,7 @@ export function ChatPanel() {
   const streaming = $chatStreaming.value;
   const busy = $chatBusy.value;
   const error = $chatError.value;
+  const agentOnline = $agentOnline.value;
   const hasContent = messages.length > 0 || streaming !== null;
 
   return (
@@ -109,19 +111,35 @@ export function ChatPanel() {
                 <Badge variant="danger">{error}</Badge>
               </span>
             ) : null}
+            {/* The relay routes chat to a connected `eal agent` process. With
+                none, a sent message comes back as an error — say so before the
+                person types, not after. */}
+            {!agentOnline ? (
+              <span data-chat-offline>
+                <Badge variant="warning">
+                  No assistant is online. Start `eal agent` on a paired device.
+                </Badge>
+              </span>
+            ) : null}
             <div data-chat-input-form>
               <Layout columns="1fr auto" gap="var(--polly-space-sm)" alignItems="center">
                 <TextInput
                   id="chat-input"
                   name="text"
                   value={$chatInput}
-                  placeholder="Message the assistant and press Enter"
+                  placeholder={
+                    agentOnline
+                      ? 'Message the assistant and press Enter'
+                      : 'The assistant is offline'
+                  }
+                  disabled={!agentOnline}
                 />
                 <Button
                   tier="primary"
                   color="info"
                   data-action="chat:send"
                   label={busy ? 'Sending…' : 'Send'}
+                  disabled={!agentOnline}
                 />
               </Layout>
             </div>

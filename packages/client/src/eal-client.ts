@@ -81,6 +81,7 @@ interface IncomingWsMessage {
   requestId?: unknown;
   conversation?: unknown;
   claudeSessionId?: unknown;
+  online?: unknown;
 }
 
 function isMessageShape(value: unknown): value is Message {
@@ -333,6 +334,14 @@ export interface EalClient {
   sendChat(text: string): void;
   /** Fires for chat:user, chat:chunk, chat:done, chat:error. */
   subscribeChatEvents(handler: (event: ChatBrowserEvent) => void): () => void;
+  /**
+   * Whether an `eal agent` worker is connected to the relay right now. Chat
+   * has nowhere to go without one, so the panel reads this before the person
+   * types rather than after they send.
+   */
+  getAgentStatus(): Promise<boolean>;
+  /** Fires whenever the last agent disconnects or the first one connects. */
+  subscribeAgentStatus(handler: (online: boolean) => void): () => void;
 
   // ── Chat (agent side) ────────────────────────────────────────────────────
   /**
@@ -390,6 +399,7 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
 
   const taskEventSubscribers = new Set<(event: TaskEvent) => void>();
   const chatEventSubscribers = new Set<(event: ChatBrowserEvent) => void>();
+  const agentStatusSubscribers = new Set<(online: boolean) => void>();
   let agentRequestHandler: ((request: ChatAgentRequest) => void) | null = null;
 
   function setToken(token: string | null): void {
@@ -402,6 +412,10 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
     try {
       msg = JSON.parse(raw);
     } catch {
+      return;
+    }
+    if (msg.type === 'agent:status' && typeof msg.online === 'boolean') {
+      for (const h of agentStatusSubscribers) h(msg.online);
       return;
     }
     const taskEvent = parseTaskEvent(msg);
@@ -709,6 +723,16 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
         throw new Error('sendChat: not connected');
       }
       socket.send(JSON.stringify({ type: 'chat:send', text }));
+    },
+
+    async getAgentStatus(): Promise<boolean> {
+      const result = await getJsonOrThrow<{ online: boolean }>('/api/v1/agent/status');
+      return result.online;
+    },
+
+    subscribeAgentStatus(handler: (online: boolean) => void): () => void {
+      agentStatusSubscribers.add(handler);
+      return () => agentStatusSubscribers.delete(handler);
     },
 
     subscribeChatEvents(handler: (event: ChatBrowserEvent) => void): () => void {

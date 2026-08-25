@@ -8,6 +8,7 @@ import type { Message } from '@eal/client';
 import { App } from '../../src/shell/app.tsx';
 import { createStores, resetStoresForTest } from '../../src/stores.ts';
 import {
+  $agentOnline,
   $chatBusy,
   $chatError,
   $chatInput,
@@ -66,6 +67,10 @@ function signedIn(): void {
         return;
     }
   });
+  // The agent-status handler — the same one main.tsx installs in production.
+  mock.subscribeAgentStatus((online) => {
+    $agentOnline.value = online;
+  });
   $currentUser.value = { userId: 1, displayName: 'Alex' };
   render(<App />, root);
 }
@@ -82,6 +87,37 @@ describe('ChatPanel (browser)', () => {
     click('[data-action="chat:toggle"]');
     await waitFor(() => document.querySelector('[data-chat-input-form]') !== null);
     expect(document.querySelector('[data-chat-empty]')).not.toBeNull();
+  });
+
+  test('with no assistant online the composer is disabled and says why', async () => {
+    // The relay routes chat to a connected `eal agent` process; with none, a
+    // sent message comes back as an error the person reads only after typing.
+    signedIn();
+    mock.emitAgentStatus(false);
+    click('[data-action="chat:toggle"]');
+    await waitFor(() => document.querySelector('[data-chat-input-form]') !== null);
+
+    const notice = document.querySelector('[data-chat-offline]');
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent ?? '').toContain('eal agent');
+    expect(
+      document.querySelector<HTMLButtonElement>('[data-action="chat:send"]')?.disabled,
+    ).toBe(true);
+    expect(document.querySelector<HTMLInputElement>('#chat-input')?.disabled).toBe(true);
+  });
+
+  test('the composer recovers on its own when an assistant connects', async () => {
+    // The machine at home comes back. No reload, no re-open of the sheet.
+    signedIn();
+    mock.emitAgentStatus(false);
+    click('[data-action="chat:toggle"]');
+    await waitFor(() => document.querySelector('[data-chat-offline]') !== null);
+
+    mock.emitAgentStatus(true);
+    await waitFor(() => document.querySelector('[data-chat-offline]') === null);
+    expect(
+      document.querySelector<HTMLButtonElement>('[data-action="chat:send"]')?.disabled,
+    ).toBe(false);
   });
 
   test('sending a message records it, clears the input, and enters the busy state', async () => {

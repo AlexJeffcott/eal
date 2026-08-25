@@ -145,6 +145,13 @@ async function seedSessionData(stores: AppStores): Promise<void> {
     stores.$householdUsers.value = [];
   }
   try {
+    stores.$agentOnline.value = await stores.client.getAgentStatus();
+  } catch {
+    // A failed read must not claim the assistant is down: the WS announcement
+    // corrects this the moment an agent connects or the last one leaves.
+    stores.$agentOnline.value = true;
+  }
+  try {
     stores.$devices.value = await stores.client.listFamilyPhoneDevices();
   } catch (err) {
     stores.$devicesError.value = err instanceof Error ? err.message : String(err);
@@ -278,6 +285,9 @@ async function bootstrap(): Promise<void> {
 
   client.subscribeTaskEvents(applyTaskEvent);
   client.subscribeChatEvents(applyChatEvent);
+  client.subscribeAgentStatus((online) => {
+    stores.$agentOnline.value = online;
+  });
 
   // The shell router and the tasks filter↔URL bridge. `installTaskUrlSync` is
   // route-aware — it stays dormant off `/tasks`, so the cli-pair page keeps its

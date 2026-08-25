@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  eal agent — launchd unit for the always-on machine at home.
+
+  The assistant answers only while an `eal agent` process holds a WebSocket to
+  the api, so this worker's uptime IS the assistant's availability. It makes
+  only outbound connections, so the machine needs no open ports and no static
+  address.
+
+  Install:
+    cp deploy/com.eal.agent.plist ~/Library/LaunchAgents/
+    # edit the three paths below first
+    launchctl load -w ~/Library/LaunchAgents/com.eal.agent.plist
+
+  Read the log:   tail -f ~/Library/Logs/eal-agent.log
+  Stop it:        launchctl unload -w ~/Library/LaunchAgents/com.eal.agent.plist
+
+  `caffeinate -s` wraps the command so the machine does not sleep while the
+  worker runs. On a Mac that is always on mains power, `sudo pmset -a sleep 0`
+  is the blunter alternative; pick one and record which in docs/deploy.md.
+
+  The worker needs two things on this machine: a paired eal token
+  (`eal auth pair --label=agent-<hostname>`) and a logged-in `claude` CLI.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.eal.agent</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-s</string>
+    <string>/opt/homebrew/bin/bun</string>
+    <string>/REPLACE/WITH/PATH/TO/eal/packages/cli/src/index.ts</string>
+    <string>agent</string>
+    <string>--api-url=https://eal.fly.dev</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/REPLACE/WITH/PATH/TO/eal</string>
+
+  <!-- Start at login and restart whenever the process exits, whatever the
+       reason: a crash, a `claude` session that ends, a lost network. The
+       worker has its own reconnect backoff for a socket that merely drops. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Do not restart faster than this. Without it, a worker that fails at
+       startup (no token, no `claude`) spins as fast as launchd can fork. -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>/REPLACE/WITH/HOME/Library/Logs/eal-agent.log</string>
+  <key>StandardErrorPath</key>
+  <string>/REPLACE/WITH/HOME/Library/Logs/eal-agent.log</string>
+</dict>
+</plist>

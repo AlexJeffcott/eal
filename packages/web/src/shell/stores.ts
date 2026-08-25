@@ -41,6 +41,13 @@ export const $chatInput = $state<string>('');
 export const $chatStreaming = $state<string | null>(null);
 export const $chatBusy = $state<boolean>(false);
 export const $chatError = $state<string | null>(null);
+/**
+ * Whether an `eal agent` worker is connected to the relay. Chat has nowhere to
+ * go without one. Starts optimistic: the seed and the WS both correct it, and
+ * a moment of "offline" on every page load would be worse than a moment of
+ * silence.
+ */
+export const $agentOnline = $state<boolean>(true);
 
 export interface ShellStores {
   $currentUser: typeof $currentUser;
@@ -60,6 +67,7 @@ export interface ShellStores {
   $chatStreaming: typeof $chatStreaming;
   $chatBusy: typeof $chatBusy;
   $chatError: typeof $chatError;
+  $agentOnline: typeof $agentOnline;
 }
 
 export function createShellStores(): ShellStores {
@@ -81,6 +89,7 @@ export function createShellStores(): ShellStores {
     $chatStreaming,
     $chatBusy,
     $chatError,
+    $agentOnline,
   };
 }
 
@@ -102,4 +111,5 @@ export function resetShellStores(): void {
   $chatStreaming.value = null;
   $chatBusy.value = false;
   $chatError.value = null;
+  $agentOnline.value = true;
 }

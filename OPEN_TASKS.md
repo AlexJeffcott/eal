@@ -16,14 +16,15 @@ pre-commit hook runs `devctl check` and the unit tier only.
 |---|---|---|
 | `bun devctl check` | tsc + 7 lint scripts | yes |
 | `bun devctl test unit` | 1079 tests, 98 files; coverage ok, 129 files, 27 exempt | yes |
-| `bun devctl test browser` | 68 tests | yes |
+| `bun devctl test browser` | 70 tests | yes |
 | `bun devctl test e2e` | 38 Playwright tests, 2 projects | yes |
-| `bun devctl test multi` | 20 `scripts/e2e-*.ts`, each exiting 0 | yes |
+| `bun devctl test multi` | 21 `scripts/e2e-*.ts`, each exiting 0 | yes |
 | `bun devctl test mutation` | see below — not part of `all` | no |
 | `bun devctl verify` | TLC model checking; needs Docker | no |
 
 The multi tier now includes `e2e-registration-closed.ts` (the registration
-gate) and `e2e-tasks-reconnect.ts` (the WS drop and resync). The latter drops a
+gate), `e2e-tasks-reconnect.ts` (the WS drop and resync) and
+`e2e-agent-offline.ts` (the assistant-availability signal). The latter drops a
 live socket from inside the page, so it fails if the reconnect handler is
 removed — checked, not assumed.
 
@@ -49,8 +50,8 @@ Seven items stand between that and daily use. Each has a plan under
 **01, 02, 03 and 07 are the smallest set that makes both devices usable** —
 about 3 to 5 days. **04** is the item that keeps the app in use after that.
 
-01, 02 and 07 are done and deployed as of 2026-08-25. **03 is next and needs a
-decision, not a commit.**
+01, 02 and 07 are done and deployed as of 2026-08-25. 03 is decided and built;
+what remains there is a machine to install it on.
 
 - [x] **01 — Close registration.** Done and deployed 2026-08-25. Registration
       was open to anyone who found the hostname, and `authorize()` grants every
@@ -67,12 +68,12 @@ decision, not a commit.**
       `visibilitychange` and `online` skip the backoff. Proved by
       `scripts/e2e-tasks-reconnect.ts`, which fails without the fix. →
       `docs/plans/02-ws-reconnect-resync.md`
-- [ ] **03 — Keep the assistant online.** The relay answers `No assistant is
-      online` when no `eal agent` WS is connected (`server-factory.ts:434`), so
-      the assistant dies with the laptop lid. Needs a decision — always-on
-      machine at home (recommended) against `claude` credentials in the Fly
-      image — then a service unit and an availability signal in the UI. →
-      `docs/plans/03-always-on-agent.md` · decision + ~1 day
+- [>] **03 — Keep the assistant online.** Decided 2026-08-25: the always-on
+      machine at home. The code is built — `agent:status` over the WS, `GET
+      /api/v1/agent/status`, a composer that disables itself with the reason
+      and recovers on its own, and unit templates in `deploy/`. Proved by
+      `scripts/e2e-agent-offline.ts`. **Still open: pick the machine, pair it,
+      install the unit, stop it sleeping.** → `docs/plans/03-always-on-agent.md`
 - [ ] **04 — Due-date reminders.** Push is configured
       (`handlers/push.http.ts:36`) but the only sender is the missed-call wake
       path, subscriptions are stored against a family-phone device
@@ -113,7 +114,11 @@ user-facing feature works.
 - [!] **`chat.browser.tsx` flakes.** It intermittently reports nothing:
       `timed out after 60000ms waiting for __pollyReport`. Measured on an idle
       machine at about 1 run in 6 for that file alone, and far more often under
-      load; `tasks.browser.tsx` ran 3 of 3 clean. In a failing run the page
+      load — on 2026-08-25 it read **4 failures in 6 consecutive runs**, on a
+      machine that had been running browser harnesses all day. Whether that is
+      load alone or a change in the bundle is not established. When the file
+      does report, every test in it passes (70 of 70).
+      `tasks.browser.tsx` ran 3 of 3 clean. In a failing run the page
       emits no console output, no page error and no failed request, so the
       inlined `<script type="module">` never executes. Adding any `console.log`
       to the file makes it pass. It fails at the same rate on polly 0.82.1, so

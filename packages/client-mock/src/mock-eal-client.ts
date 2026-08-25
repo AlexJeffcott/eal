@@ -44,6 +44,11 @@ export interface MockEalClient extends EalClient {
   emitConnectionState(state: WsConnectionState): void;
   /** Test hook: how many times the shell asked for an immediate reconnect. */
   peekReconnectNowCalls(): number;
+  /**
+   * Test hook: set whether an `eal agent` worker is connected, and drive every
+   * subscribeAgentStatus handler. Starts true.
+   */
+  emitAgentStatus(online: boolean): void;
   /** Test hook: set the current user that getCurrentUser will return. */
   setCurrentUser(user: CurrentUser | null): void;
   /** Test hook: seed the household roster that listUsers will return. */
@@ -167,6 +172,9 @@ export function createMockEalClient(): MockEalClient {
   const connectionStateSubscribers = new Set<(state: WsConnectionState) => void>();
   let connectionState: WsConnectionState = 'idle';
   let reconnectNowCalls = 0;
+  const agentStatusSubscribers = new Set<(online: boolean) => void>();
+  /** Mocks an assistant that is up, which is the ordinary case a test wants. */
+  let agentOnline = true;
 
   function emitConnectionState(state: WsConnectionState): void {
     if (state === connectionState) return;
@@ -231,6 +239,20 @@ export function createMockEalClient(): MockEalClient {
 
     reconnectNow(): void {
       reconnectNowCalls += 1;
+    },
+
+    async getAgentStatus(): Promise<boolean> {
+      return agentOnline;
+    },
+
+    subscribeAgentStatus(handler: (online: boolean) => void): () => void {
+      agentStatusSubscribers.add(handler);
+      return () => agentStatusSubscribers.delete(handler);
+    },
+
+    emitAgentStatus(online: boolean): void {
+      agentOnline = online;
+      for (const h of agentStatusSubscribers) h(online);
     },
 
     emitConnectionState(state: WsConnectionState): void {
@@ -842,6 +864,7 @@ type TestHookKeys =
   | 'emitTaskEvent'
   | 'emitConnectionState'
   | 'peekReconnectNowCalls'
+  | 'emitAgentStatus'
   | 'setCurrentUser'
   | 'seedUsers'
   | 'mockCliPair'

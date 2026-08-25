@@ -169,6 +169,20 @@ export async function createAppInternal(
     const target = connections.get(wsId);
     if (target) target.send(JSON.stringify(payload));
   }
+  /**
+   * Tell every browser whether an assistant is reachable.
+   *
+   * Chat is routed to a connected `eal agent` process; with none, a request
+   * comes back as an error the person only sees after typing and sending. The
+   * panel can say so first. Sent to browser connections directly rather than
+   * over a topic — there is one bit of state and no subscription to manage.
+   */
+  function broadcastAgentStatus(): void {
+    const message = JSON.stringify({ type: 'agent:status', online: agents.size > 0 });
+    for (const [id, ws] of connections) {
+      if (wsRoles.get(id) === 'browser') ws.send(message);
+    }
+  }
   function handleClose(ws: WsLike): void {
     for (const [topic, map] of subscribers) {
       map.delete(ws.id);
@@ -190,6 +204,7 @@ export async function createAppInternal(
           pendingChats.delete(requestId);
         }
       }
+      if (agents.size === 0) broadcastAgentStatus();
     }
     for (const handler of appWsHandlers.values()) {
       handler.onClose?.(ws);
@@ -312,7 +327,11 @@ export async function createAppInternal(
     .use(auth.authed)
     .use(messages)
     .use(users)
-    .use(push);
+    .use(push)
+    // The same bit the WS announces, for a page that has just loaded and has
+    // heard no announcement yet. Lives here rather than in the agent app: the
+    // registry of connected agents belongs to this factory, not to a DB table.
+    .get('/api/v1/agent/status', () => ({ online: agents.size > 0 }));
   for (const app of apps) {
     builder = builder.use(app.routes(apiCtx));
   }
@@ -374,7 +393,11 @@ export async function createAppInternal(
             wsPrincipals.set(ws.id, candidate);
             wsRoles.set(ws.id, role);
             connections.set(ws.id, ws);
-            if (role === 'agent') agents.set(ws.id, ws);
+            if (role === 'agent') {
+              const wasOffline = agents.size === 0;
+              agents.set(ws.id, ws);
+              if (wasOffline) broadcastAgentStatus();
+            }
             ws.send(JSON.stringify({
               type: 'auth:ok',
               role,

@@ -1,6 +1,28 @@
 # Plan 03 — Keep the assistant online
 
-Status: not started. Needs one decision from you before any code.
+Status: **decided 2026-08-25 — the always-on machine at home.** The code half
+is built; the machine half is yours to install.
+
+Built:
+
+| Piece | Where |
+|---|---|
+| launchd unit, `caffeinate -s`, KeepAlive, 30s throttle | `deploy/com.eal.agent.plist` |
+| systemd user unit, `Restart=always`, `RestartSec=30` | `deploy/eal-agent.service` |
+| `agent:status` announced to every browser on the first connect and the last disconnect | `packages/api/src/server-factory.ts` |
+| `GET /api/v1/agent/status` for a page that has just loaded | same |
+| `getAgentStatus()` / `subscribeAgentStatus()` | `packages/client/src/eal-client.ts`, mirrored in the mock |
+| Composer disabled with the reason, recovering on its own | `packages/web/src/shell/chat/chat-panel.tsx` |
+| 2 browser tests | `packages/web/tests/browser/chat.browser.tsx` |
+| Verification artefact | `scripts/e2e-agent-offline.ts` |
+
+Left to do, on the machine you pick:
+
+1. `eal auth pair --label=agent-<hostname>` on it.
+2. Copy the unit template, replace the three paths, load it.
+3. Stop the machine sleeping — `caffeinate -s` is already in the plist; on a
+   mains-powered Mac `sudo pmset -a sleep 0` is the blunter alternative.
+4. Watch the first week's log for a `claude` session that expires.
 
 ## The reading
 
