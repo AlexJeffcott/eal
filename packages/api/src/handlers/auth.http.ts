@@ -139,13 +139,18 @@ export function authHttpRoutes(ctx: AuthRoutesContext) {
       },
       { body: t.Object({ response: t.Any() }) },
     )
-    .post('/cli-pair/start', ({ request }) => {
+    .post('/cli-pair/start', () => {
       // The verification URL the CLI prints needs an origin the user can
-      // actually open. We derive it from the incoming request rather than
-      // taking it from the body so the CLI cannot pin it.
-      const url = new URL(request.url);
-      const baseUrl = `${url.protocol}//${url.host}`;
-      const result = startCore(cliPairDeps, { baseUrl });
+      // actually open, and it carries a single-use pairing code. It comes from
+      // the configured public origin (`EAL_ORIGIN`, the same value the
+      // WebAuthn RP is derived from) — never from the request.
+      //
+      // Deriving it from the request printed `http://eal.fly.dev/…` in
+      // production: the platform proxy terminates TLS and forwards plain HTTP,
+      // so `url.protocol` inside the container reads `http:`. The link worked
+      // only because the proxy redirects, and a client that does not follow
+      // redirects would have sent the code in clear.
+      const result = startCore(cliPairDeps, { baseUrl: ctx.rp.origin });
       return {
         user_code: result.userCode,
         device_code: result.deviceCode,

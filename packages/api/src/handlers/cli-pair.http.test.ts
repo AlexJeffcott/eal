@@ -124,14 +124,19 @@ describe('cli-pair HTTP routes', () => {
     expect(second.status).toBe(409);
   });
 
-  test('verification_url uses the request origin (not a hard-coded base)', async () => {
+  test('verification_url uses the configured origin, not the request', async () => {
+    // The URL carries a single-use pairing code, so its scheme is not
+    // cosmetic. Deriving it from the request printed `http://eal.fly.dev/…`
+    // in production, because the platform proxy terminates TLS and forwards
+    // plain HTTP. The configured origin (EAL_ORIGIN, and the WebAuthn RP)
+    // is the only value a proxy cannot rewrite.
     const app = await createTestApp(db);
-    const res = await app.handle(new Request('https://eal.example.com:8443/public/auth/cli-pair/start', {
+    const res = await app.handle(new Request('http://eal.example.com:8443/public/auth/cli-pair/start', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', host: 'attacker.example' },
       body: '{}',
     }));
     const body = (await res.json()) as StartBody;
-    expect(body.verification_url.startsWith('https://eal.example.com:8443/public/auth/cli-pair?code=')).toBe(true);
+    expect(body.verification_url.startsWith('https://localhost:4321/public/auth/cli-pair?code=')).toBe(true);
   });
 });
