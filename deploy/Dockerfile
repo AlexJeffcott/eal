@@ -30,7 +30,15 @@ COPY --from=litestream/litestream:0.3.13 /usr/local/bin/litestream /usr/local/bi
 # tsconfig.json is required at runtime: the server builds the SPA via Bun.build
 # at boot, which reads `jsxImportSource: "preact"` from it. Without it the build
 # falls back to React's JSX runtime and fails to resolve.
+#
+# `patches/` must be present even under `--production`: `patchedDependencies`
+# in package.json is resolved before dev/production filtering, so a missing
+# patch file fails the install outright —
+#   error: Couldn't find patch file: 'patches/stryker-mutator-bun-runner@0.4.0.patch'
+# The patched package itself (Stryker's Bun runner) is a devDependency and
+# never lands in the image.
 COPY package.json bun.lock bunfig.toml tsconfig.json ./
+COPY patches ./patches
 COPY packages ./packages
 RUN bun install --frozen-lockfile --production
 
