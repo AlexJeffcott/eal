@@ -66,6 +66,20 @@ const EAL_TOOL_NAMES = EAL_TOOLS.map((t) => `mcp__eal__${t.name}`);
 const CLAUDE_TIMEOUT_MS = 150_000;
 
 /**
+ * The model every assistant turn runs on.
+ *
+ * Pinned rather than left to the CLI's default: an unpinned model changes
+ * under the household as Claude Code's default moves, and with it the reply
+ * style, the latency and the cost of a turn. Sonnet is the choice for this
+ * work — the tasks are short, the tool set is six calls wide, and the
+ * conversation is a household one, not a reasoning problem.
+ *
+ * Use the exact id, not the `sonnet` alias: the alias follows the newest
+ * Sonnet, which is the drift this constant exists to stop.
+ */
+const CLAUDE_MODEL = 'claude-sonnet-5';
+
+/**
  * A stable working directory for the agent's `claude` invocations. Claude Code
  * keys its session storage by cwd, so this must be fixed for `--resume` to find
  * earlier sessions across separate `claude --print` processes. It is kept empty
@@ -100,6 +114,7 @@ export function buildClaudeArgs(
 ): string[] {
   return [
     '--print',
+    '--model', CLAUDE_MODEL,
     '--output-format', 'stream-json',
     '--verbose',
     '--permission-mode', 'default',

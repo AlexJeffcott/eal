@@ -54,6 +54,16 @@ describe('buildClaudeArgs', () => {
     expect(args).not.toContain('--no-session-persistence');
   });
 
+  test('the model is pinned to an exact id, not an alias', () => {
+    // An unpinned model changes under the household as Claude Code's default
+    // moves, and an alias like `sonnet` follows the newest Sonnet — which is
+    // the drift the pin exists to stop.
+    const args = buildClaudeArgs('{}', { mode: 'create', id: 'uuid-1' });
+    const modelIdx = args.indexOf('--model');
+    expect(modelIdx).toBeGreaterThan(-1);
+    expect(args[modelIdx + 1]).toBe('claude-sonnet-5');
+  });
+
   test('create mode opens a session by id; resume mode resumes one', () => {
     const create = buildClaudeArgs('{}', { mode: 'create', id: 'uuid-new' });
     expect(create[create.indexOf('--session-id') + 1]).toBe('uuid-new');
