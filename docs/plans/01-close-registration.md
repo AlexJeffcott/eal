@@ -1,8 +1,20 @@
 # Plan 01 — Close registration
 
-Status: **code complete, 2026-08-25.** One step remains and it is not a commit:
-set `EAL_INVITE_CODE` as a Fly secret and confirm the deployed origin answers
-403. Until that runs, `https://eal.fly.dev` is still open to anyone.
+Status: **done and deployed, 2026-08-25.** Measured against
+`https://eal.fly.dev` after the deploy:
+
+| Request | Reading |
+|---|---|
+| `POST /public/auth/register/options` with no code | `403 {"error":"invalid invite code"}` |
+| the same with the real code | `200`, challenge issued, RP id `eal.fly.dev` |
+| `GET /public/health` | `200 {"status":"ok"}` |
+| `GET /api/v1/tasks` unauthenticated | `401 {"error":"unauthenticated"}` |
+
+The deploy also carried the 40 commits that had piled up since 28 May, and it
+failed on the first attempt for an unrelated reason — see `d88f52a`: the image
+had been unbuildable since June because `patches/` was never copied in, and
+`patchedDependencies` is resolved before `--production` filtering. Nothing had
+deployed in that window, so nothing reported it.
 
 What landed:
 

@@ -49,13 +49,15 @@ Seven items stand between that and daily use. Each has a plan under
 **01, 02, 03 and 07 are the smallest set that makes both devices usable** —
 about 3 to 5 days. **04** is the item that keeps the app in use after that.
 
-- [>] **01 — Close registration.** Registration was open to anyone who found
-      the hostname, and `authorize()` grants every principal every action on
-      every task (`auth/policy.ts:29`). `EAL_INVITE_CODE` now gates it and
-      fails closed when unset (`packages/api/src/auth/registration.ts`, landed
-      2026-08-25). **Still open: `fly secrets set EAL_INVITE_CODE=…`, redeploy,
-      and confirm `https://eal.fly.dev` answers 403 to an uninvited POST.**
-      Until that runs the deployed instance is unchanged. →
+01, 02 and 07 are done and deployed as of 2026-08-25. **03 is next and needs a
+decision, not a commit.**
+
+- [x] **01 — Close registration.** Done and deployed 2026-08-25. Registration
+      was open to anyone who found the hostname, and `authorize()` grants every
+      principal every action on every task (`auth/policy.ts:29`).
+      `EAL_INVITE_CODE` now gates it and fails closed when unset
+      (`packages/api/src/auth/registration.ts`). `https://eal.fly.dev` answers
+      `403 invalid invite code` to an uninvited POST and `200` with the code. →
       `docs/plans/01-close-registration.md`
 - [x] **02 — Reconnect and resync the browser WS.** Done 2026-08-25. The
       browser socket had no `close` listener, `$wsState` was written
