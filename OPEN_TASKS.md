@@ -179,6 +179,22 @@ its JUnit parsing. It still holds on Bun 1.4.0 — `bun mutation:verify` passes
 all six kill-matrix checks — but re-run that after any Bun bump, or the
 redundancy signal dies silently.
 
+## Running the CLI
+
+There is no `eal` binary. `packages/cli/package.json` declares
+`bin: { eal: "src/index.ts" }`, but nothing links it into `node_modules/.bin`,
+so every invocation goes through bun and the default api URL is
+`https://127.0.0.1:3000` — a command against production must say so:
+
+```sh
+bun packages/cli/src/index.ts auth pair --label=agent-$(hostname -s) \
+  --api-url https://eal.fly.dev
+```
+
+`bun link` inside `packages/cli` installs a real `eal` shim, if bun's global
+bin directory is on PATH. The unit templates in `deploy/` call bun with the
+full script path, so they work either way.
+
 ## This machine
 
 - [ ] **`.env` line 9 is a placeholder: `TWILIO_PHONE_NUMBER=+39...`.** With
@@ -188,3 +204,11 @@ redundancy signal dies silently.
       bought, or set `TWILIO_ENABLED=false` until then.
 - [ ] **Rotate the Twilio auth token and account SID in `.env`.** Both were
       printed into an assistant session transcript on 2026-08-24.
+- [!] **Nothing has ever been pushed.** `git ls-remote --heads upstream`
+      returns no refs, so `https://github.com/AlexJeffcott/eal.git` is empty
+      and this disk holds the only copy of every commit. `main` has no
+      upstream configured either, so a bare `git push` fails. The first push
+      is `git push -u upstream main`.
+- [ ] **`EAL_INVITE_CODE` on Fly has no copy in the repo, by design.** It is
+      the one string a new device needs, and `fly secrets list` shows only a
+      digest. Keep it in a password manager.
