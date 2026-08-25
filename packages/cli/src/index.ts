@@ -61,13 +61,9 @@ async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const { command, global } = splitArgs(argv);
 
-  if (global.help && command === undefined) {
-    printHelp();
-    return 0;
-  }
   if (command === undefined || command === 'help') {
     printHelp();
-    return command === undefined ? 1 : 0;
+    return command === undefined && !global.help ? 1 : 0;
   }
 
   const spec = COMMANDS[command];
@@ -75,6 +71,16 @@ async function main(): Promise<number> {
     logError(`${BIN_NAME}: unknown command "${command}"`);
     printHelp();
     return 1;
+  }
+  // `--help` wins over the command, wherever it appears. It used to be honoured
+  // only with no command at all, so `eal agent --help` started the long-running
+  // worker instead of printing anything — a request for documentation that
+  // opened a socket and held the terminal.
+  if (global.help) {
+    log(`${BIN_NAME} ${command} — ${spec.description}`);
+    log('');
+    printHelp();
+    return 0;
   }
   return spec.handler(global);
 }

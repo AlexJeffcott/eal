@@ -106,7 +106,8 @@ async function runAgentWorker(global: GlobalOptions): Promise<number> {
   const client = createEalClient(global.apiUrl, { token });
   const runClaude = await selectClaudeRunner(global);
 
-  log('eal agent: starting — the web app can now chat with the assistant.');
+  log(`eal agent: starting — talking to ${global.apiUrl}`);
+  log('  The web app on that origin can now chat with the assistant.');
   log('  Press Ctrl-C to stop.');
 
   // Family-phone identity is optional in principle (chat path still
@@ -214,7 +215,13 @@ async function runAgentWorker(global: GlobalOptions): Promise<number> {
       await closed;
       logError('eal agent: connection closed — reconnecting…');
     } catch (err) {
-      logError(`eal agent: connect failed: ${err instanceof Error ? err.message : String(err)}`);
+      // Name the URL. The default is localhost, a token is paired against one
+      // origin and carries no record of which, so "ws connect failed" alone
+      // reads as a broken server when it usually means the wrong address.
+      logError(
+        `eal agent: connect to ${global.apiUrl} failed: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
     }
     // Backoff before reconnecting: here the wait itself is the behaviour.
     // Doubles on each consecutive failure (capped) and is reset above once a
