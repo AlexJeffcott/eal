@@ -7,7 +7,7 @@ import {
 } from '@eal/client';
 import { delay } from '@eal/shared';
 import { readToken, tokenPath } from '../lib/token-store.ts';
-import { readAgentDevice, type AgentDeviceRecord } from '../lib/agent-device-store.ts';
+import { agentDevicePath, readAgentDevice, type AgentDeviceRecord } from '../lib/agent-device-store.ts';
 import { importAgentPrivateKey } from '../lib/agent-key-import.ts';
 import { log, logError } from '../lib/process.ts';
 import type { GlobalOptions } from '../types.ts';
@@ -309,8 +309,23 @@ async function startPhoneLoop(
       onConnected?.(connection);
       return;
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // A device the api has never heard of is a permanent condition for this
+      // record, not a blip: the identity on disk was minted against a
+      // different api (a local dev database, most often) and no amount of
+      // retrying will make this one recognise it. Say what to do and stop.
+      // Chat is unaffected — it rides the user token, not the device key.
+      if (message.includes('device_id not found')) {
+        logError(
+          'eal agent: this family-phone identity is not known to the api — ' +
+            'it was minted against a different one.',
+        );
+        logError(`  Delete ${agentDevicePath()} and restart; the worker mints a fresh one.`);
+        logError('  Chat keeps working meanwhile; only voice calls are unavailable.');
+        return;
+      }
       logError(
-        `eal agent: family-phone connect failed: ${err instanceof Error ? err.message : String(err)} — retry in ${backoffMs}ms`,
+        `eal agent: family-phone connect failed: ${message} — retry in ${backoffMs}ms`,
       );
     }
     await delay(backoffMs);
