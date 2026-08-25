@@ -213,6 +213,52 @@ function installSessionSeeding(stores: AppStores): void {
   });
 }
 
+/**
+ * Mirror the socket's own connection state into `$wsState`, and re-seed the
+ * stores after every reconnect.
+ *
+ * The server keeps no per-client event log — a broadcast sent while a socket is
+ * down is gone. A phone that suspends its tab therefore comes back to a stale
+ * list unless something refetches, and before this the app also kept *reading*
+ * `connected` the whole time. Re-seeding is cheap at household scale: one
+ * `listTasks`, one `listMessages`, one roster, one device list.
+ *
+ * The first `connected` is skipped: `installSessionSeeding` already seeds on
+ * the `$currentUser` transition, and seeding twice at boot is pure waste. A
+ * `disconnect()` (sign-out) rearms that, so the next sign-in is a first connect
+ * again.
+ */
+function installWsResync(stores: AppStores): void {
+  let seenConnected = false;
+  stores.client.subscribeConnectionState((state) => {
+    stores.$wsState.value = state;
+    if (state === 'idle') {
+      seenConnected = false;
+      return;
+    }
+    if (state !== 'connected') return;
+    if (!seenConnected) {
+      seenConnected = true;
+      return;
+    }
+    stores.$wsError.value = null;
+    void seedSessionData(stores);
+  });
+
+  // A suspended tab has nothing running to notice its socket died, so the
+  // backoff timer only resumes when the tab does. Coming back to the app must
+  // not then wait out a 30-second delay before the list is true again.
+  const wakeUp = (): void => {
+    if (stores.client.connectionState() === 'connected') return;
+    stores.client.reconnectNow();
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    wakeUp();
+  });
+  window.addEventListener('online', wakeUp);
+}
+
 async function bootstrap(): Promise<void> {
   const root = document.getElementById('app');
   if (!root) throw new Error('no #app element to mount into');
@@ -308,6 +354,10 @@ async function bootstrap(): Promise<void> {
   // is ever set so the very first transition is caught.
   installSessionSeeding(stores);
 
+  // Track the socket and re-seed after a drop. Installed before the first
+  // `connect()` below, so no transition is missed.
+  installWsResync(stores);
+
   // Pre-fill the pairing form from the URL query so users who follow the link
   // their CLI printed don't have to retype the code or the device label.
   if (window.location.pathname === CLI_PAIR_PATH) {
@@ -334,13 +384,13 @@ async function bootstrap(): Promise<void> {
   // broadcast plumbing is live.
   const me = await client.getCurrentUser();
   if (me) {
-    stores.$wsState.value = 'connecting';
+    // `$wsState` follows the socket through `installWsResync` — the client
+    // reports `connecting`, `connected`, `reconnecting` and `error` itself.
+    // Only the error *text* belongs to the shell.
     stores.$wsError.value = null;
     try {
       await client.connect();
-      stores.$wsState.value = 'connected';
     } catch (err) {
-      stores.$wsState.value = 'error';
       stores.$wsError.value = err instanceof Error ? err.message : String(err);
     }
   }

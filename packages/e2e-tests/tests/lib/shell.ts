@@ -13,6 +13,24 @@ import { expect, type Page } from '@playwright/test';
 
 const SIGN_IN_TIMEOUT_MS = 10_000;
 
+/**
+ * The invite code the webServer in `playwright.config.ts` configures. The api
+ * refuses registration outright without one (packages/api/src/auth/registration.ts),
+ * so every spec that registers a passkey has to present it.
+ */
+export const E2E_INVITE_CODE = 'playwright-invite-code-0123456789';
+
+/**
+ * Fill the sign-in card and start the passkey ceremony. The caller must have
+ * attached a virtual authenticator first, and asserts the outcome itself —
+ * usually with `expectSignedInAs`.
+ */
+export async function registerPasskey(page: Page, displayName: string): Promise<void> {
+  await page.locator('input[name="displayName"]').fill(displayName);
+  await page.locator('input[name="inviteCode"]').fill(E2E_INVITE_CODE);
+  await page.locator('[data-action="auth:register"]').click();
+}
+
 /** Open the drawer, assert the signed-in badge reads `displayName`, close it. */
 export async function expectSignedInAs(page: Page, displayName: string): Promise<void> {
   // The Menu button appears with the session, so this click also waits out the

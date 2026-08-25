@@ -125,3 +125,126 @@ describe('auth http error envelope (wire contract)', () => {
     expect(err).toContain('no pending authentication challenge');
   });
 });
+
+/**
+ * The registration gate (packages/api/src/auth/registration.ts) at the wire.
+ *
+ * eal is deployed on a public origin, and `authorize()` grants every
+ * signed-in principal every action on every task. Registration is therefore
+ * the whole perimeter: these tests hold the door shut.
+ */
+describe('registration gate (wire contract)', () => {
+  let db: DatabaseClient;
+  const CODE = 'test-invite-code-0123456789';
+
+  beforeEach(() => {
+    db = createDb(':memory:');
+    applySchema(db);
+  });
+
+  test('with no invite code configured, register/options is 403 and says so', async () => {
+    const app = await createTestApp(db, { env: {} });
+    const res = await postJson(app, '/public/auth/register/options', { displayName: 'pat' });
+    expect(res.status).toBe(403);
+    expect(res.contentType ?? '').toContain('application/json');
+    expect(readErrorField(JSON.parse(res.text))).toBe('registration is closed');
+  });
+
+  test('a wrong invite code is 403 with the phrase the web mapper keys on', async () => {
+    const app = await createTestApp(db, { env: { EAL_INVITE_CODE: CODE } });
+    const res = await postJson(app, '/public/auth/register/options', {
+      displayName: 'pat',
+      inviteCode: 'not-the-code-0123456789',
+    });
+    expect(res.status).toBe(403);
+    expect(readErrorField(JSON.parse(res.text))).toBe('invalid invite code');
+  });
+
+  test('an omitted invite code is treated as a wrong one, not a 422', async () => {
+    const app = await createTestApp(db, { env: { EAL_INVITE_CODE: CODE } });
+    const res = await postJson(app, '/public/auth/register/options', { displayName: 'pat' });
+    expect(res.status).toBe(403);
+    expect(readErrorField(JSON.parse(res.text))).toBe('invalid invite code');
+  });
+
+  test('the gate runs before display-name validation — a probe learns nothing', async () => {
+    const app = await createTestApp(db, { env: { EAL_INVITE_CODE: CODE } });
+    const res = await postJson(app, '/public/auth/register/options', { displayName: '' });
+    expect(res.status).toBe(403);
+    expect(readErrorField(JSON.parse(res.text))).toBe('invalid invite code');
+  });
+
+  test('the right invite code opens the ceremony and issues a challenge', async () => {
+    const app = await createTestApp(db, { env: { EAL_INVITE_CODE: CODE } });
+    const res = await postJson(app, '/public/auth/register/options', {
+      displayName: 'pat',
+      inviteCode: CODE,
+    });
+    expect(res.status).toBe(200);
+    const body: { options: { challenge: string } } = JSON.parse(res.text);
+    expect(typeof body.options.challenge).toBe('string');
+    expect(body.options.challenge.length).toBeGreaterThan(0);
+  });
+
+  test('a valid code still rejects an empty display name, with 400', async () => {
+    const app = await createTestApp(db, { env: { EAL_INVITE_CODE: CODE } });
+    const res = await postJson(app, '/public/auth/register/options', {
+      displayName: '   ',
+      inviteCode: CODE,
+    });
+    expect(res.status).toBe(400);
+    expect(readErrorField(JSON.parse(res.text))).toBe('displayName is required');
+  });
+
+  test('ten wrong codes fill the window, and the eleventh attempt is 429', async () => {
+    const app = await createTestApp(db, { env: { EAL_INVITE_CODE: CODE } });
+    for (let i = 0; i < 10; i += 1) {
+      const res = await postJson(app, '/public/auth/register/options', {
+        displayName: 'pat',
+        inviteCode: `wrong-${i}`,
+      });
+      expect(res.status).toBe(403);
+    }
+    const tripped = await postJson(app, '/public/auth/register/options', {
+      displayName: 'pat',
+      inviteCode: 'wrong-again',
+    });
+    expect(tripped.status).toBe(429);
+    expect(readErrorField(JSON.parse(tripped.text)) ?? '').toContain(
+      'too many registration attempts',
+    );
+    // And the real code is refused too while the window is full — the cap is
+    // global on purpose, because a per-address cap is evaded behind a proxy.
+    const withRealCode = await postJson(app, '/public/auth/register/options', {
+      displayName: 'pat',
+      inviteCode: CODE,
+    });
+    expect(withRealCode.status).toBe(429);
+  });
+
+  test('register/verify alone cannot mint a session — options holds the only challenge', async () => {
+    const app = await createTestApp(db, { env: {} });
+    const res = await postJson(app, '/public/auth/register/verify', {
+      response: {
+        id: b64url('fabricated'),
+        response: {
+          clientDataJSON: b64url(
+            JSON.stringify({
+              type: 'webauthn.create',
+              challenge: 'fabricated',
+              origin: 'https://localhost:3000',
+            }),
+          ),
+        },
+      },
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.text).not.toContain('"token"');
+  });
+
+  test('login is unaffected by the gate being closed', async () => {
+    const app = await createTestApp(db, { env: {} });
+    const res = await postJson(app, '/public/auth/login/options', {});
+    expect(res.status).toBe(200);
+  });
+});

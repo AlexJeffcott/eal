@@ -48,6 +48,32 @@ describe('WS connection state visibility', () => {
     expect(detail?.textContent).toBe('ws connect failed: ECONNREFUSED');
   });
 
+  test('the reconnecting banner appears while the socket is down, and says why', () => {
+    // The defect this covers: a suspended phone tab loses its socket, and the
+    // page kept rendering the last state it heard as if it were current.
+    resetStoresForTest();
+    $wsState.value = 'reconnecting';
+    render(<App />, root);
+    expect(document.querySelector('[data-ws-reconnecting]')).not.toBeNull();
+    expect(document.querySelector('[data-ws-reconnecting-detail]')?.textContent).toContain(
+      'other devices',
+    );
+    // It is not an error — the client is retrying, and the danger banner would
+    // over-state a two-second gap in the underground.
+    expect(document.querySelector('[data-ws-error]')).toBeNull();
+  });
+
+  test('reconnecting clears once the socket is back', () => {
+    resetStoresForTest();
+    $wsState.value = 'reconnecting';
+    render(<App />, root);
+    expect(document.querySelector('[data-ws-reconnecting]')).not.toBeNull();
+
+    $wsState.value = 'connected';
+    render(<App />, root);
+    expect(document.querySelector('[data-ws-reconnecting]')).toBeNull();
+  });
+
   test('clearing the error state hides the banner again', () => {
     resetStoresForTest();
     $wsState.value = 'error';

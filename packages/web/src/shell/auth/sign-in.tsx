@@ -1,5 +1,5 @@
 import { Badge, Button, Layout, Surface, Text, TextInput } from '@fairfox/polly/ui';
-import { $signInDisplayName, $signInError } from '../stores.ts';
+import { $signInDisplayName, $signInError, $signInInviteCode } from '../stores.ts';
 
 export function SignIn() {
   const error = $signInError.value;
@@ -27,6 +27,19 @@ export function SignIn() {
               name="displayName"
               value={$signInDisplayName}
               placeholder="e.g. Alex"
+            />
+          </Layout>
+
+          <Layout gap="var(--polly-space-xs)">
+            <Text as="label" size="sm" htmlFor="sign-in-invite-code">
+              Invite code <Text tone="muted">(first-time registration only)</Text>
+            </Text>
+            <TextInput
+              id="sign-in-invite-code"
+              name="inviteCode"
+              inputType="password"
+              value={$signInInviteCode}
+              placeholder="from the household owner"
             />
             {error ? <Badge variant="danger">{error}</Badge> : null}
           </Layout>

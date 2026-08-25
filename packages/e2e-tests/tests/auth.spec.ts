@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { attachVirtualAuthenticator } from './lib/virtual-authenticator.ts';
-import { expectSignedInAs, expectSignedOut } from './lib/shell.ts';
+import { expectSignedInAs, expectSignedOut, registerPasskey } from './lib/shell.ts';
 
 /** Sign out — the control lives in the nav drawer, behind the Menu button. */
 async function signOutViaDrawer(page: Page): Promise<void> {
@@ -25,14 +25,27 @@ test.describe('day-one auth e2e', () => {
     await page.goto('/');
     await expect(page.locator('[data-sign-in]')).toBeVisible();
 
-    await page.locator('input[name="displayName"]').fill('alex');
-    await page.locator('[data-action="auth:register"]').click();
+    await registerPasskey(page, 'alex');
 
     await expectSignedInAs(page, 'alex');
     await expect(page.locator('[data-sign-in]')).toHaveCount(0);
     // Sign-out lives in the nav drawer — open it to confirm it's reachable.
     await page.locator('[data-action="shell:nav-toggle"]').click();
     await expect(page.locator('[data-sign-out]')).toBeVisible();
+  });
+
+  test('a wrong invite code is refused, with the friendly message and no session', async ({ page }) => {
+    // The registration gate — packages/api/src/auth/registration.ts. This is
+    // the whole perimeter of a deployed instance: `authorize()` grants every
+    // signed-in principal every action on every task.
+    await attachVirtualAuthenticator(page);
+    await page.goto('/');
+    await page.locator('input[name="displayName"]').fill('gatecrasher');
+    await page.locator('input[name="inviteCode"]').fill('definitely-not-the-code');
+    await page.locator('[data-action="auth:register"]').click();
+
+    await expect(page.locator('[data-sign-in]')).toContainText('invite code is wrong');
+    await expectSignedOut(page);
   });
 
   test('register → sign out → sign in with the same passkey lands authenticated', async ({ page }) => {
@@ -43,8 +56,7 @@ test.describe('day-one auth e2e', () => {
     // look the user up by credential id; userHandle is auxiliary.
     await attachVirtualAuthenticator(page);
     await page.goto('/');
-    await page.locator('input[name="displayName"]').fill('returner');
-    await page.locator('[data-action="auth:register"]').click();
+    await registerPasskey(page, 'returner');
     await expectSignedInAs(page, 'returner');
 
     await signOutViaDrawer(page);
@@ -58,8 +70,7 @@ test.describe('day-one auth e2e', () => {
   test('sign-out returns to the sign-in surface', async ({ page }) => {
     await attachVirtualAuthenticator(page);
     await page.goto('/');
-    await page.locator('input[name="displayName"]').fill('leo');
-    await page.locator('[data-action="auth:register"]').click();
+    await registerPasskey(page, 'leo');
     await expectSignedInAs(page, 'leo');
 
     await signOutViaDrawer(page);
@@ -70,8 +81,7 @@ test.describe('day-one auth e2e', () => {
   test('authed POST to /api/v1/tasks broadcasts to the signed-in SPA', async ({ page, request }) => {
     await attachVirtualAuthenticator(page);
     await page.goto('/');
-    await page.locator('input[name="displayName"]').fill('elisa');
-    await page.locator('[data-action="auth:register"]').click();
+    await registerPasskey(page, 'elisa');
     await expectSignedInAs(page, 'elisa');
 
     // The shell lands on the launcher — open the Tasks app to see task rows.

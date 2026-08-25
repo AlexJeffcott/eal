@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { attachVirtualAuthenticator } from './lib/virtual-authenticator.ts';
+import { registerPasskey } from './lib/shell.ts';
 
 /**
  * Agent-rules panel UI gate. The rule lifecycle and broadcast convergence are
@@ -17,8 +18,7 @@ test.describe('agent-rules — panel mounts behind sign-in', () => {
   test('signed-in browser sees the panel and the new-rule form', async ({ page }) => {
     await attachVirtualAuthenticator(page);
     await page.goto('/');
-    await page.locator('input[name="displayName"]').fill('rules-tester');
-    await page.locator('[data-action="auth:register"]').click();
+    await registerPasskey(page, 'rules-tester');
     await expect(page.locator('[data-landing-app="tasks"]')).toBeVisible({ timeout: 10_000 });
 
     await page.goto('/agent-rules');

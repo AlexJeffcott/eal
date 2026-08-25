@@ -4,6 +4,10 @@ import type { DatabaseClient } from '../db/client.ts';
 import { createSessionsRepo } from '../auth/sessions.ts';
 import { createChallengeStore } from '../auth/challenges.ts';
 import { createWebAuthnAdapter, type RpConfig } from '../auth/webauthn.ts';
+import {
+  createRegistrationThrottle,
+  type RegistrationConfig,
+} from '../auth/registration.ts';
 import { authMachine } from '../specs/auth-machine.ts';
 import { sessionsMachine } from '../specs/sessions-machine.ts';
 
@@ -43,6 +47,12 @@ function parseBearerToken(authHeader: string | null): string | null {
 export interface AuthRoutesContext {
   db: DatabaseClient;
   rp: RpConfig;
+  /**
+   * The registration gate. Passed in rather than read from the environment
+   * here, so a test configures it explicitly and a developer's `.env` cannot
+   * decide whether the door is open. See `../auth/registration.ts`.
+   */
+  registration: RegistrationConfig;
 }
 
 /**
@@ -55,7 +65,13 @@ export function authHttpRoutes(ctx: AuthRoutesContext) {
   const challenges = createChallengeStore();
   const sessions = createSessionsRepo(ctx.db);
   const webauthn = createWebAuthnAdapter(ctx.db, challenges, ctx.rp);
-  const deps: AuthDeps = { webauthn, sessions };
+  const deps: AuthDeps = {
+    webauthn,
+    sessions,
+    registration: ctx.registration,
+    // One throttle per route tree, so its window lives as long as the server.
+    registrationThrottle: createRegistrationThrottle(),
+  };
   const cliPairDeps: CliPairDeps = {
     sessions,
     pairings: createCliPairingsRepo(ctx.db),
@@ -83,7 +99,10 @@ export function authHttpRoutes(ctx: AuthRoutesContext) {
         ensures(authMachine.value.phase === 'authenticating', 'register/options: in-flight');
         return result;
       },
-      { body: t.Object({ displayName: t.String() }) },
+      // `inviteCode` is optional on the wire so a caller that omits it gets the
+      // handler's own 403, not Elysia's 422 shape. The gate treats a missing
+      // code exactly as a wrong one.
+      { body: t.Object({ displayName: t.String(), inviteCode: t.Optional(t.String()) }) },
     )
     .post(
       '/register/verify',

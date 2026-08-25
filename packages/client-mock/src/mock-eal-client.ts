@@ -25,6 +25,7 @@ import type {
   UpdatePstnContactInput,
   UpsertAgentRuleInput,
   VoiceMessage,
+  WsConnectionState,
 } from '@eal/client';
 
 export interface MockEalClient extends EalClient {
@@ -34,6 +35,15 @@ export interface MockEalClient extends EalClient {
    * so the test author has full control over the "remote vs local" interleaving.
    */
   emitTaskEvent(event: TaskEvent): void;
+  /**
+   * Test hook: drive the connection-state subscribers, as the real client does
+   * when a socket drops and comes back. `connectionState()` reads back the last
+   * value emitted, so a test can script `connected → reconnecting → connected`
+   * and assert what the shell did about it.
+   */
+  emitConnectionState(state: WsConnectionState): void;
+  /** Test hook: how many times the shell asked for an immediate reconnect. */
+  peekReconnectNowCalls(): number;
   /** Test hook: set the current user that getCurrentUser will return. */
   setCurrentUser(user: CurrentUser | null): void;
   /** Test hook: seed the household roster that listUsers will return. */
@@ -154,6 +164,16 @@ function applyFilter(tasks: readonly Task[], input: ListTasksInput | undefined, 
 
 export function createMockEalClient(): MockEalClient {
   const taskEventSubscribers = new Set<(event: TaskEvent) => void>();
+  const connectionStateSubscribers = new Set<(state: WsConnectionState) => void>();
+  let connectionState: WsConnectionState = 'idle';
+  let reconnectNowCalls = 0;
+
+  function emitConnectionState(state: WsConnectionState): void {
+    if (state === connectionState) return;
+    connectionState = state;
+    for (const h of connectionStateSubscribers) h(state);
+  }
+
   const chatEventSubscribers = new Set<(event: ChatBrowserEvent) => void>();
   let currentUser: CurrentUser | null = null;
   let seededUsers: HouseholdMember[] = [];
@@ -193,10 +213,36 @@ export function createMockEalClient(): MockEalClient {
   }
 
   return {
-    async connect(): Promise<void> {},
-    async disconnect(): Promise<void> {},
+    async connect(): Promise<void> {
+      emitConnectionState('connected');
+    },
+    async disconnect(): Promise<void> {
+      emitConnectionState('idle');
+    },
 
-    async registerPasskey(displayName: string): Promise<CurrentUser> {
+    connectionState(): WsConnectionState {
+      return connectionState;
+    },
+
+    subscribeConnectionState(handler: (state: WsConnectionState) => void): () => void {
+      connectionStateSubscribers.add(handler);
+      return () => connectionStateSubscribers.delete(handler);
+    },
+
+    reconnectNow(): void {
+      reconnectNowCalls += 1;
+    },
+
+    emitConnectionState(state: WsConnectionState): void {
+      emitConnectionState(state);
+    },
+
+    peekReconnectNowCalls(): number {
+      return reconnectNowCalls;
+    },
+
+    async registerPasskey(displayName: string, inviteCode: string): Promise<CurrentUser> {
+      void inviteCode;
       if (nextRegisterError !== null) {
         const err = nextRegisterError;
         nextRegisterError = null;
@@ -794,6 +840,8 @@ export function createMockEalClient(): MockEalClient {
  */
 type TestHookKeys =
   | 'emitTaskEvent'
+  | 'emitConnectionState'
+  | 'peekReconnectNowCalls'
   | 'setCurrentUser'
   | 'seedUsers'
   | 'mockCliPair'

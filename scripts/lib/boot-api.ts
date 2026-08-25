@@ -1,6 +1,17 @@
 import { spawn, type Subprocess } from 'bun';
 import { createServer } from 'node:net';
 
+/**
+ * The invite code every harness-booted api accepts.
+ *
+ * Registration is closed unless `EAL_INVITE_CODE` is set
+ * (packages/api/src/auth/registration.ts), so a harness that registers a
+ * passkey has to configure the gate the same way production does. Scripts
+ * import this constant rather than repeating a literal, and a script that
+ * means to test the *closed* door passes `EAL_INVITE_CODE: ''` explicitly.
+ */
+export const E2E_INVITE_CODE = 'e2e-invite-code-0123456789';
+
 export interface BootedApi {
   url: string;
   kill: () => Promise<void>;
@@ -62,6 +73,9 @@ export async function bootApi(
       // The server requires EAL_ORIGIN (no fallback). It must match the
       // host:port the scripts actually hit so webhook signatures verify.
       EAL_ORIGIN: `https://${host}:${port}`,
+      // Open the registration gate for the harness. `opts.env` still wins, so a
+      // script can close it again and assert the refusal.
+      EAL_INVITE_CODE: E2E_INVITE_CODE,
       ...(opts.env ?? {}),
     },
     stdout: 'pipe',

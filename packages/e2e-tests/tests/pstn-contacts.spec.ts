@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { attachVirtualAuthenticator } from './lib/virtual-authenticator.ts';
+import { registerPasskey } from './lib/shell.ts';
 
 /**
  * PSTN contacts panel UI gate. The CRUD wire is proved at the API tier; this
@@ -17,8 +18,7 @@ test.describe('pstn-contacts — panel mounts behind sign-in', () => {
   test('signed-in browser sees the panel and the new-contact form', async ({ page }) => {
     await attachVirtualAuthenticator(page);
     await page.goto('/');
-    await page.locator('input[name="displayName"]').fill('pstn-tester');
-    await page.locator('[data-action="auth:register"]').click();
+    await registerPasskey(page, 'pstn-tester');
     await expect(page.locator('[data-landing-app="tasks"]')).toBeVisible({ timeout: 10_000 });
 
     await page.goto('/pstn-contacts');
@@ -33,8 +33,7 @@ test.describe('pstn-contacts — panel mounts behind sign-in', () => {
     await attachVirtualAuthenticator(page);
     await page.setViewportSize({ width: 350, height: 800 });
     await page.goto('/');
-    await page.locator('input[name="displayName"]').fill('pstn-narrow');
-    await page.locator('[data-action="auth:register"]').click();
+    await registerPasskey(page, 'pstn-narrow');
     await expect(page.locator('[data-landing-app="tasks"]')).toBeVisible({ timeout: 10_000 });
 
     await page.goto('/pstn-contacts');

@@ -178,10 +178,43 @@ export function extractServerError(body: string): string {
   return body;
 }
 
+/**
+ * The browser WebSocket's connection state.
+ *
+ * `reconnecting` is the one that matters on a phone: a suspended tab loses its
+ * socket, and without this the app reads `connected` while every broadcast
+ * goes past it.
+ */
+export type WsConnectionState =
+  | 'idle'
+  | 'connecting'
+  | 'connected'
+  | 'reconnecting'
+  | 'error';
+
 export interface EalClient {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
-  registerPasskey(displayName: string): Promise<CurrentUser>;
+  /** The current state of the browser WS. */
+  connectionState(): WsConnectionState;
+  /**
+   * Observe connection-state changes. Fires on every transition, not on
+   * repeats. The handler runs for reconnects as well as the first connect, so
+   * a caller can re-seed its stores — events missed while the socket was down
+   * are not replayed by the server.
+   */
+  subscribeConnectionState(handler: (state: WsConnectionState) => void): () => void;
+  /**
+   * Attempt a reconnect immediately, ignoring the backoff timer. Called when
+   * the page becomes visible again: waiting out a 30-second backoff after the
+   * user has come back to the tab is 30 seconds of stale list.
+   */
+  reconnectNow(): void;
+  /**
+   * Register a passkey. `inviteCode` is checked by the server before anything
+   * else — registration is closed on an instance with no code configured.
+   */
+  registerPasskey(displayName: string, inviteCode: string): Promise<CurrentUser>;
   signInWithPasskey(): Promise<CurrentUser>;
   signOut(): Promise<void>;
   getCurrentUser(): Promise<CurrentUser | null>;
@@ -336,6 +369,25 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
   }
 
   let socket: WebSocket | null = null;
+  /**
+   * Reconnect state for the browser WS. `browserWsClosed` records the caller's
+   * intent — `disconnect()` sets it and the loop stops. The agent role runs its
+   * own reconnect in `packages/cli/src/commands/agent.ts` and is untouched here.
+   */
+  const RECONNECT_BASE_MS = 500;
+  const RECONNECT_MAX_MS = 30_000;
+  let browserWsClosed = true;
+  let reconnectAttempt = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let connectionState: WsConnectionState = 'idle';
+  const connectionStateSubscribers = new Set<(state: WsConnectionState) => void>();
+
+  function setConnectionState(next: WsConnectionState): void {
+    if (next === connectionState) return;
+    connectionState = next;
+    for (const h of connectionStateSubscribers) h(next);
+  }
+
   const taskEventSubscribers = new Set<(event: TaskEvent) => void>();
   const chatEventSubscribers = new Set<(event: ChatBrowserEvent) => void>();
   let agentRequestHandler: ((request: ChatAgentRequest) => void) | null = null;
@@ -544,10 +596,83 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
     });
   }
 
+  /**
+   * Open the browser WS and re-declare the topic subscription.
+   *
+   * Every reconnect runs this, so the `subscribe` frame is sent again — the
+   * server holds subscriptions per socket, and a new socket starts deaf.
+   */
+  async function openBrowserWs(): Promise<void> {
+    await connectWs('browser');
+    const s = socket;
+    if (!s) throw new Error('connect: socket vanished after the handshake');
+    s.send(JSON.stringify({ type: 'subscribe', topic: 'tasks' }));
+    // Attach the drop handler only once the handshake has succeeded. A socket
+    // that dies mid-handshake rejects the promise instead, and the caller
+    // (the retry timer, or connect()) decides what to do.
+    s.addEventListener(
+      'close',
+      () => {
+        if (browserWsClosed) return;
+        socket = null;
+        setConnectionState('reconnecting');
+        scheduleReconnect();
+      },
+      { once: true },
+    );
+    reconnectAttempt = 0;
+    setConnectionState('connected');
+  }
+
+  /** Queue the next reconnect attempt. Exponential backoff, capped. */
+  function scheduleReconnect(): void {
+    if (browserWsClosed || reconnectTimer !== null) return;
+    const delayMs = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** reconnectAttempt);
+    reconnectAttempt += 1;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      void openBrowserWs().catch(() => {
+        // Still down. The next attempt waits longer.
+        scheduleReconnect();
+      });
+    }, delayMs);
+  }
+
   return {
     async connect(): Promise<void> {
-      await connectWs('browser');
-      socket?.send(JSON.stringify({ type: 'subscribe', topic: 'tasks' }));
+      browserWsClosed = false;
+      setConnectionState('connecting');
+      try {
+        await openBrowserWs();
+      } catch (err) {
+        // The FIRST connect does not retry: a rejected token or a wrong origin
+        // would otherwise be retried forever, silently. The caller surfaces
+        // this. Drops after a successful connect do retry — see openBrowserWs.
+        setConnectionState('error');
+        throw err;
+      }
+    },
+
+    connectionState(): WsConnectionState {
+      return connectionState;
+    },
+
+    subscribeConnectionState(handler: (state: WsConnectionState) => void): () => void {
+      connectionStateSubscribers.add(handler);
+      return () => connectionStateSubscribers.delete(handler);
+    },
+
+    reconnectNow(): void {
+      if (browserWsClosed) return;
+      if (socket && socket.readyState === WebSocket.OPEN) return;
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      reconnectAttempt = 0;
+      void openBrowserWs().catch(() => {
+        scheduleReconnect();
+      });
     },
 
     async connectAsAgent(handlers): Promise<void> {
@@ -599,15 +724,24 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
     },
 
     async disconnect(): Promise<void> {
+      // Record the intent first: the close handler reads this and must not
+      // treat a deliberate close as a drop.
+      browserWsClosed = true;
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      reconnectAttempt = 0;
+      setConnectionState('idle');
       if (!socket) return;
       socket.close();
       socket = null;
     },
 
-    async registerPasskey(displayName: string): Promise<CurrentUser> {
+    async registerPasskey(displayName: string, inviteCode: string): Promise<CurrentUser> {
       const { options } = await postJson<{ options: PublicKeyCredentialCreationOptionsJSON }>(
         '/public/auth/register/options',
-        { displayName },
+        { displayName, inviteCode },
       );
       const attResp = await startRegistration({ optionsJSON: options });
       const result = await postJson<{ token: string; user: { id: number; displayName: string } }>(

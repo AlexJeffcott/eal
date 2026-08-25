@@ -16,3 +16,25 @@
 .tasks-title--done {
   text-decoration: line-through;
 }
+
+/*
+ * Thumb-sized hit areas.
+ *
+ * 44 CSS pixels is the smallest reliable touch target. Measured at the 350px
+ * floor before this rule: complete 38×27, expand 209×24, quick-add 64×37 —
+ * every one short in the block axis, so a tick aimed at the checkbox landed on
+ * the row and opened the task instead. The size is set on the control, not by
+ * padding inside it, so the label keeps its own metrics.
+ *
+ * `packages/e2e-tests/tests/tasks.spec.ts` measures these and fails below 44.
+ */
+[data-action='tasks:toggle'],
+[data-action='tasks:expand'],
+[data-action='tasks:quick-add'] {
+  min-block-size: 44px;
+}
+
+[data-action='tasks:toggle'],
+[data-action='tasks:quick-add'] {
+  min-inline-size: 44px;
+}

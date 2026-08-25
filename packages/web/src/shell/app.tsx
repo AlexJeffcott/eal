@@ -92,6 +92,27 @@ export function App() {
           </Surface>
         ) : null}
 
+        {/* A dropped socket is silent: the page keeps rendering the last state
+            it heard. Say so, or the list looks current when it is not. The
+            client is already retrying — see installWsResync in main.tsx. */}
+        {wsState === 'reconnecting' ? (
+          <Surface
+            variant="callout"
+            padding="var(--polly-space-md) var(--polly-space-lg)"
+          >
+            <Layout columns="auto 1fr" gap="var(--polly-space-sm)" alignItems="center">
+              <span data-ws-reconnecting>
+                <Badge variant="warning">Reconnecting</Badge>
+              </span>
+              <span data-ws-reconnecting-detail>
+                <Text tone="muted">
+                  Changes made on your other devices will appear when the connection returns.
+                </Text>
+              </span>
+            </Layout>
+          </Surface>
+        ) : null}
+
         {user || onCliPair || onPublicApp ? (
           // Keyed by route so navigating away re-mounts the boundary and
           // clears a caught error — a crashed app never outlives its page.

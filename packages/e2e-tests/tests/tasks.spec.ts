@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { attachVirtualAuthenticator } from './lib/virtual-authenticator.ts';
-import { expectSignedInAs } from './lib/shell.ts';
+import { expectSignedInAs, registerPasskey } from './lib/shell.ts';
 
 /**
  * Tasks golden path — the workflow a person actually does, end to end, against
@@ -16,8 +16,7 @@ test('tasks golden path: register, capture, organise, complete', async ({ page }
 
   await test.step('register a passkey and land in the shell', async () => {
     await page.goto('/');
-    await page.locator('input[name="displayName"]').fill('pat');
-    await page.locator('[data-action="auth:register"]').click();
+    await registerPasskey(page, 'pat');
     await expectSignedInAs(page, 'pat');
   });
 
@@ -95,4 +94,95 @@ test('tasks golden path: register, capture, organise, complete', async ({ page }
 
   // No field commit surfaced an error anywhere in the flow.
   await expect(page.locator('[data-tasks-error]')).toHaveCount(0);
+});
+
+/**
+ * The 350px floor.
+ *
+ * 350px is the smallest phone eal must serve, and the tasks panel plus the
+ * assistant sheet are the two surfaces used every day — showcase, family-phone
+ * and pstn-contacts each carried a floor test while these two did not. Each
+ * case asserts the document itself never scrolls sideways: a panel that
+ * overflows pushes the whole page, and a horizontal scrollbar on a phone makes
+ * every tap land somewhere else.
+ */
+test.describe('tasks at the 350px floor', () => {
+  /** Pixels the document scrolls beyond its own viewport. Must be ≤ 0. */
+  async function horizontalOverflow(page: import('@playwright/test').Page): Promise<number> {
+    return page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+  }
+
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 350, height: 900 });
+    await attachVirtualAuthenticator(page);
+    await page.goto('/');
+    await registerPasskey(page, `narrow-${Date.now()}`);
+    await page.locator('[data-landing-app="tasks"] [data-action="shell:navigate"]').click();
+    await expect(page.locator('[data-tasks-panel]')).toBeVisible();
+  });
+
+  test('the task list fits', async ({ page }) => {
+    await page.locator('#tasks-quick-add').fill('A title long enough to test wrapping on a narrow phone');
+    await page.locator('[data-action="tasks:quick-add"]').click();
+    await expect(
+      page.locator('[data-task-title]', { hasText: 'long enough to test wrapping' }),
+    ).toBeVisible();
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+  });
+
+  test('the expanded task detail fits — dates and the assignee select included', async ({ page }) => {
+    await page.locator('#tasks-quick-add').fill('Detail at the floor');
+    await page.locator('[data-action="tasks:quick-add"]').click();
+    const row = page.locator('[data-task-row]', {
+      has: page.locator('[data-task-title]', { hasText: 'Detail at the floor' }),
+    });
+    const taskId = await row.getAttribute('data-task-id');
+    await page.locator(`[data-action="tasks:expand"][data-action-task-id="${taskId}"]`).click();
+    await expect(row.locator('[data-task-detail]')).toBeVisible();
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+  });
+
+  test('the filter builder fits with two conditions added', async ({ page }) => {
+    await page.locator('[data-action="tasks:add-condition"][data-action-field="status"]').click();
+    await page.locator('[data-action="tasks:add-condition"][data-action-field="due"]').click();
+    await expect(page.locator('[data-condition-row]')).toHaveCount(2);
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+  });
+
+  test('the controls a thumb hits are at least 44px', async ({ page }) => {
+    // 44 CSS pixels is the smallest reliable touch target (Apple's HIG floor,
+    // and close to Material's 48dp). Below it, a tick lands on the row instead
+    // of the checkbox and the task opens when the person meant to complete it.
+    await page.locator('#tasks-quick-add').fill('Thumb-sized controls');
+    await page.locator('[data-action="tasks:quick-add"]').click();
+    const row = page.locator('[data-task-row]', {
+      has: page.locator('[data-task-title]', { hasText: 'Thumb-sized controls' }),
+    });
+    const taskId = await row.getAttribute('data-task-id');
+
+    const targets: ReadonlyArray<[label: string, selector: string]> = [
+      ['complete', `[data-action="tasks:toggle"][data-action-task-id="${taskId}"]`],
+      ['expand', `[data-action="tasks:expand"][data-action-task-id="${taskId}"]`],
+      ['quick-add submit', '[data-action="tasks:quick-add"]'],
+    ];
+    const measured: Array<[string, number, number]> = [];
+    for (const [label, selector] of targets) {
+      const box = await page.locator(selector).first().boundingBox();
+      if (box === null) throw new Error(`${label}: no bounding box for ${selector}`);
+      measured.push([label, Math.round(box.width), Math.round(box.height)]);
+    }
+    const tooSmall = measured.filter(([, w, h]) => w < 44 || h < 44);
+    expect(
+      tooSmall,
+      `touch targets below 44px: ${JSON.stringify(measured)}`,
+    ).toEqual([]);
+  });
+
+  test('the assistant sheet fits over the tasks panel', async ({ page }) => {
+    await page.locator('[data-action="chat:toggle"]').click();
+    await expect(page.locator('[data-chat-panel]')).toBeVisible();
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+  });
 });

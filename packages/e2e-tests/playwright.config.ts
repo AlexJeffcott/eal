@@ -43,6 +43,9 @@ export default defineConfig({
       // to buy) stops the server booting at all. No spec here drives PSTN;
       // `scripts/e2e-pstn-*.ts` own that path and boot their own trunk.
       TWILIO_ENABLED: 'false',
+      // Registration is closed without this (packages/api/src/auth/registration.ts).
+      // Keep it identical to E2E_INVITE_CODE in tests/lib/shell.ts.
+      EAL_INVITE_CODE: 'playwright-invite-code-0123456789',
     },
   },
 
@@ -56,6 +59,23 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      // The 350px floor on a real mobile profile: touch input, a mobile user
+      // agent, device pixel ratio and `viewport-fit=cover` all in play. A
+      // narrowed desktop window exercises none of those. Chromium-based on
+      // purpose — the WebKit device profiles cannot drive the CDP virtual
+      // authenticator every signed-in spec needs.
+      //
+      // Scoped by `grep` to the viewport cases: running the whole suite twice
+      // buys nothing, and these are the tests whose result changes with the
+      // device profile.
+      name: 'mobile-350',
+      grep: /350px|floor/,
+      use: {
+        ...devices['Pixel 5'],
+        viewport: { width: 350, height: 750 },
+      },
     },
   ],
 });

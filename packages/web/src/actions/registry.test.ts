@@ -29,6 +29,16 @@ const REGISTER_RAW_TO_FRIENDLY: ReadonlyArray<[label: string, raw: string, conta
   ['DOMException message variant', 'The user cancelled the request.', 'Registration cancelled'],
   ['server: registration verification failed', 'webauthn: registration response failed verification', "didn't verify"],
   ['server: registration challenge expired', 'webauthn: no pending registration challenge', 'took too long'],
+  // The registration gate — packages/api/src/auth/registration.ts emits these
+  // three raw strings, and the sign-in card is the only place a person reads
+  // them. A drift in either half loses the explanation.
+  ['server: gate closed', 'registration is closed', 'not accepting new devices'],
+  ['server: wrong invite code', 'invalid invite code', 'invite code is wrong'],
+  [
+    'server: too many wrong codes',
+    'too many registration attempts — try again in 300s',
+    'Too many wrong invite codes',
+  ],
 ];
 
 describe('friendlySignInError', () => {

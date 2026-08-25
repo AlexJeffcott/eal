@@ -29,6 +29,7 @@ Every value is required — the server has no fallbacks and fails loud at boot.
 | `PORT` | no | `8080` | Internal listen port. Set in `fly.toml` `[env]`. |
 | `DATABASE_PATH` | no | `/data/eal.db` | SQLite file path inside the container. |
 | `EAL_ORIGIN` | no | `https://eal.fly.dev` | Public origin. The WebAuthn RP ID is its hostname. |
+| `EAL_INVITE_CODE` | **yes** | — | The registration gate. **Unset closes registration entirely** — the deployed origin is public, and any account can read and write every task. Minimum 16 characters; the api refuses to boot with a shorter one. Login is unaffected. |
 | `SKIP_TLS` | no | `1` | Required: Fly's proxy terminates TLS. |
 | `LITESTREAM_CONFIG` | no | `deploy/litestream.yml` | Always the production (S3) config. |
 | `LITESTREAM_BUCKET` | no | `eal-prod` | Replica bucket. |
@@ -71,9 +72,20 @@ never in `fly.toml` (which is committed). Locally they live in the gitignored
    `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` as secrets on the app.
    `deploy/litestream.yml` reads them directly — no `fly secrets set` for
    Litestream needed.
-3. Edit `EAL_ORIGIN` in `fly.toml` to your real hostname (`https://<app>.fly.dev`
+3. Set the registration gate:
+   `fly secrets set EAL_INVITE_CODE=$(openssl rand -base64 24)`. Without it the
+   deploy boots with registration closed, and nobody — including you — can add
+   a device. Read the value back with `fly secrets list` (digest only) or keep
+   your own copy; it is the one string a new phone needs.
+4. Edit `EAL_ORIGIN` in `fly.toml` to your real hostname (`https://<app>.fly.dev`
    or a custom domain).
-4. `fly deploy`. Fly health-checks `/public/health` before routing.
+5. `fly deploy`. Fly health-checks `/public/health` before routing.
+6. Confirm the door is shut to a stranger — one command, and it must read 403:
+
+   ```sh
+   curl -si -X POST https://<app>.fly.dev/public/auth/register/options \
+     -H 'content-type: application/json' -d '{"displayName":"probe"}' | head -1
+   ```
 
 ## Verifying before you deploy
 

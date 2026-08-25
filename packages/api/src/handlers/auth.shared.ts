@@ -7,6 +7,11 @@ import type {
 import type { WebAuthnAdapter } from '../auth/webauthn.ts';
 import type { SessionsRepo } from '../auth/sessions.ts';
 import type { Principal } from '../auth/principals.ts';
+import {
+  inviteCodeMatches,
+  type RegistrationConfig,
+  type RegistrationThrottle,
+} from '../auth/registration.ts';
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60_000; // 30 days
 
@@ -36,12 +41,37 @@ export interface MeResult {
 export interface AuthDeps {
   webauthn: WebAuthnAdapter;
   sessions: SessionsRepo;
+  /** The registration gate. `inviteCode: null` closes registration entirely. */
+  registration: RegistrationConfig;
+  /** Sliding-window cap on failed invite-code attempts. */
+  registrationThrottle: RegistrationThrottle;
 }
 
+/**
+ * Start a passkey registration.
+ *
+ * The invite gate runs before every other check, including the display-name
+ * validation, so an uninvited caller learns nothing about the request shape.
+ * See `../auth/registration.ts` for the policy and why the throttle is global.
+ */
 export async function registerOptionsCore(
   deps: AuthDeps,
-  input: { displayName: string },
+  input: { displayName: string; inviteCode?: string },
 ): Promise<RegisterOptionsResult> {
+  if (deps.registration.inviteCode === null) {
+    throw new AuthError(403, 'registration is closed');
+  }
+  const gate = deps.registrationThrottle.check();
+  if (!gate.allowed) {
+    throw new AuthError(
+      429,
+      `too many registration attempts — try again in ${gate.retryAfterSec}s`,
+    );
+  }
+  if (!inviteCodeMatches(deps.registration.inviteCode, input.inviteCode ?? '')) {
+    deps.registrationThrottle.recordFailure();
+    throw new AuthError(403, 'invalid invite code');
+  }
   if (!input.displayName || input.displayName.trim().length === 0) {
     throw new AuthError(400, 'displayName is required');
   }

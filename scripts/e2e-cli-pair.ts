@@ -26,7 +26,7 @@ import { existsSync } from 'node:fs';
 import { spawn } from 'bun';
 import { resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
-import { bootApi } from './lib/boot-api.ts';
+import { bootApi, E2E_INVITE_CODE } from './lib/boot-api.ts';
 import { waitForSignedInAs, waitForText, NAV_TIMEOUT_MS } from './lib/e2e-config.ts';
 import { attachVirtualAuthenticator, closeBrowserQuietly } from './lib/puppeteer-webauthn.ts';
 
@@ -116,6 +116,7 @@ async function main(): Promise<number> {
     await waitForText(page, 'Sign in');
 
     await page.locator('input[name="displayName"]').fill(DISPLAY_NAME);
+    await page.locator('input[name="inviteCode"]').fill(E2E_INVITE_CODE);
     await page.locator('[data-action="auth:register"]').click();
     await waitForSignedInAs(page, DISPLAY_NAME);
 

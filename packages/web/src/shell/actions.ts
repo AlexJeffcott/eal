@@ -35,6 +35,16 @@ export function friendlyRegisterError(err: unknown): string {
   if (raw.includes('NotAllowedError') || /cancel/i.test(raw)) {
     return 'Registration cancelled before a passkey was created.';
   }
+  // The registration gate — see packages/api/src/auth/registration.ts.
+  if (raw.includes('registration is closed')) {
+    return 'This eal instance is not accepting new devices. Ask the household owner to set an invite code.';
+  }
+  if (raw.includes('invalid invite code')) {
+    return 'That invite code is wrong. Check it and try again.';
+  }
+  if (raw.includes('too many registration attempts')) {
+    return raw.replace('too many registration attempts', 'Too many wrong invite codes');
+  }
   if (raw.includes('registration response failed verification')) {
     return "That passkey didn't verify with the server. Please try again.";
   }
@@ -44,14 +54,18 @@ export function friendlyRegisterError(err: unknown): string {
   return raw;
 }
 
+/**
+ * Open the WS after an in-session sign-in or register.
+ *
+ * `$wsState` is not written here: the client reports its own state and
+ * `installWsResync` in main.tsx mirrors it, so a socket that drops later still
+ * moves the indicator. This function owns the error text only.
+ */
 async function connectAndTrack(stores: AppStores): Promise<void> {
-  stores.$wsState.value = 'connecting';
   stores.$wsError.value = null;
   try {
     await stores.client.connect();
-    stores.$wsState.value = 'connected';
   } catch (err) {
-    stores.$wsState.value = 'error';
     stores.$wsError.value = describeError(err);
   }
 }
@@ -74,12 +88,16 @@ export const SHELL_ACTIONS: ActionRegistry<AppStores> = {
   'auth:register': async ({ stores }) => {
     stores.$signInError.value = null;
     try {
-      const user = await stores.client.registerPasskey(stores.$signInDisplayName.value);
+      const user = await stores.client.registerPasskey(
+        stores.$signInDisplayName.value,
+        stores.$signInInviteCode.value,
+      );
       // Connect BEFORE flipping $currentUser so the DOM transition only happens
       // once the broadcast subscription is live.
       await connectAndTrack(stores);
       stores.$currentUser.value = user;
       stores.$signInDisplayName.value = '';
+      stores.$signInInviteCode.value = '';
     } catch (err) {
       stores.$signInError.value = friendlyRegisterError(err);
     }

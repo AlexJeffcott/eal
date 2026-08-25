@@ -16,7 +16,7 @@
 import puppeteer, { type Browser } from 'puppeteer';
 import { rm, mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { bootApi } from './lib/boot-api.ts';
+import { bootApi, E2E_INVITE_CODE } from './lib/boot-api.ts';
 import { waitForSignedInAs, waitForText, NAV_TIMEOUT_MS } from './lib/e2e-config.ts';
 import {
   addCredential,
@@ -53,6 +53,7 @@ async function main(): Promise<number> {
     await waitForText(pageA, 'Sign in');
 
     await pageA.locator('input[name="displayName"]').fill(DISPLAY_NAME);
+    await pageA.locator('input[name="inviteCode"]').fill(E2E_INVITE_CODE);
     await pageA.locator('[data-action="auth:register"]').click();
     await waitForSignedInAs(pageA, DISPLAY_NAME);
 

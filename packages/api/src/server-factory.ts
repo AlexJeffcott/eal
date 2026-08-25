@@ -4,6 +4,7 @@ import type { DatabaseClient } from './db/client.ts';
 import { authMiddleware } from './auth/middleware.ts';
 import type { GetPrincipalFn, Principal } from './auth/principals.ts';
 import { authHttpRoutes } from './handlers/auth.http.ts';
+import { loadRegistrationConfig } from './auth/registration.ts';
 import type { RpConfig } from './auth/webauthn.ts';
 import { buildSpa } from './spa.ts';
 import type { TaskEvent } from './handlers/tasks.http.ts';
@@ -195,7 +196,12 @@ export async function createAppInternal(
     }
   }
 
-  const auth = authHttpRoutes({ db, rp });
+  // Apps and the auth gate both read their config from this environment.
+  // Production omits `options.env` and gets `process.env`; tests pass what they
+  // mean to configure, so a developer's `.env` never decides a test's outcome.
+  const appEnv = options.env ?? process.env;
+
+  const auth = authHttpRoutes({ db, rp, registration: loadRegistrationConfig(appEnv) });
   const messages = messagesHttpRoutes({ db, getPrincipal: getPrincipalFn });
   const users = usersHttpRoutes({ db, getPrincipal: getPrincipalFn });
   // VAPID config is read at factory time; tests construct the factory
@@ -208,7 +214,6 @@ export async function createAppInternal(
   // App routes are composed from the registry; global concerns (auth, users,
   // the chat relay) are mounted directly — they are not apps.
   const apps = options.apps ?? API_APPS;
-  const appEnv = options.env ?? process.env;
 
   // The WsService exposes the connection-registry to apps without leaking
   // the underlying Maps. Implementation reuses the same maps used internally.

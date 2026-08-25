@@ -1,5 +1,5 @@
 import { $state } from '@fairfox/polly/state';
-import type { CurrentUser, Message } from '@eal/client';
+import type { CurrentUser, Message, WsConnectionState } from '@eal/client';
 
 /**
  * Shell-global reactive state — the things true everywhere, regardless of
@@ -7,11 +7,18 @@ import type { CurrentUser, Message } from '@eal/client';
  * assistant chat. Per-app state lives in that app's own stores module.
  */
 
-export type WsConnectionState = 'idle' | 'connecting' | 'connected' | 'error';
+/**
+ * The WS connection state is the client's, re-exported rather than redeclared:
+ * the shell mirrors what the socket actually reports, and a second union here
+ * would drift from it. `reconnecting` is the state a phone spends its time in.
+ */
+export type { WsConnectionState };
 export type CliPairStatus = 'idle' | 'claiming' | 'success';
 
 export const $currentUser = $state<CurrentUser | null>(null);
 export const $signInDisplayName = $state<string>('');
+/** The invite code the server's registration gate requires. */
+export const $signInInviteCode = $state<string>('');
 export const $signInError = $state<string | null>(null);
 export const $wsState = $state<WsConnectionState>('idle');
 export const $wsError = $state<string | null>(null);
@@ -38,6 +45,7 @@ export const $chatError = $state<string | null>(null);
 export interface ShellStores {
   $currentUser: typeof $currentUser;
   $signInDisplayName: typeof $signInDisplayName;
+  $signInInviteCode: typeof $signInInviteCode;
   $signInError: typeof $signInError;
   $wsState: typeof $wsState;
   $wsError: typeof $wsError;
@@ -58,6 +66,7 @@ export function createShellStores(): ShellStores {
   return {
     $currentUser,
     $signInDisplayName,
+    $signInInviteCode,
     $signInError,
     $wsState,
     $wsError,
@@ -78,6 +87,7 @@ export function createShellStores(): ShellStores {
 export function resetShellStores(): void {
   $currentUser.value = null;
   $signInDisplayName.value = '';
+  $signInInviteCode.value = '';
   $signInError.value = null;
   $wsState.value = 'idle';
   $wsError.value = null;

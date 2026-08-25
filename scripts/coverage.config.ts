@@ -22,10 +22,6 @@ export const config: CoverageConfig = {
   srcDir: 'packages',
   defaultThreshold: { lines: 80, funcs: 80 },
   exempt: {
-    'packages/api/src/handlers/auth.shared.ts': {
-      reason: 'e2e: register/login flow needs the real ceremony',
-      claimedBy: 'packages/e2e-tests/tests/auth.spec.ts',
-    },
     'packages/api/src/handlers/auth.http.ts': {
       reason: 'e2e: Elysia route wiring is exercised by playwright',
       claimedBy: 'packages/e2e-tests/tests/auth.spec.ts',

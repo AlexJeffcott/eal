@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { attachVirtualAuthenticator } from './lib/virtual-authenticator.ts';
+import { registerPasskey } from './lib/shell.ts';
 
 /**
  * Family-phone panel UI gate. Single browser, real api — closes the loop on
@@ -19,8 +20,7 @@ test.describe('family-phone — panel mounts and reacts to pair state', () => {
   test('signed-in but unpaired browser sees the panel + PairFirstNotice', async ({ page }) => {
     await attachVirtualAuthenticator(page);
     await page.goto('/');
-    await page.locator('input[name="displayName"]').fill('phone-tester');
-    await page.locator('[data-action="auth:register"]').click();
+    await registerPasskey(page, 'phone-tester');
     await expect(page.locator('[data-landing-app="tasks"]')).toBeVisible({ timeout: 10_000 });
 
     await page.goto('/family-phone');
@@ -43,8 +43,7 @@ test.describe('family-phone — panel mounts and reacts to pair state', () => {
     await attachVirtualAuthenticator(page);
     await page.setViewportSize({ width: 350, height: 900 });
     await page.goto('/');
-    await page.locator('input[name="displayName"]').fill('phone-narrow');
-    await page.locator('[data-action="auth:register"]').click();
+    await registerPasskey(page, 'phone-narrow');
     await expect(page.locator('[data-landing-app="tasks"]')).toBeVisible({ timeout: 10_000 });
 
     await page.goto('/family-phone');

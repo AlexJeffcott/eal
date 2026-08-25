@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
 import { sslCmd } from './ssl.ts';
 
@@ -13,14 +14,26 @@ const ENV_PATH = resolve(ROOT, '.env');
  * are concrete values materialised into explicit, user-owned config; edit
  * `.env` to change them. Bun auto-loads `.env` from the project root.
  *
- *   PORT          internal listen port
- *   DATABASE_PATH file-backed SQLite so dev data survives restarts
- *   EAL_ORIGIN    public origin; the WebAuthn RP ID is its hostname
+ *   PORT            internal listen port
+ *   DATABASE_PATH   file-backed SQLite so dev data survives restarts
+ *   EAL_ORIGIN      public origin; the WebAuthn RP ID is its hostname
+ *   EAL_INVITE_CODE the registration gate; unset means registration is closed
  */
+
+/** A fresh 32-character invite code. Never a literal: a code committed to the
+ *  repo is a code everyone has. See packages/api/src/auth/registration.ts. */
+function randomInviteCode(): string {
+  return randomBytes(24).toString('base64url');
+}
+
+/** Keys whose values are never printed to the terminal. */
+const SECRET_KEYS: ReadonlySet<string> = new Set(['EAL_INVITE_CODE']);
+
 const DEV_ENV: ReadonlyArray<readonly [key: string, value: string]> = [
   ['PORT', '4321'],
   ['DATABASE_PATH', './data/eal.db'],
   ['EAL_ORIGIN', 'https://localhost:4321'],
+  ['EAL_INVITE_CODE', randomInviteCode()],
 ];
 
 function missingEnvKeys(): string[] {
@@ -46,7 +59,10 @@ function ensureEnv(): Promise<number> {
   for (const [key, value] of missing) {
     appendFileSync(ENV_PATH, `${prefix}${key}=${value}\n`, { encoding: 'utf8' });
     prefix = '';
-    console.log(`         appended ${key}=${value} to existing .env`);
+    // A secret must not reach the terminal: transcripts and scrollback outlive
+    // the session. Report the key and leave the value in the file.
+    const shown = SECRET_KEYS.has(key) ? '<generated — read it from .env>' : value;
+    console.log(`         appended ${key}=${shown} to existing .env`);
   }
   return Promise.resolve(0);
 }
@@ -77,7 +93,7 @@ const STEPS: Step[] = [
   },
   {
     id: 'env',
-    name: '.env (PORT, DATABASE_PATH, EAL_ORIGIN)',
+    name: '.env (PORT, DATABASE_PATH, EAL_ORIGIN, EAL_INVITE_CODE)',
     isDone: () => missingEnvKeys().length === 0,
     run: () => ensureEnv(),
   },

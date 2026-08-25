@@ -77,6 +77,9 @@ function makeClient(): FakeClient {
   const client: EalClient = {
     connect: notImplemented('connect'),
     disconnect: notImplemented('disconnect'),
+    connectionState: notImplemented('connectionState'),
+    subscribeConnectionState: notImplemented('subscribeConnectionState'),
+    reconnectNow: notImplemented('reconnectNow'),
     registerPasskey: notImplemented('registerPasskey'),
     signInWithPasskey: notImplemented('signInWithPasskey'),
     signOut: notImplemented('signOut'),
