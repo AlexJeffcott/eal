@@ -70,6 +70,60 @@ export function progressOf(index: ChildIndex, id: number): Progress {
 }
 
 /**
+ * Every id beneath `id`, at any depth — the set a scoped list draws from.
+ *
+ * The container itself is not a member — the breadcrumb already names it, so
+ * listing it as the first row would be a second copy of the thing the reader
+ * is standing inside. The one exception is a container caught in a cycle,
+ * which is its own descendant; the guard below stops the walk rather than
+ * pretending the mirror is a tree.
+ *
+ * Deleted rows *are* members, unlike `progressOf`, because Trash is a view
+ * over this same tree: a trashed subtask has to stay reachable while its
+ * project is the scope, or scoping in would be a way to lose it.
+ *
+ * The `seen` guard is `progressOf`'s, for `progressOf`'s reason — a mirror
+ * patched by out-of-order broadcasts can hold a cycle the server rejected, and
+ * an unguarded walk would not terminate.
+ */
+export function descendantIds(index: ChildIndex, id: number): Set<number> {
+  const seen = new Set<number>();
+  const walk = (parentId: number): void => {
+    const children = index.get(parentId);
+    if (children === undefined) return;
+    for (const child of children) {
+      if (seen.has(child.id)) continue;
+      seen.add(child.id);
+      walk(child.id);
+    }
+  };
+  walk(id);
+  return seen;
+}
+
+/**
+ * The containers `id` sits inside, outermost first — what the breadcrumb walks
+ * back along. `id`'s own row is not included; nor is a parent the mirror has
+ * not seen yet, which ends the chain early rather than inventing a crumb.
+ *
+ * Cycle guard again, and note it also covers the self-parent case a single
+ * broadcast could carry.
+ */
+export function ancestorsOf(tasks: ReadonlyMap<number, Task>, id: number): Task[] {
+  const chain: Task[] = [];
+  const seen = new Set<number>([id]);
+  let current = tasks.get(id);
+  while (current !== undefined && current.parentId !== null && !seen.has(current.parentId)) {
+    seen.add(current.parentId);
+    const parent = tasks.get(current.parentId);
+    if (parent === undefined) break;
+    chain.push(parent);
+    current = parent;
+  }
+  return chain.reverse();
+}
+
+/**
  * No cycle guard here, unlike `progressOf`. A task has one parent, so a cycle
  * in the mirror is a closed loop that no root points into: the walk below
  * starts at the roots and cannot enter one. Members of a cycle are picked up

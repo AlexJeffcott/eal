@@ -51,7 +51,7 @@ describe('applySchema', () => {
     ]);
   });
 
-  test('tasks table has the columns documented in docs/tasks-v1.md', () => {
+  test('tasks table has the columns documented in docs/tasks-v1.md, plus kind', () => {
     applySchema(db);
     const cols = columns(db, 'tasks').map((c) => c.name).sort();
     expect(cols).toEqual([
@@ -63,6 +63,7 @@ describe('applySchema', () => {
       'deleted_at',
       'due_at',
       'id',
+      'kind',
       'notes',
       'parent_id',
       'position',
@@ -101,6 +102,201 @@ describe('applySchema', () => {
     ).not.toThrow();
   });
 
+  test('tasks.kind defaults to task, is CHECK-bounded, and survives a repeat apply', () => {
+    applySchema(db);
+    db.prepare("INSERT INTO users (display_name) VALUES ('alex')").run();
+    // A row written before the column existed reads as a plain task. A row
+    // holding nothing stays there — only a row that already holds children is
+    // levelled up, by promoteGrandfatheredContainers.
+    db.prepare("INSERT INTO tasks (title, status, created_by, updated_by) VALUES ('captured', 'open', 1, 1)").run();
+
+    interface KindRow { kind: string }
+    const before = db.prepare<KindRow, []>("SELECT kind FROM tasks WHERE title = 'captured'").get();
+    expect(before?.kind).toBe('task');
+
+    // The CHECK bounds the vocabulary. What it cannot police is the pairing
+    // with the parent row — that is handlers/tasks.shared.ts:levelViolation.
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO tasks (title, status, kind, created_by, updated_by) VALUES ('x', 'open', 'milestone', 1, 1)",
+        )
+        .run(),
+    ).toThrow();
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO tasks (title, status, kind, created_by, updated_by) VALUES ('x', 'open', 'project', 1, 1)",
+        )
+        .run(),
+    ).not.toThrow();
+
+    // Idempotent: a second and third apply neither re-adds the column nor
+    // rewrites the rows that were already there.
+    applySchema(db);
+    applySchema(db);
+    interface CountRow { n: number }
+    const kinds = db
+      .prepare<CountRow, []>("SELECT COUNT(*) AS n FROM tasks WHERE kind = 'task'")
+      .get();
+    expect(kinds?.n).toBe(1);
+    const after = db.prepare<KindRow, []>("SELECT kind FROM tasks WHERE title = 'captured'").get();
+    expect(after?.kind).toBe('task');
+  });
+
+  /**
+   * A tasks table in the shape it had before `kind` existed. `applySchema`
+   * skips a `CREATE TABLE IF NOT EXISTS` for a table already present, so
+   * applying over this runs the real upgrade path: ensureColumn adds the
+   * column, every row defaults to 'task', and the promote pass then runs.
+   */
+  function seedPreKindTasks(db: DatabaseClient): void {
+    db.exec(`
+      CREATE TABLE users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        display_name TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO users (display_name) VALUES ('alex');
+      CREATE TABLE tasks (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        parent_id     INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
+        title         TEXT    NOT NULL,
+        notes         TEXT    NOT NULL DEFAULT '',
+        status        TEXT    NOT NULL CHECK (status IN ('open','done')),
+        defer_until   TEXT,
+        due_at        TEXT,
+        created_by    INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+        assigned_to   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        updated_by    INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+        created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+        updated_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+        completed_at  TEXT,
+        deleted_at    TEXT,
+        position      INTEGER NOT NULL DEFAULT 0,
+        CHECK ((status = 'done') = (completed_at IS NOT NULL))
+      );
+    `);
+  }
+
+  /** Insert one pre-migration task and return its id. */
+  function seedTask(
+    db: DatabaseClient,
+    title: string,
+    parentId: number | null,
+    deletedAt: string | null = null,
+  ): number {
+    interface IdRow { id: number }
+    const row = db
+      .prepare<IdRow, [number | null, string, string | null]>(
+        `INSERT INTO tasks (parent_id, title, status, deleted_at, created_by, updated_by)
+         VALUES (?, ?, 'open', ?, 1, 1) RETURNING id`,
+      )
+      .get(parentId, title, deletedAt);
+    if (row === null) throw new Error(`insert failed for ${title}`);
+    return row.id;
+  }
+
+  function kindOf(db: DatabaseClient, id: number): string {
+    interface KindRow { kind: string }
+    const row = db.prepare<KindRow, [number]>('SELECT kind FROM tasks WHERE id = ?').get(id);
+    if (row === null) throw new Error(`no task ${id}`);
+    return row.kind;
+  }
+
+  test('a pre-kind tree is levelled on upgrade: root project, its parent child epic', () => {
+    seedPreKindTasks(db);
+    // The shape the household already has: a job, a step inside it, and a step
+    // inside that. Every row would default to 'task', which no write path can
+    // produce, so all three pairings would be illegal from the first boot.
+    const project = seedTask(db, 'Redecorate the hall', null);
+    const epic = seedTask(db, 'Choose a paint colour', project);
+    const leaf = seedTask(db, 'Get tester pots', epic);
+    const lonely = seedTask(db, 'Book the dentist', null);
+
+    applySchema(db);
+
+    expect(kindOf(db, project)).toBe('project');
+    expect(kindOf(db, epic)).toBe('epic');
+    // A row holding nothing keeps the default — a task under an epic is legal.
+    expect(kindOf(db, leaf)).toBe('task');
+    // So does a root holding nothing. Nothing is promoted for being a root.
+    expect(kindOf(db, lonely)).toBe('task');
+  });
+
+  test('a trashed child still levels its parent — restore must not break it', () => {
+    seedPreKindTasks(db);
+    const parent = seedTask(db, 'Plan the trip', null);
+    seedTask(db, 'Book flights', parent, '2026-05-20 09:00:00');
+
+    applySchema(db);
+
+    expect(kindOf(db, parent)).toBe('project');
+  });
+
+  test('the promote pass is idempotent and never overwrites a chosen level', () => {
+    seedPreKindTasks(db);
+    const project = seedTask(db, 'Redecorate the hall', null);
+    const epic = seedTask(db, 'Choose a paint colour', project);
+    applySchema(db);
+
+    // Re-level by hand, past what any write path allows: the pass must leave it
+    // alone on the next boot, because it only ever writes a row reading 'task'.
+    db.prepare<never, [number]>("UPDATE tasks SET kind = 'project' WHERE id = ?").run(epic);
+    applySchema(db);
+    applySchema(db);
+
+    expect(kindOf(db, project)).toBe('project');
+    expect(kindOf(db, epic)).toBe('project');
+  });
+
+  test('a fourth level has no legal kind: it is reported, not rewritten', () => {
+    seedPreKindTasks(db);
+    const project = seedTask(db, 'Move house', null);
+    const epic = seedTask(db, 'Pack the kitchen', project);
+    const stranded = seedTask(db, 'Pack the plates', epic);
+    const deepest = seedTask(db, 'Wrap each plate', stranded);
+
+    const warnings: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...args: unknown[]): void => {
+      warnings.push(args.map(String).join(' '));
+    };
+    try {
+      applySchema(db);
+    } finally {
+      console.warn = realWarn;
+    }
+
+    expect(kindOf(db, project)).toBe('project');
+    expect(kindOf(db, epic)).toBe('epic');
+    // Three levels is the whole model, so this row has nowhere to go. It keeps
+    // the default rather than having its tree rewritten under it.
+    expect(kindOf(db, stranded)).toBe('task');
+    expect(kindOf(db, deepest)).toBe('task');
+    // And the operator is told, with the id, instead of finding out later.
+    expect(warnings.join('\n')).toContain(String(stranded));
+  });
+
+  test('a database with nothing to promote logs nothing', () => {
+    seedPreKindTasks(db);
+    seedTask(db, 'Book the dentist', null);
+
+    const warnings: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...args: unknown[]): void => {
+      warnings.push(args.map(String).join(' '));
+    };
+    try {
+      applySchema(db);
+      applySchema(db);
+    } finally {
+      console.warn = realWarn;
+    }
+
+    expect(warnings).toEqual([]);
+  });
+
   test('running applySchema twice is a no-op', () => {
     applySchema(db);
     expect(() => applySchema(db)).not.toThrow();
@@ -110,7 +306,7 @@ describe('applySchema', () => {
 
     const taskCols = columns(db, 'tasks').map((c) => c.name);
     // Same set after the second apply.
-    expect(taskCols.length).toBe(15);
+    expect(taskCols.length).toBe(16);
   });
 
   test('schema preserves rows across repeat applySchema calls', () => {
@@ -214,6 +410,7 @@ describe('applySchema', () => {
       'idx_tasks_assigned_to',
       'idx_tasks_defer_until',
       'idx_tasks_deleted_at',
+      'idx_tasks_kind',
       'idx_tasks_parent_position',
       'idx_tasks_status',
     ]);

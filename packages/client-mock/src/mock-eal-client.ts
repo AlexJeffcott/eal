@@ -112,6 +112,12 @@ function newTaskRow(input: CreateTaskInput, id: number, principalId: number): Ta
     title: input.title.trim(),
     notes: input.notes ?? '',
     status: 'open',
+    // The mock stores whatever it is handed. It deliberately does NOT police
+    // the project/epic/task level rule: that lives on the server
+    // (handlers/tasks.shared.ts:levelViolation), and a second copy here would
+    // be a second thing to keep true. Browser-tier tests that need a rejection
+    // arm one with mockTaskError.
+    kind: input.kind ?? 'task',
     deferUntil: input.deferUntil ?? null,
     dueAt: input.dueAt ?? null,
     createdBy: principalId,
@@ -146,6 +152,9 @@ function applyFilter(tasks: readonly Task[], input: ListTasksInput | undefined, 
   if (input?.createdBy !== undefined) {
     const target = input.createdBy === 'me' ? principalId : input.createdBy;
     result = result.filter((t) => t.createdBy === target);
+  }
+  if (input?.kind !== undefined) {
+    result = result.filter((t) => t.kind === input.kind);
   }
   if (input?.status !== undefined) {
     result = result.filter((t) => t.status === input.status);
@@ -601,6 +610,7 @@ export function createMockEalClient(): MockEalClient {
         ...task,
         ...(input.title !== undefined ? { title: input.title.trim() } : {}),
         ...(input.notes !== undefined ? { notes: input.notes } : {}),
+        ...(input.kind !== undefined ? { kind: input.kind } : {}),
         ...(input.assignedTo !== undefined ? { assignedTo: input.assignedTo } : {}),
         ...(input.parentId !== undefined ? { parentId: input.parentId } : {}),
         ...(input.deferUntil !== undefined ? { deferUntil: input.deferUntil } : {}),

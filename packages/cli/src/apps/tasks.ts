@@ -2,6 +2,7 @@ import type {
   CreateTaskInput,
   ListTasksInput,
   Task,
+  TaskKind,
   UpdateTaskInput,
 } from '@eal/client';
 import type { CliMcpApp, EalMcpTool } from './types.ts';
@@ -25,6 +26,18 @@ function optionalString(args: Record<string, unknown>, key: string): string | un
   return typeof value === 'string' ? value : undefined;
 }
 
+/**
+ * A level argument, when present. An unrecognised one throws rather than being
+ * dropped: silently ignoring `kind: "epik"` would create a task at the wrong
+ * level and report success, which is the worst answer available.
+ */
+function optionalKind(args: Record<string, unknown>, key: string): TaskKind | undefined {
+  const value = args[key];
+  if (value === undefined) return undefined;
+  if (value === 'project' || value === 'epic' || value === 'task') return value;
+  throw new Error(`${key} must be "project", "epic" or "task"`);
+}
+
 function requireNumber(args: Record<string, unknown>, key: string): number {
   const value = args[key];
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -33,11 +46,27 @@ function requireNumber(args: Record<string, unknown>, key: string): number {
   return value;
 }
 
+// The level is part of a task's identity, not decoration: the assistant has to
+// know that #12 is a project before it offers to file something under it, and
+// the level rule (project → epic → task) is the reason a create can be
+// rejected. Every line the assistant reads therefore carries it.
 function formatTask(task: Task): string {
   const due = task.dueAt !== null ? ` (due ${task.dueAt})` : '';
   const defer = task.deferUntil !== null ? ` (deferred to ${task.deferUntil})` : '';
-  return `#${task.id} [${task.status}] ${task.title}${due}${defer}`;
+  return `#${task.id} [${task.kind}/${task.status}] ${task.title}${due}${defer}`;
 }
+
+/** Shared prose so all three schemas describe the levels the same way. */
+const KIND_DESCRIPTION =
+  'Level in the hierarchy. A project holds epics and tasks and sits at the top; ' +
+  'an epic must sit inside a project; a task may sit loose, inside a project, or ' +
+  'inside an epic — never inside another task.';
+
+const KIND_PROPERTY = {
+  type: 'string',
+  enum: ['project', 'epic', 'task'],
+  description: KIND_DESCRIPTION,
+};
 
 const TOOLS: EalMcpTool[] = [
   {
@@ -50,6 +79,7 @@ const TOOLS: EalMcpTool[] = [
         q: { type: 'string', description: 'Case-insensitive search over title and notes' },
         today: { type: 'boolean', description: 'Only tasks due or active today' },
         inbox: { type: 'boolean', description: 'Only top-level tasks with no project/parent' },
+        kind: KIND_PROPERTY,
       },
     },
     run: async (client, args) => {
@@ -60,6 +90,8 @@ const TOOLS: EalMcpTool[] = [
       if (q !== undefined) input.q = q;
       if (args['today'] === true) input.today = true;
       if (args['inbox'] === true) input.inbox = true;
+      const kind = optionalKind(args, 'kind');
+      if (kind !== undefined) input.kind = kind;
       const tasks = await client.listTasks(input);
       if (tasks.length === 0) return 'No tasks match.';
       return tasks.map(formatTask).join('\n');
@@ -67,7 +99,7 @@ const TOOLS: EalMcpTool[] = [
   },
   {
     name: 'get_task',
-    description: 'Get one task with its notes and direct subtasks.',
+    description: 'Get one task with its level, notes and direct subtasks.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'number', description: 'The task id' } },
@@ -92,6 +124,7 @@ const TOOLS: EalMcpTool[] = [
       properties: {
         title: { type: 'string', description: 'Short task title' },
         notes: { type: 'string', description: 'Longer free-text notes' },
+        kind: KIND_PROPERTY,
         parent_id: { type: 'number', description: 'id of a parent task to nest this under' },
         due_at: { type: 'string', description: 'ISO date/time the task is due' },
         defer_until: { type: 'string', description: 'ISO date/time before which the task is hidden' },
@@ -102,6 +135,8 @@ const TOOLS: EalMcpTool[] = [
       const input: CreateTaskInput = { title: requireString(args, 'title') };
       const notes = optionalString(args, 'notes');
       if (notes !== undefined) input.notes = notes;
+      const kind = optionalKind(args, 'kind');
+      if (kind !== undefined) input.kind = kind;
       if (typeof args['parent_id'] === 'number') input.parentId = args['parent_id'];
       const dueAt = optionalString(args, 'due_at');
       if (dueAt !== undefined) input.dueAt = dueAt;
@@ -112,13 +147,16 @@ const TOOLS: EalMcpTool[] = [
   },
   {
     name: 'update_task',
-    description: 'Update an existing task’s title, notes, due date, or defer date.',
+    description:
+      'Update an existing task’s title, notes, level, due date, or defer date. ' +
+      'Changing the level is how a captured task becomes a project.',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'number', description: 'The task id' },
         title: { type: 'string' },
         notes: { type: 'string' },
+        kind: KIND_PROPERTY,
         due_at: { type: 'string', description: 'ISO date/time, or empty string to clear' },
         defer_until: { type: 'string', description: 'ISO date/time, or empty string to clear' },
       },
@@ -131,6 +169,8 @@ const TOOLS: EalMcpTool[] = [
       if (title !== undefined) input.title = title;
       const notes = optionalString(args, 'notes');
       if (notes !== undefined) input.notes = notes;
+      const kind = optionalKind(args, 'kind');
+      if (kind !== undefined) input.kind = kind;
       const dueAt = optionalString(args, 'due_at');
       if (dueAt !== undefined) input.dueAt = dueAt.length === 0 ? null : dueAt;
       const deferUntil = optionalString(args, 'defer_until');
@@ -140,7 +180,7 @@ const TOOLS: EalMcpTool[] = [
   },
   {
     name: 'complete_task',
-    description: 'Mark a task as done.',
+    description: 'Mark a task as done. Works at any level — a project too.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'number', description: 'The task id' } },
@@ -152,7 +192,7 @@ const TOOLS: EalMcpTool[] = [
   },
   {
     name: 'reopen_task',
-    description: 'Reopen a completed task (set it back to open).',
+    description: 'Reopen a completed task (set it back to open). Works at any level.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'number', description: 'The task id' } },

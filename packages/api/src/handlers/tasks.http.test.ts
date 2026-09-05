@@ -206,8 +206,10 @@ describe('tasks http wire contract', () => {
 
   test('PATCH cycle: 400 with cycle phrase', async () => {
     const app = await createTestApp(db, { principalOverride: alex });
-    const g = unwrapTask((await fetch(app, 'POST', '/api/v1/tasks', { title: 'g' })).body);
-    const p = unwrapTask((await fetch(app, 'POST', '/api/v1/tasks', { title: 'p', parent_id: g.id })).body);
+    const g = unwrapTask((await fetch(app, 'POST', '/api/v1/tasks', { title: 'g', kind: 'project' })).body);
+    const p = unwrapTask(
+      (await fetch(app, 'POST', '/api/v1/tasks', { title: 'p', kind: 'epic', parent_id: g.id })).body,
+    );
     const c = unwrapTask((await fetch(app, 'POST', '/api/v1/tasks', { title: 'c', parent_id: p.id })).body);
 
     const cyc = await fetch(app, 'PATCH', `/api/v1/tasks/${g.id}`, { parent_id: c.id });
@@ -216,9 +218,52 @@ describe('tasks http wire contract', () => {
     expect(cyc.body.error).toContain('cycle');
   });
 
+  test('kind rides the wire on create, list and patch', async () => {
+    const app = await createTestApp(db, { principalOverride: alex });
+    const created = await fetch(app, 'POST', '/api/v1/tasks', {
+      title: 'renovate',
+      kind: 'project',
+    });
+    expect(created.status).toBe(200);
+    const project = unwrapTask(created.body);
+
+    const listed = await fetch(app, 'GET', '/api/v1/tasks?kind=project');
+    if (!isTasksList(listed.body)) throw new Error('expected {tasks} envelope');
+    expect(listed.body.tasks.map((t) => t.title)).toEqual(['renovate']);
+
+    const demoted = await fetch(app, 'PATCH', `/api/v1/tasks/${project.id}`, { kind: 'task' });
+    expect(demoted.status).toBe(200);
+    const after = await fetch(app, 'GET', '/api/v1/tasks?kind=task');
+    if (!isTasksList(after.body)) throw new Error('expected {tasks} envelope');
+    expect(after.body.tasks.map((t) => t.title)).toEqual(['renovate']);
+  });
+
+  test('a level rejection is a 400 in the {error} envelope', async () => {
+    const app = await createTestApp(db, { principalOverride: alex });
+    const plain = unwrapTask((await fetch(app, 'POST', '/api/v1/tasks', { title: 'plain' })).body);
+    const res = await fetch(app, 'POST', '/api/v1/tasks', {
+      title: 'sub',
+      parent_id: plain.id,
+    });
+    expect(res.status).toBe(400);
+    if (!isErrorEnvelope(res.body)) throw new Error('expected {error} envelope');
+    expect(res.body.error).toContain('a task cannot be filed under another task');
+  });
+
+  test('an unknown kind is rejected rather than ignored', async () => {
+    // Silently dropping it would list everything and call that a filter.
+    const app = await createTestApp(db, { principalOverride: alex });
+    const res = await fetch(app, 'GET', '/api/v1/tasks?kind=milestone');
+    expect(res.status).toBe(400);
+    if (!isErrorEnvelope(res.body)) throw new Error('expected {error} envelope');
+    expect(res.body.error).toContain('kind must be');
+  });
+
   test('POST /clone returns {rootId, tasks: Task[]}', async () => {
     const app = await createTestApp(db, { principalOverride: alex });
-    const shop = unwrapTask((await fetch(app, 'POST', '/api/v1/tasks', { title: 'shop' })).body);
+    const shop = unwrapTask(
+      (await fetch(app, 'POST', '/api/v1/tasks', { title: 'shop', kind: 'project' })).body,
+    );
     await fetch(app, 'POST', '/api/v1/tasks', { title: 'milk', parent_id: shop.id });
 
     const cloned = await fetch(app, 'POST', `/api/v1/tasks/${shop.id}/clone`);

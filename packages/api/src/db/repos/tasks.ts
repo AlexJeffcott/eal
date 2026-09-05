@@ -11,12 +11,21 @@ export type Clock = () => string;
  */
 export const systemClock: Clock = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
 
+/**
+ * The three fixed levels a task can sit at. Storage is a column on `tasks`,
+ * not a separate table — see db/schema.ts for why. The rule about which kind
+ * may sit under which is application-level (handlers/tasks.shared.ts); the
+ * column's own CHECK only bounds the vocabulary.
+ */
+export type TaskKind = 'project' | 'epic' | 'task';
+
 export interface TaskRow {
   id: number;
   parent_id: number | null;
   title: string;
   notes: string;
   status: 'open' | 'done';
+  kind: TaskKind;
   defer_until: string | null;
   due_at: string | null;
   created_by: number;
@@ -33,6 +42,7 @@ export interface InsertTaskInput {
   parentId: number | null;
   title: string;
   notes: string;
+  kind: TaskKind;
   deferUntil: string | null;
   dueAt: string | null;
   createdBy: number;
@@ -43,6 +53,7 @@ export interface InsertTaskInput {
 export interface UpdateTaskInput {
   title?: string;
   notes?: string;
+  kind?: TaskKind;
   assignedTo?: number | null;
   parentId?: number | null;
   deferUntil?: string | null;
@@ -53,6 +64,7 @@ export interface UpdateTaskInput {
 
 export interface ListFilter {
   parentId?: number | null | 'any';
+  kind?: TaskKind;
   assignedTo?: number | null | 'any';
   createdBy?: number;
   status?: 'open' | 'done';
@@ -84,12 +96,12 @@ export interface TasksRepo {
 }
 
 const COLS =
-  'id, parent_id, title, notes, status, defer_until, due_at, created_by, assigned_to, updated_by, created_at, updated_at, completed_at, deleted_at, position';
+  'id, parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, created_at, updated_at, completed_at, deleted_at, position';
 
 // Same list, prefixed with the `tasks.` alias for queries that join recursive
 // CTEs (which themselves expose a column named `id`).
 const T_COLS =
-  'tasks.id, tasks.parent_id, tasks.title, tasks.notes, tasks.status, tasks.defer_until, tasks.due_at, tasks.created_by, tasks.assigned_to, tasks.updated_by, tasks.created_at, tasks.updated_at, tasks.completed_at, tasks.deleted_at, tasks.position';
+  'tasks.id, tasks.parent_id, tasks.title, tasks.notes, tasks.status, tasks.kind, tasks.defer_until, tasks.due_at, tasks.created_by, tasks.assigned_to, tasks.updated_by, tasks.created_at, tasks.updated_at, tasks.completed_at, tasks.deleted_at, tasks.position';
 
 export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock): TasksRepo {
   const insertStmt = db.prepare<
@@ -98,6 +110,7 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
       number | null,
       string,
       string,
+      TaskKind,
       string | null,
       string | null,
       number,
@@ -109,8 +122,8 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
     ]
   >(
     `INSERT INTO tasks
-       (parent_id, title, notes, status, defer_until, due_at, created_by, assigned_to, updated_by, position, created_at, updated_at)
-       VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)
+       (parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, position, created_at, updated_at)
+       VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING ${COLS}`,
   );
 
@@ -189,6 +202,7 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
         input.parentId,
         input.title,
         input.notes,
+        input.kind,
         input.deferUntil,
         input.dueAt,
         input.createdBy,
@@ -231,6 +245,11 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
           wheres.push('parent_id = ?');
           params.push(filter.parentId);
         }
+      }
+
+      if (filter.kind !== undefined) {
+        wheres.push('kind = ?');
+        params.push(filter.kind);
       }
 
       if (filter.assignedTo !== undefined && filter.assignedTo !== 'any') {
@@ -323,6 +342,10 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
         sets.push('notes = ?');
         params.push(input.notes);
       }
+      if (input.kind !== undefined) {
+        sets.push('kind = ?');
+        params.push(input.kind);
+      }
       if (input.assignedTo !== undefined) {
         sets.push('assigned_to = ?');
         params.push(input.assignedTo);
@@ -386,6 +409,7 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
           root.parent_id,
           root.title,
           root.notes,
+          root.kind,
           root.defer_until,
           root.due_at,
           input.createdBy,
@@ -431,6 +455,7 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
             newParent ?? null,
             child.title,
             child.notes,
+            child.kind,
             child.defer_until,
             child.due_at,
             input.createdBy,

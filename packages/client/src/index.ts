@@ -14,6 +14,7 @@ export type {
   Task,
   TaskDetail,
   TaskEvent,
+  TaskKind,
   UpdateTaskInput,
 } from './task-types.ts';
 export type {

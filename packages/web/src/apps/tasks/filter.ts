@@ -1,6 +1,6 @@
 import Fuse from 'fuse.js';
 import type { Task } from '@eal/client';
-import { tasksInTreeOrder } from './tree.ts';
+import { descendantIds, indexChildren, tasksInTreeOrder } from './tree.ts';
 
 /**
  * The composable task filter. `view` is the structural scope (a one-tap
@@ -40,17 +40,25 @@ export type ConditionField = Condition['field'];
 
 export interface TaskFilter {
   view: TaskView;
+  /**
+   * The container the list is standing inside — a task id, or null for
+   * everywhere. When set, the list shows that container's subtree and a
+   * breadcrumb offers the way back out. Orthogonal to `view`: "what's due
+   * today, inside the kitchen project" is a sentence, so scope narrows
+   * whatever the view already selected.
+   */
+  scope: number | null;
   conditions: Condition[];
 }
 
 /** The canonical default — used for view comparison in serialisation. The
- *  signal store creates fresh `{ view, conditions: [] }` literals so nothing
- *  ever mutates this shared object. */
-export const DEFAULT_FILTER: TaskFilter = { view: 'inbox', conditions: [] };
+ *  signal store creates fresh `{ view, scope, conditions: [] }` literals so
+ *  nothing ever mutates this shared object. */
+export const DEFAULT_FILTER: TaskFilter = { view: 'inbox', scope: null, conditions: [] };
 
 /** A fresh default filter — its own `conditions` array. */
 export function freshFilter(): TaskFilter {
-  return { view: 'inbox', conditions: [] };
+  return { view: 'inbox', scope: null, conditions: [] };
 }
 
 // ── Condition ids ──────────────────────────────────────────────────────────
@@ -147,6 +155,18 @@ function asView(value: string | null): TaskView {
   }
 }
 
+/**
+ * `in=<id>`. Anything else degrades to "everywhere", the same way `asView`
+ * degrades to the inbox — a hand-edited or truncated URL opens the app rather
+ * than erroring at someone holding a phone.
+ */
+function asScope(value: string | null): number | null {
+  if (value === null) return null;
+  if (!/^\d+$/.test(value)) return null;
+  const id = Number(value);
+  return id > 0 ? id : null;
+}
+
 function isValidSelectValue(field: SelectCondition['field'], value: string): boolean {
   if (field === 'status') return value === 'open' || value === 'done';
   if (field === 'subtasks') return value === 'has' || value === 'none';
@@ -202,7 +222,11 @@ export function parseFilterFromUrl(search: string): TaskFilter {
     const cond = parseCondition(raw);
     if (cond !== null) conditions.push(cond);
   }
-  return { view: asView(params.get('view')), conditions };
+  return {
+    view: asView(params.get('view')),
+    scope: asScope(params.get('in')),
+    conditions,
+  };
 }
 
 /** Encode one condition to its `c` param value, or null when it is inert. */
@@ -225,6 +249,7 @@ function encodeCondition(c: Condition): string | null {
 export function serializeFilterToUrl(filter: TaskFilter): string {
   const params = new URLSearchParams();
   if (filter.view !== DEFAULT_FILTER.view) params.set('view', filter.view);
+  if (filter.scope !== null) params.set('in', String(filter.scope));
   for (const c of filter.conditions) {
     const encoded = encodeCondition(c);
     if (encoded !== null) params.append('c', encoded);
@@ -365,6 +390,10 @@ function conditionMatches(
  * names its parent, so a view that selects a child without its parent still
  * reads correctly.
  *
+ * `filter.scope`, when set, narrows to one container's subtree before the view
+ * and the conditions get a look. The container's own row is not in it: the
+ * breadcrumb names it, and repeating it as row one reads as a copy.
+ *
  * `recentlyCompleted` carries the linger set: ids the user ticked since the
  * last navigation. Those rows stay visible even when a status condition (or
  * the today view) would hide them — the satisfying "I just did that" beat.
@@ -376,8 +405,13 @@ export function visibleFor(
   ctx: { now: Date },
 ): Task[] {
   const todayCutoff = endOfDayIso(ctx.now);
+  // Resolved once per call rather than per row: the subtree is a set lookup,
+  // and a scope naming a container this mirror has never seen resolves to the
+  // empty set, so the list is empty and the breadcrumb says where you are.
+  const inScope = filter.scope === null ? null : descendantIds(indexChildren(tasks), filter.scope);
   const out: Task[] = [];
   for (const task of tasksInTreeOrder(tasks)) {
+    if (inScope !== null && !inScope.has(task.id)) continue;
     if (!inView(task, filter.view, todayCutoff, recentlyCompleted)) continue;
     let matched = true;
     for (const condition of filter.conditions) {

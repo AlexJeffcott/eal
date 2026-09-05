@@ -207,6 +207,7 @@ describe('Tasks UI (browser)', () => {
         title: 'mine one',
         notes: '',
         status: 'open',
+        kind: 'task',
         deferUntil: null,
         dueAt: null,
         createdBy: 1,
@@ -302,6 +303,7 @@ describe('Tasks UI (browser)', () => {
         title: 'remote',
         notes: '',
         status: 'open',
+        kind: 'task',
         deferUntil: null,
         dueAt: null,
         createdBy: 2,
@@ -335,11 +337,15 @@ describe('task detail editor', () => {
     await waitFor(() => document.querySelector('[data-task-detail]') !== null);
 
     const labels = document.querySelector('[data-task-detail]')?.textContent ?? '';
+    expect(labels).toContain('Level');
     expect(labels).toContain('Notes');
     expect(labels).toContain('Due');
     expect(labels).toContain('Hide until');
     expect(labels).toContain('Assignee');
-    expect(labels).toContain('Subtasks');
+    // Not Subtasks: a plain task's allowed parents are none, a project or an
+    // epic, so it can never hold one. Promoting it is what earns the field —
+    // proved in the levels block below.
+    expect(labels).not.toContain('Subtasks');
   });
 
   test('clicking the title again collapses the editor', async () => {
@@ -394,6 +400,19 @@ function addSubtask(parentId: number, title: string): void {
   commit('tasks:add-subtask', { taskId: String(parentId), value: title });
 }
 
+/** Move a row to another level — in production the Level ActionSelect does it. */
+function setKind(id: number, kind: string): void {
+  commit('tasks:set-kind', { taskId: String(id), value: kind });
+}
+
+/** Capture a task and promote it, which is how every container starts life. */
+async function addProject(title: string): Promise<number> {
+  const id = await addTask(title);
+  setKind(id, 'project');
+  await waitFor(() => stores.$tasksById.value.get(id)?.kind === 'project');
+  return id;
+}
+
 /** The id of the one listed row that is not `notThis`. Throws rather than
  *  returning a widened type, so the caller reads a plain number. */
 function otherRowId(notThis: number): number {
@@ -406,7 +425,7 @@ describe('subtasks', () => {
   test('a subtask gets its own row, right after its parent, naming it', async () => {
     signedIn();
     clickAction('tasks:set-view', { view: 'all' });
-    const parentId = await addTask('Plan the trip');
+    const parentId = await addProject('Plan the trip');
 
     clickAction('tasks:expand', { 'task-id': String(parentId) });
     await waitFor(() => document.querySelector('[data-task-detail]') !== null);
@@ -430,11 +449,14 @@ describe('subtasks', () => {
   test('progress counts the whole subtree, not just the direct children', async () => {
     signedIn();
     clickAction('tasks:set-view', { view: 'all' });
-    const parentId = await addTask('Plan the trip');
+    const parentId = await addProject('Plan the trip');
     addSubtask(parentId, 'Book flights');
     await waitFor(() => rowIds().length === 2);
 
-    addSubtask(otherRowId(parentId), 'Pick seats');
+    const middle = otherRowId(parentId);
+    setKind(middle, 'epic');
+    await waitFor(() => stores.$tasksById.value.get(middle)?.kind === 'epic');
+    addSubtask(middle, 'Pick seats');
     await waitFor(() => rowIds().length === 3);
 
     const progress = document.querySelectorAll('[data-task-progress]');
@@ -446,7 +468,7 @@ describe('subtasks', () => {
   test('a subtask is itself expandable — the tree is recursive', async () => {
     signedIn();
     clickAction('tasks:set-view', { view: 'all' });
-    const parentId = await addTask('Plan the trip');
+    const parentId = await addProject('Plan the trip');
     clickAction('tasks:expand', { 'task-id': String(parentId) });
     await waitFor(() => document.querySelector('[data-task-detail]') !== null);
     addSubtask(parentId, 'Book flights');
@@ -462,13 +484,141 @@ describe('subtasks', () => {
   test('the inbox stays unfiled capture — a subtask never lands there', async () => {
     signedIn();
     clickAction('tasks:set-view', { view: 'all' });
-    const parentId = await addTask('Plan the trip');
+    const parentId = await addProject('Plan the trip');
     addSubtask(parentId, 'Book flights');
     await waitFor(() => rowTitles().length === 2);
 
     clickAction('tasks:set-view', { view: 'inbox' });
     await waitFor(() => rowTitles().length === 1);
     expect(rowTitles()).toEqual(['Plan the trip']);
+  });
+});
+
+describe('levels', () => {
+  test('promoting a captured task keeps its id and gives it the subtask field', async () => {
+    // The capture flow the level column exists for: write it down, discover
+    // later it is a project. Promotion is one update, so the row — and every
+    // reference to it — survives.
+    signedIn();
+    const id = await addTask('Renovate the kitchen');
+    clickAction('tasks:expand', { 'task-id': String(id) });
+    await waitFor(() => document.querySelector('[data-task-detail]') !== null);
+    expect(document.querySelector('[data-task-detail]')?.textContent ?? '').not.toContain(
+      'Subtasks',
+    );
+
+    setKind(id, 'project');
+    await waitFor(
+      () => (document.querySelector('[data-task-detail]')?.textContent ?? '').includes('Subtasks'),
+    );
+    expect(rowIds()).toEqual([id]);
+    expect(document.querySelector('[data-task-kind]')?.textContent).toContain('project');
+  });
+
+  test('a container row offers a way in; a plain task does not', async () => {
+    signedIn();
+    const plain = await addTask('Walk the dog');
+    expect(document.querySelector('[data-action="tasks:enter-scope"]')).toBeNull();
+    const project = await addProject('Renovate the kitchen');
+    await waitFor(() => document.querySelector('[data-action="tasks:enter-scope"]') !== null);
+    const entries = document.querySelectorAll('[data-action="tasks:enter-scope"]');
+    expect(entries.length).toBe(1);
+    expect(entries[0]?.getAttribute('data-action-task-id')).toBe(String(project));
+    expect(plain).not.toBe(project);
+  });
+
+  test('a rejected level change surfaces friendly copy, not a raw server string', async () => {
+    // The mock does not police the rule — the server does — so the rejection
+    // is armed here. What is under test is the mapping, and that a refused
+    // edit lands in the error slot instead of failing silently.
+    signedIn();
+    const id = await addTask('Renovate the kitchen');
+    mock.mockTaskError(new Error('an epic must be filed under a project'));
+    setKind(id, 'epic');
+    await waitFor(() => document.querySelector('[data-tasks-error]') !== null);
+    expect(document.querySelector('[data-tasks-error]')?.textContent ?? '').toContain(
+      'An epic has to sit inside a project',
+    );
+  });
+});
+
+describe('scope and breadcrumb', () => {
+  test('entering a container lists its subtree and leaves the container out', async () => {
+    signedIn();
+    // A subtask is filed, so it never lists in the inbox — build in All.
+    clickAction('tasks:set-view', { view: 'all' });
+    const project = await addProject('Renovate the kitchen');
+    addSubtask(project, 'Buy tiles');
+    await waitFor(() => rowIds().length === 2);
+    await addTask('Unrelated errand');
+    await waitFor(() => rowIds().length === 3);
+
+    // Back to the inbox, so entering the container has to move the view too.
+    clickAction('tasks:set-view', { view: 'inbox' });
+    await waitFor(() => rowIds().length === 2);
+    clickAction('tasks:enter-scope', { 'task-id': String(project) });
+    await waitFor(() => document.querySelector('[data-tasks-breadcrumb]') !== null);
+    expect(rowTitles()).toEqual(['Buy tiles']);
+    expect(document.querySelector('[data-tasks-scope]')?.textContent).toContain(
+      'Renovate the kitchen',
+    );
+    // Entering from the inbox moves to All: the inbox means unfiled capture at
+    // the top level, so nothing inside a container could ever satisfy it.
+    expect(stores.$taskFilter.value.view).toBe('all');
+  });
+
+  test('the breadcrumb walks back out, and the crumb trail names each container', async () => {
+    signedIn();
+    clickAction('tasks:set-view', { view: 'all' });
+    const project = await addProject('Renovate the kitchen');
+    addSubtask(project, 'Kitchen');
+    await waitFor(() => rowIds().length === 2);
+    const epic = otherRowId(project);
+    setKind(epic, 'epic');
+    await waitFor(() => stores.$tasksById.value.get(epic)?.kind === 'epic');
+    addSubtask(epic, 'Buy tiles');
+    await waitFor(() => rowIds().length === 3);
+
+    // The row's own way-in button, not a breadcrumb crumb: scoped to the list.
+    const enter = document.querySelector<HTMLElement>(
+      `[data-task-row][data-task-id="${epic}"] [data-action="tasks:enter-scope"]`,
+    );
+    if (enter === null) throw new Error('no way in on the epic row');
+    enter.click();
+    await waitFor(() => rowTitles().join(',') === 'Buy tiles');
+    // Standing two deep: the project above is a crumb of its own to step back to.
+    const crumb = document.querySelector(
+      `[data-tasks-breadcrumb] [data-action="tasks:enter-scope"][data-action-task-id="${project}"]`,
+    );
+    expect(crumb).not.toBeNull();
+
+    clickAction('tasks:leave-scope');
+    await waitFor(() => document.querySelector('[data-tasks-breadcrumb]') === null);
+    expect(stores.$taskFilter.value.scope).toBeNull();
+  });
+
+  test('quick-add inside a scope files into the container, not the top level', async () => {
+    // Otherwise the new row lands where the list cannot show it and appears to
+    // have vanished.
+    signedIn();
+    const project = await addProject('Renovate the kitchen');
+    clickAction('tasks:enter-scope', { 'task-id': String(project) });
+    await waitFor(() => document.querySelector('[data-tasks-breadcrumb]') !== null);
+
+    await addTask('Buy tiles');
+    await waitFor(() => rowTitles().join(',') === 'Buy tiles');
+    const created = [...stores.$tasksById.value.values()].find((t) => t.title === 'Buy tiles');
+    expect(created?.parentId).toBe(project);
+  });
+
+  test('a scope naming a row this mirror lacks is empty and still escapable', async () => {
+    signedIn();
+    stores.$taskFilter.value = { view: 'all', scope: 4242, conditions: [] };
+    await waitFor(() => document.querySelector('[data-tasks-breadcrumb]') !== null);
+    expect(document.querySelector('[data-tasks-scope]')?.textContent).toContain('#4242');
+    expect(document.querySelector('[data-tasks-empty]')).not.toBeNull();
+    clickAction('tasks:leave-scope');
+    await waitFor(() => document.querySelector('[data-tasks-breadcrumb]') === null);
   });
 });
 

@@ -24,6 +24,7 @@ function task(overrides: Partial<Task> & { id: number; title: string }): Task {
     parentId: null,
     notes: '',
     status: 'open',
+    kind: 'task',
     deferUntil: null,
     dueAt: null,
     createdBy: 1,
@@ -57,7 +58,11 @@ function txt(query: string, op: TextOp = 'contains'): Condition {
   return { id: 'c-text', kind: 'text', field: 'text', op, query };
 }
 function withConds(view: TaskFilter['view'], conditions: Condition[]): TaskFilter {
-  return { view, conditions };
+  return { view, scope: null, conditions };
+}
+/** A filter standing inside one container. */
+function inScope(view: TaskFilter['view'], scope: number, conditions: Condition[] = []): TaskFilter {
+  return { view, scope, conditions };
 }
 function ids(out: Task[]): number[] {
   return out.map((t) => t.id);
@@ -65,7 +70,7 @@ function ids(out: Task[]): number[] {
 
 describe('parseFilterFromUrl', () => {
   test('empty search → default filter (inbox, no conditions)', () => {
-    expect(parseFilterFromUrl('')).toEqual({ view: 'inbox', conditions: [] });
+    expect(parseFilterFromUrl('')).toEqual({ view: 'inbox', scope: null, conditions: [] });
   });
 
   test('parses the view and a list of conditions', () => {
@@ -163,6 +168,20 @@ describe('parseFilterFromUrl', () => {
   });
 });
 
+describe('parseFilterFromUrl — scope', () => {
+  test('in=<id> is the container the list is standing inside', () => {
+    expect(parseFilterFromUrl('?view=all&in=42').scope).toBe(42);
+  });
+
+  test('a malformed scope degrades to null rather than throwing', () => {
+    // Same rule the rest of the parser follows: a hand-edited or truncated URL
+    // opens the app at the top level, it does not error at someone on a phone.
+    for (const search of ['?in=', '?in=abc', '?in=-1', '?in=0', '?in=1.5', '?in=1,2']) {
+      expect(parseFilterFromUrl(search).scope).toBeNull();
+    }
+  });
+});
+
 describe('field catalogue', () => {
   test('FILTER_FIELDS lists the six fields with their labels', () => {
     expect(FILTER_FIELDS).toEqual([
@@ -217,11 +236,19 @@ describe('serializeFilterToUrl', () => {
     ).toBe('');
   });
 
+  test('a scope emits in=<id>, alongside the view and the conditions', () => {
+    expect(serializeFilterToUrl(inScope('all', 42))).toBe('?view=all&in=42');
+    expect(serializeFilterToUrl(inScope('inbox', 7, [sel('status', ['open'])]))).toBe(
+      '?in=7&c=status%3Aopen',
+    );
+  });
+
   test('serialize ∘ parse ∘ serialize is stable for any filter', () => {
     const filters: TaskFilter[] = [
       withConds('today', [sel('assignee', ['1', 'unassigned']), txt('a:b,c d')]),
       withConds('trash', [dat('hideUntil', 'on', '2026-12-25')]),
       withConds('all', [sel('subtasks', ['has'])]),
+      inScope('all', 42, [txt('tiles')]),
       DEFAULT_FILTER,
     ];
     for (const f of filters) {
@@ -353,6 +380,55 @@ describe('visibleFor — tree order', () => {
       task({ id: 2, title: 'Book flights', parentId: 1 }),
     );
     expect(ids(visibleFor(withConds('all', [txt('flights')]), tasks, noLinger, ctx))).toEqual([2]);
+  });
+});
+
+describe('visibleFor — scope', () => {
+  // project 1 ▸ epic 2 ▸ task 3, plus task 4 straight under the project and an
+  // unrelated root 5. The shape the three fixed levels are for.
+  function household(): Map<number, Task> {
+    return mapOf(
+      task({ id: 1, title: 'renovate', kind: 'project' }),
+      task({ id: 2, title: 'kitchen', kind: 'epic', parentId: 1 }),
+      task({ id: 3, title: 'buy tiles', parentId: 2 }),
+      task({ id: 4, title: 'call the plumber', parentId: 1 }),
+      task({ id: 5, title: 'unrelated' }),
+    );
+  }
+
+  test('a scope shows the container’s whole subtree, at every depth', () => {
+    expect(ids(visibleFor(inScope('all', 1), household(), noLinger, ctx))).toEqual([2, 3, 4]);
+  });
+
+  test('the container itself is not a row — the breadcrumb names it', () => {
+    expect(ids(visibleFor(inScope('all', 1), household(), noLinger, ctx))).not.toContain(1);
+  });
+
+  test('an inner scope narrows further', () => {
+    expect(ids(visibleFor(inScope('all', 2), household(), noLinger, ctx))).toEqual([3]);
+  });
+
+  test('a leaf scope is empty, and so is one naming a row this mirror lacks', () => {
+    expect(visibleFor(inScope('all', 3), household(), noLinger, ctx)).toHaveLength(0);
+    expect(visibleFor(inScope('all', 999), household(), noLinger, ctx)).toHaveLength(0);
+  });
+
+  test('scope narrows what the view already selected, it does not replace it', () => {
+    const tasks = household();
+    const done = tasks.get(4);
+    if (done === undefined) throw new Error('fixture');
+    tasks.set(4, { ...done, deletedAt: '2026-05-20T09:00:00Z' });
+    // Trash, scoped: the one trashed row inside the project, not every trashed
+    // row in the household.
+    expect(ids(visibleFor(inScope('trash', 1), tasks, noLinger, ctx))).toEqual([4]);
+    expect(ids(visibleFor(inScope('all', 1), tasks, noLinger, ctx))).toEqual([2, 3]);
+  });
+
+  test('the inbox is the one view a scope can never satisfy', () => {
+    // The inbox means unfiled capture at the top level; everything in a
+    // subtree is filed by definition. tasks:enter-scope moves off the inbox
+    // for exactly this reason.
+    expect(visibleFor(inScope('inbox', 1), household(), noLinger, ctx)).toHaveLength(0);
   });
 });
 

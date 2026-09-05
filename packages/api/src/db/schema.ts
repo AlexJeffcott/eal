@@ -123,11 +123,103 @@ export function applySchema(db: DatabaseClient): void {
     'intended_user_id',
     'INTEGER REFERENCES users(id) ON DELETE SET NULL',
   );
+  // Tasks stage 1: the three fixed levels — project → epic → task — stored as
+  // a column rather than a separate `projects` table. Capture is "write it
+  // down, discover later it is a project", and with a column that promotion is
+  // one UPDATE: the row keeps its id, so assistant references and the
+  // `task:*` broadcasts the SPA reconciles against stay valid. Every existing
+  // row defaults to 'task'; the promote pass below then gives the rows that
+  // already hold children the level their position requires, because 'task'
+  // is a level that may not hold any.
+  //
+  // The CHECK rides on the ALTER — SQLite accepts one there, as the
+  // users.in_ivr_menu call above already proves. What it cannot express is the
+  // rule binding a row to its parent, which has to read the *parent* row's
+  // kind; that lives in handlers/tasks.shared.ts:levelViolation.
+  ensureColumn(
+    db,
+    'tasks',
+    'kind',
+    "TEXT NOT NULL DEFAULT 'task' CHECK (kind IN ('project','epic','task'))",
+  );
+  // Not part of the tasks app's own schema fragment: the column it indexes is
+  // added by the ensureColumn above, which runs after every app fragment.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_kind ON tasks (kind)');
+  promoteGrandfatheredContainers(db);
   // Phase 7D: the single user-less device row voicemails land in when
   // no household member was specifically being called. Idempotent —
   // the partial unique index on (label) WHERE kind='household' enforces
   // there can be at most one.
   ensureHouseholdDevice(db);
+}
+
+interface TaskDepthRow { id: number; depth: number }
+
+/**
+ * Give every task that already holds children the level its position requires.
+ *
+ * The `kind` column defaults every existing row to 'task', and a task may not
+ * hold children (handlers/tasks.shared.ts:levelViolation). So the moment the
+ * column lands, every parent/child pair written before it is a pairing the
+ * rules refuse: the rows still read and list, but any later re-parent or level
+ * change of either one is rejected with a 400. This pass resolves that from
+ * the tree itself — a root holding children is a project, a project's child
+ * holding children is an epic — so no one has to hand-promote rows to move
+ * them again.
+ *
+ * It only ever writes a row whose kind is still 'task', so a level chosen
+ * deliberately is never overwritten. That restriction costs nothing: no write
+ * path can produce a 'task' holding children, which is why every row this pass
+ * finds came from the column default.
+ *
+ * Idempotent. A second run finds no candidates and issues no UPDATE — the rows
+ * it would look for are exactly the ones the first run resolved.
+ *
+ * A child counts whether or not it is in the trash. `restore` returns a row to
+ * the parent it had, so a parent legalised against its live children only would
+ * become illegal again the moment a trashed child came back.
+ */
+function promoteGrandfatheredContainers(db: DatabaseClient): void {
+  // Depth from the root, for containers only. The recursion is bounded at 32
+  // as every recursive query here is (docs/tasks-v1.md); a stored cycle is
+  // never reached from the roots anchor, so those rows are left untouched.
+  const depths = `
+    WITH RECURSIVE tree(id, depth) AS (
+      SELECT id, 0 FROM tasks WHERE parent_id IS NULL
+      UNION ALL
+      SELECT t.id, tree.depth + 1
+        FROM tasks t JOIN tree ON t.parent_id = tree.id
+       WHERE tree.depth < 32
+    )
+    SELECT tree.id AS id, tree.depth AS depth
+      FROM tree
+      JOIN tasks ON tasks.id = tree.id
+     WHERE tasks.kind = 'task'
+       AND EXISTS (SELECT 1 FROM tasks child WHERE child.parent_id = tree.id)`;
+
+  const candidates = db.prepare<TaskDepthRow, []>(depths).all();
+  if (candidates.length === 0) return;
+
+  const promote = db.prepare<never, [string, number]>('UPDATE tasks SET kind = ? WHERE id = ?');
+  const stranded: number[] = [];
+  for (const row of candidates) {
+    if (row.depth === 0) promote.run('project', row.id);
+    else if (row.depth === 1) promote.run('epic', row.id);
+    else stranded.push(row.id);
+  }
+
+  // Three levels is the whole model, so a container sitting under an epic has
+  // no legal level to take: its parent is already the deepest container the
+  // rules allow. Those rows keep the default and stay readable; only a move of
+  // one is refused, and the 400 says why. Rewriting the tree to fit would
+  // change data nobody asked to change, so this reports instead.
+  if (stranded.length > 0) {
+    console.warn(
+      `[schema] ${stranded.length} task(s) hold children below the epic level and cannot take one: ` +
+        `${stranded.join(', ')}. They read and list normally; re-parenting or re-levelling one is ` +
+        'refused until its tree is three levels or fewer.',
+    );
+  }
 }
 
 interface TableNameRow { name: string }

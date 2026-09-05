@@ -39,3 +39,9 @@ reports/
 
 # Local SQLite database + Litestream replica
 data/
+
+# Playwright writes per-test artefacts here (screenshots, traces, error
+# context). They are run output, not source; `.last-run.json` is the one
+# tracked file and it stays tracked.
+packages/e2e-tests/test-results/*
+!packages/e2e-tests/test-results/.last-run.json

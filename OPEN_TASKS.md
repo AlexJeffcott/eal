@@ -12,21 +12,24 @@ rather than a commit belongs in `~/projects/TODO.md`.
 failure. The pre-push hook runs `devctl check` and then that command; the
 pre-commit hook runs `devctl check` and the unit tier only.
 
-| Command | Passing count, 2026-08-25 | Runs in the pre-push sweep |
+| Command | Passing count, 2026-09-05 | Runs in the pre-push sweep |
 |---|---|---|
 | `bun devctl check` | tsc + 7 lint scripts | yes |
-| `bun devctl test unit` | 1079 tests, 98 files; coverage ok, 129 files, 27 exempt | yes |
-| `bun devctl test browser` | 70 tests | yes |
-| `bun devctl test e2e` | 38 Playwright tests, 2 projects | yes |
-| `bun devctl test multi` | 21 `scripts/e2e-*.ts`, each exiting 0 | yes |
+| `bun devctl test unit` | 1163 tests, 100 files; coverage ok, 131 files, 27 exempt | yes |
+| `bun devctl test browser` | 79 tests | yes |
+| `bun devctl test e2e` | 43 Playwright tests, 2 projects | yes |
+| `bun devctl test multi` | 22 `scripts/e2e-*.ts`, each exiting 0 | yes |
 | `bun devctl test mutation` | see below — not part of `all` | no |
 | `bun devctl verify` | TLC model checking; needs Docker | no |
 
 The multi tier now includes `e2e-registration-closed.ts` (the registration
-gate), `e2e-tasks-reconnect.ts` (the WS drop and resync) and
-`e2e-agent-offline.ts` (the assistant-availability signal). The latter drops a
-live socket from inside the page, so it fails if the reconnect handler is
-removed — checked, not assumed.
+gate), `e2e-tasks-reconnect.ts` (the WS drop and resync),
+`e2e-agent-offline.ts` (the assistant-availability signal) and
+`e2e-tasks-levels-migration.ts` (the project/epic/task migration, driven over
+a real pre-migration database file). The offline one drops a live socket from
+inside the page, so it fails if the reconnect handler is removed. The levels
+one fails at the first check if the promote pass is removed — both checked,
+not assumed.
 
 Every tier runs with the developer's own `.env` in place and needs no
 environment override. Tests take their config explicitly: `createTestApp`

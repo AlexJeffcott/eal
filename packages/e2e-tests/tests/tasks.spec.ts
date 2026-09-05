@@ -67,11 +67,23 @@ test('tasks golden path: register, capture, organise, complete', async ({ page }
     await due.blur();
     await expect(row.locator('[data-task-due]')).toContainText('2026-07-01');
 
-    // Assignee — an ActionSelect: open the dropdown, pick the option.
-    const assignee = row.locator('[data-polly-action-select]');
+    // Assignee — an ActionSelect: open the dropdown, pick the option. Scoped
+    // to its own wrapper: the Level picker above it is an ActionSelect too.
+    const assignee = row.locator('[data-task-assignee-picker]');
     await assignee.getByRole('button').click();
     await assignee.getByRole('option', { name: 'pat' }).click();
     await expect(row.locator('[data-task-assignee]')).toContainText('pat');
+  });
+
+  await test.step('promote it to a project — that is what earns the subtask field', async () => {
+    // A plain task's allowed parents are none, a project or an epic, so it can
+    // never hold one. The Level picker is the documented way to change that,
+    // and the field below appears only once it has.
+    await expect(row.locator('div[aria-label="Add a subtask"]')).toHaveCount(0);
+    const level = row.locator('[data-task-level]');
+    await level.getByRole('button').click();
+    await level.getByRole('option', { name: 'Project' }).click();
+    await expect(row.locator('[data-task-kind]')).toContainText('project');
   });
 
   await test.step('add a subtask — it lists on its own and names its parent', async () => {
@@ -99,6 +111,125 @@ test('tasks golden path: register, capture, organise, complete', async ({ page }
   });
 
   // No field commit surfaced an error anywhere in the flow.
+  await expect(page.locator('[data-tasks-error]')).toHaveCount(0);
+});
+
+
+/**
+ * Filing, end to end: a project, an epic under it, tasks under both, scoping
+ * in and back out by the breadcrumb, and a captured task promoted to a project.
+ *
+ * This is the workflow the level column exists for, driven through the real UI
+ * against a real API from a cold `:memory:` database — a green unit tier proves
+ * the rule, not that a person can reach it.
+ *
+ * Every title carries a per-run stamp: the e2e suite shares one in-memory
+ * database across specs and both Playwright projects, so an unstamped title
+ * would match another run's rows.
+ */
+test('tasks hierarchy: file a project, an epic and tasks, then scope in and out', async ({ page }) => {
+  const stamp = `h${Date.now()}`;
+  const PROJECT = `Renovate the kitchen ${stamp}`;
+  const EPIC = `Tiling ${stamp}`;
+  const UNDER_PROJECT = `Call the plumber ${stamp}`;
+  const UNDER_EPIC = `Buy tiles ${stamp}`;
+  const CAPTURED = `Fix the gate ${stamp}`;
+
+  const rowFor = (title: string) =>
+    page.locator('[data-task-row]', {
+      has: page.locator('[data-task-title]', { hasText: title }),
+    });
+
+  /** Drive the Level ActionSelect on one row. */
+  async function setLevel(title: string, level: 'Project' | 'Epic' | 'Task'): Promise<void> {
+    const row = rowFor(title);
+    const id = await row.getAttribute('data-task-id');
+    await page.locator(`[data-action="tasks:expand"][data-action-task-id="${id}"]`).click();
+    const picker = row.locator('[data-task-level]');
+    await picker.getByRole('button').click();
+    await picker.getByRole('option', { name: level }).click();
+    await expect(row.locator('[data-task-kind]')).toContainText(level.toLowerCase());
+    // Collapse again so the next row's controls are the only ones on screen.
+    await page.locator(`[data-action="tasks:expand"][data-action-task-id="${id}"]`).click();
+  }
+
+  async function quickAdd(title: string): Promise<void> {
+    await page.locator('#tasks-quick-add').fill(title);
+    await page.locator('[data-action="tasks:quick-add"]').click();
+    await expect(rowFor(title)).toBeVisible();
+  }
+
+  await attachVirtualAuthenticator(page);
+  await page.goto('/');
+  await registerPasskey(page, `filer-${stamp}`);
+  await page.locator('[data-landing-app="tasks"] [data-action="shell:navigate"]').click();
+  await expect(page.locator('[data-tasks-panel]')).toBeVisible();
+
+  await test.step('capture a task and promote it to a project', async () => {
+    await quickAdd(PROJECT);
+    await setLevel(PROJECT, 'Project');
+  });
+
+  await test.step('enter the project — the list shows what is inside it', async () => {
+    await rowFor(PROJECT).locator('[data-action="tasks:enter-scope"]').click();
+    await expect(page.locator('[data-tasks-breadcrumb]')).toBeVisible();
+    await expect(page.locator('[data-tasks-scope]')).toContainText(PROJECT);
+    // The container is not one of its own rows — the breadcrumb names it.
+    await expect(rowFor(PROJECT)).toHaveCount(0);
+  });
+
+  await test.step('capture inside the project: an epic, and a task beside it', async () => {
+    // Quick-add files into the container you are standing in.
+    await quickAdd(EPIC);
+    await setLevel(EPIC, 'Epic');
+    await quickAdd(UNDER_PROJECT);
+    await expect(rowFor(UNDER_PROJECT).locator('[data-task-parent]')).toContainText(PROJECT);
+  });
+
+  await test.step('enter the epic and put a task under it', async () => {
+    await rowFor(EPIC).locator('[data-action="tasks:enter-scope"]').click();
+    await expect(page.locator('[data-tasks-scope]')).toContainText(EPIC);
+    await quickAdd(UNDER_EPIC);
+    await expect(rowFor(UNDER_EPIC).locator('[data-task-parent]')).toContainText(EPIC);
+    // Two levels deep, so the project above is a crumb of its own.
+    const projectId = await page
+      .locator('[data-tasks-breadcrumb] [data-action="tasks:enter-scope"]')
+      .first()
+      .getAttribute('data-action-task-id');
+    expect(projectId).not.toBeNull();
+  });
+
+  await test.step('step back to the project by its crumb — the whole subtree lists', async () => {
+    await page.locator('[data-tasks-breadcrumb] [data-action="tasks:enter-scope"]').first().click();
+    await expect(page.locator('[data-tasks-scope]')).toContainText(PROJECT);
+    for (const title of [EPIC, UNDER_EPIC, UNDER_PROJECT]) {
+      await expect(rowFor(title)).toBeVisible();
+    }
+    // Progress counts the whole subtree, so the project's own row (once we are
+    // back out) reports three.
+  });
+
+  await test.step('leave the scope entirely', async () => {
+    await page.locator('[data-action="tasks:leave-scope"]').click();
+    await expect(page.locator('[data-tasks-breadcrumb]')).toHaveCount(0);
+    await expect(rowFor(PROJECT)).toBeVisible();
+    await expect(rowFor(PROJECT).locator('[data-task-progress]')).toContainText('0/3');
+  });
+
+  await test.step('a plain task is refused a subtask, and promoting it lifts the refusal', async () => {
+    await quickAdd(CAPTURED);
+    const row = rowFor(CAPTURED);
+    const id = await row.getAttribute('data-task-id');
+    await page.locator(`[data-action="tasks:expand"][data-action-task-id="${id}"]`).click();
+    await expect(row.locator('div[aria-label="Add a subtask"]')).toHaveCount(0);
+    await expect(row.locator('[data-action="tasks:enter-scope"]')).toHaveCount(0);
+    await page.locator(`[data-action="tasks:expand"][data-action-task-id="${id}"]`).click();
+
+    await setLevel(CAPTURED, 'Project');
+    await expect(row.locator('[data-action="tasks:enter-scope"]')).toBeVisible();
+  });
+
+  // Nothing in the flow was refused by the server.
   await expect(page.locator('[data-tasks-error]')).toHaveCount(0);
 });
 
@@ -168,6 +299,10 @@ test.describe('tasks at the 350px floor', () => {
     });
     const taskId = await row.getAttribute('data-task-id');
     await page.locator(`[data-action="tasks:expand"][data-action-task-id="${taskId}"]`).click();
+    // Only a container holds anything, so promote before filing.
+    const level = row.locator('[data-task-level]');
+    await level.getByRole('button').click();
+    await level.getByRole('option', { name: 'Project' }).click();
     await row.locator('div[aria-label="Add a subtask"]').click();
     const subInput = row.locator('input[aria-label="Add a subtask"]');
     await subInput.fill(`The child ${childMark}`);
@@ -187,6 +322,49 @@ test.describe('tasks at the 350px floor', () => {
     expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
   });
 
+  test('a scoped project fits — breadcrumb, container row and all', async ({ page }) => {
+    // The 350px case for stage 1's two new surfaces: the way into a container
+    // and the crumb trail out of it. Both carry a task title, and titles are
+    // captured prose, so both are capped in tasks.css rather than left to push
+    // the document sideways.
+    const stamp = `s${Date.now()}`;
+    const project = `A project title far too long to sit in a crumb unshortened ${stamp}`;
+    const child = `A child ${stamp}`;
+
+    await page.locator('#tasks-quick-add').fill(project);
+    await page.locator('[data-action="tasks:quick-add"]').click();
+    const row = page.locator('[data-task-row]', {
+      has: page.locator('[data-task-title]', { hasText: stamp }),
+    });
+    const taskId = await row.getAttribute('data-task-id');
+    await page.locator(`[data-action="tasks:expand"][data-action-task-id="${taskId}"]`).click();
+    const level = row.locator('[data-task-level]');
+    await level.getByRole('button').click();
+    await level.getByRole('option', { name: 'Project' }).click();
+    await expect(row.locator('[data-task-kind]')).toContainText('project');
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    await page.locator(`[data-action="tasks:expand"][data-action-task-id="${taskId}"]`).click();
+
+    await row.locator('[data-action="tasks:enter-scope"]').click();
+    await expect(page.locator('[data-tasks-breadcrumb]')).toBeVisible();
+    await page.locator('#tasks-quick-add').fill(child);
+    await page.locator('[data-action="tasks:quick-add"]').click();
+    await expect(
+      page.locator('[data-task-row]', {
+        has: page.locator('[data-task-title]', { hasText: child }),
+      }),
+    ).toBeVisible();
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+
+    // The artefact the brief asks for: what the hierarchy looks like on the
+    // owner's phone. Lands under packages/e2e-tests/test-results/.
+    await page.screenshot({ path: test.info().outputPath('tasks-350-scoped.png'), fullPage: true });
+
+    await page.locator('[data-action="tasks:leave-scope"]').click();
+    await expect(page.locator('[data-tasks-breadcrumb]')).toHaveCount(0);
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+  });
+
   test('the controls a thumb hits are at least 44px', async ({ page }) => {
     // 44 CSS pixels is the smallest reliable touch target (Apple's HIG floor,
     // and close to Material's 48dp). Below it, a tick lands on the row instead
@@ -198,10 +376,19 @@ test.describe('tasks at the 350px floor', () => {
     });
     const taskId = await row.getAttribute('data-task-id');
 
+    // Promote it so the container controls stage 1 added are on screen too.
+    await page.locator(`[data-action="tasks:expand"][data-action-task-id="${taskId}"]`).click();
+    const level = row.locator('[data-task-level]');
+    await level.getByRole('button').click();
+    await level.getByRole('option', { name: 'Project' }).click();
+    await expect(row.locator('[data-action="tasks:enter-scope"]')).toBeVisible();
+    await page.locator(`[data-action="tasks:expand"][data-action-task-id="${taskId}"]`).click();
+    await row.locator('[data-action="tasks:enter-scope"]').click();
+    await expect(page.locator('[data-tasks-breadcrumb]')).toBeVisible();
+
     const targets: ReadonlyArray<[label: string, selector: string]> = [
-      ['complete', `[data-action="tasks:toggle"][data-action-task-id="${taskId}"]`],
-      ['expand', `[data-action="tasks:expand"][data-action-task-id="${taskId}"]`],
       ['quick-add submit', '[data-action="tasks:quick-add"]'],
+      ['leave scope', '[data-action="tasks:leave-scope"]'],
     ];
     const measured: Array<[string, number, number]> = [];
     for (const [label, selector] of targets) {
@@ -209,6 +396,18 @@ test.describe('tasks at the 350px floor', () => {
       if (box === null) throw new Error(`${label}: no bounding box for ${selector}`);
       measured.push([label, Math.round(box.width), Math.round(box.height)]);
     }
+    // Back out, so the row's own controls are measurable in the same run.
+    await page.locator('[data-action="tasks:leave-scope"]').click();
+    for (const [label, selector] of [
+      ['complete', `[data-action="tasks:toggle"][data-action-task-id="${taskId}"]`],
+      ['expand', `[data-action="tasks:expand"][data-action-task-id="${taskId}"]`],
+      ['enter scope', `[data-action="tasks:enter-scope"][data-action-task-id="${taskId}"]`],
+    ] as const) {
+      const box = await page.locator(selector).first().boundingBox();
+      if (box === null) throw new Error(`${label}: no bounding box for ${selector}`);
+      measured.push([label, Math.round(box.width), Math.round(box.height)]);
+    }
+
     const tooSmall = measured.filter(([, w, h]) => w < 44 || h < 44);
     expect(
       tooSmall,

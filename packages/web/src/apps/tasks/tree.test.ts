@@ -1,12 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import type { Task } from '@eal/client';
-import { indexChildren, progressOf, tasksInTreeOrder } from './tree.ts';
+import { ancestorsOf, descendantIds, indexChildren, progressOf, tasksInTreeOrder } from './tree.ts';
 
 function task(overrides: Partial<Task> & { id: number; title: string }): Task {
   return {
     parentId: null,
     notes: '',
     status: 'open',
+    kind: 'task',
     deferUntil: null,
     dueAt: null,
     createdBy: 1,
@@ -168,5 +169,82 @@ describe('tasksInTreeOrder', () => {
       task({ id: 4, title: 'orphan', parentId: 99 }),
     );
     expect(ids(tasksInTreeOrder(tasks)).sort()).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe('descendantIds', () => {
+  // project 1 ▸ epic 2 ▸ task 3, task 4 straight under the project, root 5.
+  function household(): Map<number, Task> {
+    return mapOf(
+      task({ id: 1, title: 'renovate', kind: 'project' }),
+      task({ id: 2, title: 'kitchen', kind: 'epic', parentId: 1 }),
+      task({ id: 3, title: 'buy tiles', parentId: 2 }),
+      task({ id: 4, title: 'call the plumber', parentId: 1 }),
+      task({ id: 5, title: 'unrelated' }),
+    );
+  }
+
+  test('collects the whole subtree at every depth, without the container', () => {
+    expect([...descendantIds(indexChildren(household()), 1)].sort()).toEqual([2, 3, 4]);
+  });
+
+  test('a leaf, and an id absent from the mirror, both give the empty set', () => {
+    const index = indexChildren(household());
+    expect(descendantIds(index, 3).size).toBe(0);
+    expect(descendantIds(index, 999).size).toBe(0);
+  });
+
+  test('a trashed row is a member — Trash is a view over the same tree', () => {
+    // Unlike progressOf, which counts only live work. Scoping into a project
+    // must not be a way to lose a subtask that is sitting in the bin.
+    const tasks = mapOf(
+      task({ id: 1, title: 'project', kind: 'project' }),
+      task({ id: 2, title: 'binned', parentId: 1, ...GONE }),
+      task({ id: 3, title: 'under the binned one', parentId: 2 }),
+    );
+    expect([...descendantIds(indexChildren(tasks), 1)].sort()).toEqual([2, 3]);
+  });
+
+  test('a cycle terminates instead of hanging', () => {
+    // Broadcasts arrive in any order, so the mirror can hold a loop the server
+    // rejected. Same reason progressOf carries a guard.
+    const tasks = mapOf(
+      task({ id: 1, title: 'a', parentId: 2 }),
+      task({ id: 2, title: 'b', parentId: 1 }),
+    );
+    expect([...descendantIds(indexChildren(tasks), 1)].sort()).toEqual([1, 2]);
+  });
+});
+
+describe('ancestorsOf', () => {
+  function household(): Map<number, Task> {
+    return mapOf(
+      task({ id: 1, title: 'renovate', kind: 'project' }),
+      task({ id: 2, title: 'kitchen', kind: 'epic', parentId: 1 }),
+      task({ id: 3, title: 'buy tiles', parentId: 2 }),
+    );
+  }
+
+  test('names the containers outermost first, excluding the row itself', () => {
+    expect(ids(ancestorsOf(household(), 3))).toEqual([1, 2]);
+    expect(ids(ancestorsOf(household(), 2))).toEqual([1]);
+  });
+
+  test('a root, and an id the mirror lacks, have no ancestors', () => {
+    expect(ancestorsOf(household(), 1)).toEqual([]);
+    expect(ancestorsOf(household(), 999)).toEqual([]);
+  });
+
+  test('a chain that leaves the mirror ends there rather than inventing a crumb', () => {
+    const tasks = mapOf(task({ id: 2, title: 'orphaned epic', parentId: 99 }));
+    expect(ancestorsOf(tasks, 2)).toEqual([]);
+  });
+
+  test('a cycle terminates', () => {
+    const tasks = mapOf(
+      task({ id: 1, title: 'a', parentId: 2 }),
+      task({ id: 2, title: 'b', parentId: 1 }),
+    );
+    expect(ids(ancestorsOf(tasks, 1))).toEqual([2]);
   });
 });

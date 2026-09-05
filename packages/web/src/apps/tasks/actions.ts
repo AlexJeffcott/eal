@@ -1,5 +1,5 @@
 import type { ActionRegistry } from '@fairfox/polly/actions';
-import type { Task, UpdateTaskInput } from '@eal/client';
+import type { Task, TaskKind, UpdateTaskInput } from '@eal/client';
 import type { AppStores } from '../../stores.ts';
 import {
   isConditionField,
@@ -18,6 +18,21 @@ export function friendlyTaskError(err: unknown): string {
   const raw = describeError(err);
   if (raw.includes('title is required')) return 'Give the task a title before saving.';
   if (raw.includes('would create cycle')) return "You can't move a task inside itself.";
+  // The level rules, in the order a specific message must beat a general one:
+  // the stranded-children message quotes the pairing that failed, so it would
+  // otherwise be swallowed by the three tests below it.
+  if (raw.includes('would no longer fit under it')) {
+    return 'What is already filed under this one would not fit at that level. Move it out first.';
+  }
+  if (raw.includes('a project cannot be filed under another task')) {
+    return 'A project sits at the top level, not inside something else.';
+  }
+  if (raw.includes('an epic must be filed under a project')) {
+    return 'An epic has to sit inside a project.';
+  }
+  if (raw.includes('a task cannot be filed under another task')) {
+    return 'A plain task cannot hold anything. Make it a project or an epic first.';
+  }
   if (raw.includes('not found or in trash')) return 'That task was already removed by another device.';
   if (raw.includes('parent task') && raw.includes('not found')) return 'That parent was already removed.';
   return raw;
@@ -56,6 +71,10 @@ function isTaskView(value: string): value is TaskView {
   return value === 'inbox' || value === 'today' || value === 'all' || value === 'trash';
 }
 
+function isTaskKind(value: string): value is TaskKind {
+  return value === 'project' || value === 'epic' || value === 'task';
+}
+
 /**
  * The single seam through which the filter changes. Updating the filter is
  * "navigation" — it clears the linger set so just-completed tasks stop
@@ -73,6 +92,21 @@ export const TASKS_ACTIONS: ActionRegistry<AppStores> = {
     if (typeof view === 'string' && isTaskView(view)) {
       applyFilter(stores, { view });
     }
+  },
+
+  'tasks:enter-scope': ({ data, stores }) => {
+    // Standing inside a container. The inbox is the one view that cannot hold
+    // a scoped row — it means unfiled capture at the top level, so everything
+    // in a subtree is disqualified by definition — so entering from there
+    // moves to All. Today and Trash both read sensibly scoped and are kept.
+    const id = taskIdFromData(data);
+    if (id === null) return;
+    const { view } = stores.$taskFilter.value;
+    applyFilter(stores, { scope: id, view: view === 'inbox' ? 'all' : view });
+  },
+
+  'tasks:leave-scope': ({ stores }) => {
+    applyFilter(stores, { scope: null });
   },
 
   'tasks:add-condition': ({ data, stores }) => {
@@ -166,8 +200,16 @@ export const TASKS_ACTIONS: ActionRegistry<AppStores> = {
     stores.$tasksError.value = null;
     // Clear input immediately so the user can keep typing the next task.
     stores.$quickAddTitle.value = '';
+    // Capture lands where the user is standing. Creating a root task while
+    // scoped into a project would file it somewhere the list cannot show, so
+    // the row would appear to vanish; inside a scope, quick-add fills the
+    // container. A scope naming something that cannot hold a task is rejected
+    // by the server and surfaces below, rather than being quietly re-filed.
+    const { scope } = stores.$taskFilter.value;
     try {
-      const task = await stores.client.createTask({ title });
+      const task = await stores.client.createTask(
+        scope === null ? { title } : { title, parentId: scope },
+      );
       // The optimistic insertion: server already returned the canonical row,
       // so we splice it straight into the store. WS broadcast will arrive
       // and overwrite with byte-identical data.
@@ -273,6 +315,17 @@ export const TASKS_ACTIONS: ActionRegistry<AppStores> = {
     const value = data['value'];
     if (id === null || typeof value !== 'string') return;
     void commitTaskField(stores, id, { assignedTo: value === '' ? null : Number(value) });
+  },
+
+  'tasks:set-kind': ({ data, stores }) => {
+    // The level picker. The server owns the rule, so an illegal promotion comes
+    // back through commitTaskField's catch and lands in $tasksError like any
+    // other rejected field edit — the picker does not pre-filter its options,
+    // because the reason a move is illegal is worth reading.
+    const id = taskIdFromData(data);
+    const value = data['value'];
+    if (id === null || typeof value !== 'string' || !isTaskKind(value)) return;
+    void commitTaskField(stores, id, { kind: value });
   },
 
   'tasks:restore': async ({ data, stores }) => {

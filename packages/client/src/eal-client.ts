@@ -500,6 +500,7 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
     if (input.createdBy !== undefined) {
       params.set('created_by', input.createdBy === 'me' ? 'me' : String(input.createdBy));
     }
+    if (input.kind !== undefined) params.set('kind', input.kind);
     if (input.status !== undefined) params.set('status', input.status);
     if (input.dueBefore !== undefined) params.set('due_before', input.dueBefore);
     if (input.deferAfter !== undefined) params.set('defer_after', input.deferAfter);
@@ -514,6 +515,7 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
 
   function toCreateTaskWire(input: CreateTaskInput): Record<string, unknown> {
     const body: Record<string, unknown> = { title: input.title };
+    if (input.kind !== undefined) body['kind'] = input.kind;
     if (input.parentId !== undefined) body['parent_id'] = input.parentId;
     if (input.assignedTo !== undefined) body['assigned_to'] = input.assignedTo;
     if (input.notes !== undefined) body['notes'] = input.notes;
@@ -526,6 +528,7 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
     const body: Record<string, unknown> = {};
     if (input.title !== undefined) body['title'] = input.title;
     if (input.notes !== undefined) body['notes'] = input.notes;
+    if (input.kind !== undefined) body['kind'] = input.kind;
     if (input.assignedTo !== undefined) body['assigned_to'] = input.assignedTo;
     if (input.parentId !== undefined) body['parent_id'] = input.parentId;
     if (input.deferUntil !== undefined) body['defer_until'] = input.deferUntil;

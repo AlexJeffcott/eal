@@ -37,6 +37,7 @@ function defaults(overrides: Partial<Parameters<TasksRepo['insert']>[0]> & { cre
     parentId: null,
     title: 'untitled',
     notes: '',
+    kind: 'task',
     deferUntil: null,
     dueAt: null,
     assignedTo: null,
@@ -73,6 +74,42 @@ describe('tasks repo', () => {
       ctx.tasks.softDelete(parent.id, { updatedBy: ctx.alex });
       const child = ctx.tasks.insert(defaults({ createdBy: ctx.alex, title: 'c', parentId: parent.id }));
       expect(child.parent_id).toBe(parent.id);
+    });
+  });
+
+  describe('kind', () => {
+    test('stores the level it is given and reads it back', () => {
+      const row = ctx.tasks.insert(defaults({ createdBy: ctx.alex, kind: 'project' }));
+      expect(row.kind).toBe('project');
+      expect(ctx.tasks.findById(row.id)?.kind).toBe('project');
+    });
+
+    test('update moves the level — one UPDATE, same id', () => {
+      // The whole reason the level is a column: promotion keeps the row, so
+      // every reference to it (an assistant’s `#12`, a pending broadcast)
+      // stays valid. A projects table would make this a delete and an insert.
+      const row = ctx.tasks.insert(defaults({ createdBy: ctx.alex }));
+      const promoted = ctx.tasks.update(row.id, { kind: 'project', updatedBy: ctx.alex });
+      expect(promoted?.id).toBe(row.id);
+      expect(promoted?.kind).toBe('project');
+    });
+
+    test('list filters by level', () => {
+      ctx.tasks.insert(defaults({ createdBy: ctx.alex, title: 'p', kind: 'project' }));
+      ctx.tasks.insert(defaults({ createdBy: ctx.alex, title: 't' }));
+      expect(ctx.tasks.list({ kind: 'project' }).map((r) => r.title)).toEqual(['p']);
+      expect(ctx.tasks.list({ kind: 'task' }).map((r) => r.title)).toEqual(['t']);
+    });
+
+    test('the repo does not police the pairing — that is the handler’s job', () => {
+      // Same contract as the deleted-parent case above: the repo is dumb, and
+      // handlers/tasks.shared.ts:levelViolation is the only place the rule
+      // lives. Documented here so a future CHECK is a deliberate change.
+      const plain = ctx.tasks.insert(defaults({ createdBy: ctx.alex, title: 'plain' }));
+      const nested = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, title: 'nested', parentId: plain.id }),
+      );
+      expect(nested.parent_id).toBe(plain.id);
     });
   });
 

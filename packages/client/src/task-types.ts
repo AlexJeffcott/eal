@@ -1,4 +1,12 @@
 /**
+ * The three fixed levels a task can sit at: project → epic → task. The epic
+ * level is optional — a project may hold tasks directly. Which kind may sit
+ * under which is enforced server-side (handlers/tasks.shared.ts:levelViolation);
+ * a rejected move comes back through the ordinary `{ error }` envelope.
+ */
+export type TaskKind = 'project' | 'epic' | 'task';
+
+/**
  * Wire shape for a single task — what the SPA stores in its reactive map and
  * what the WS broadcast carries on every `task:*` event. CamelCase to match
  * CurrentUser / SayHelloResult / CliPairStartResult.
@@ -13,6 +21,7 @@ export interface Task {
   title: string;
   notes: string;
   status: 'open' | 'done';
+  kind: TaskKind;
   deferUntil: string | null;
   dueAt: string | null;
   createdBy: number;
@@ -27,6 +36,7 @@ export interface Task {
 
 export interface CreateTaskInput {
   title: string;
+  kind?: TaskKind;
   parentId?: number | null;
   assignedTo?: number | null;
   notes?: string;
@@ -37,6 +47,7 @@ export interface CreateTaskInput {
 export interface UpdateTaskInput {
   title?: string;
   notes?: string;
+  kind?: TaskKind;
   assignedTo?: number | null;
   parentId?: number | null;
   deferUntil?: string | null;
@@ -46,6 +57,7 @@ export interface UpdateTaskInput {
 
 export interface ListTasksInput {
   parentId?: number | null;
+  kind?: TaskKind;
   assignedTo?: number | 'me';
   createdBy?: number | 'me';
   status?: 'open' | 'done';

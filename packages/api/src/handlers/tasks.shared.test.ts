@@ -67,7 +67,7 @@ describe('createTaskCore', () => {
   });
 
   test('404 when parent is soft-deleted', () => {
-    const parent = createTaskCore(ctx.db, { title: 'p' }, ctx.alex);
+    const parent = createTaskCore(ctx.db, { title: 'p', kind: 'project' }, ctx.alex);
     deleteTaskCore(ctx.db, parent.id, ctx.alex);
     expect(() => createTaskCore(ctx.db, { title: 'c', parentId: parent.id }, ctx.alex)).toThrow(/not found/);
   });
@@ -141,7 +141,7 @@ describe('createTaskCore', () => {
   });
 
   test('siblings get incrementing positions automatically', () => {
-    const p = createTaskCore(ctx.db, { title: 'p' }, ctx.alex);
+    const p = createTaskCore(ctx.db, { title: 'p', kind: 'project' }, ctx.alex);
     const c1 = createTaskCore(ctx.db, { title: 'c1', parentId: p.id }, ctx.alex);
     const c2 = createTaskCore(ctx.db, { title: 'c2', parentId: p.id }, ctx.alex);
     expect(c1.position).toBe(0);
@@ -178,14 +178,17 @@ describe('updateTaskCore', () => {
   });
 
   test('400 cycle detection: cannot re-parent under own descendant', () => {
-    const g = createTaskCore(ctx.db, { title: 'g' }, ctx.alex);
-    const p = createTaskCore(ctx.db, { title: 'p', parentId: g.id }, ctx.alex);
+    // A legal three-level chain, so the move below is refused for being a
+    // cycle and not for breaking the level rule — the two checks are ordered,
+    // cycle first, and this pins that order.
+    const g = createTaskCore(ctx.db, { title: 'g', kind: 'project' }, ctx.alex);
+    const p = createTaskCore(ctx.db, { title: 'p', kind: 'epic', parentId: g.id }, ctx.alex);
     const c = createTaskCore(ctx.db, { title: 'c', parentId: p.id }, ctx.alex);
     expect(() => updateTaskCore(ctx.db, g.id, { parentId: c.id }, ctx.alex)).toThrow(/cycle/);
   });
 
   test('re-parenting to root (null) is always allowed', () => {
-    const p = createTaskCore(ctx.db, { title: 'p' }, ctx.alex);
+    const p = createTaskCore(ctx.db, { title: 'p', kind: 'project' }, ctx.alex);
     const c = createTaskCore(ctx.db, { title: 'c', parentId: p.id }, ctx.alex);
     const moved = updateTaskCore(ctx.db, c.id, { parentId: null }, ctx.alex);
     expect(moved.parentId).toBeNull();
@@ -236,6 +239,94 @@ describe('updateTaskCore', () => {
     expect(left.assignedTo).toBe(ctx.elisa.userId);
     const cleared = updateTaskCore(ctx.db, t.id, { assignedTo: null }, ctx.alex);
     expect(cleared.assignedTo).toBeNull();
+  });
+});
+
+describe('levels', () => {
+  let ctx: Ctx;
+  beforeEach(() => { ctx = setup(); });
+
+  test('capture defaults to the bottom level', () => {
+    // Quick-add never has to decide. "Write it down, discover later it is a
+    // project" is the whole reason the level is a column and not a table.
+    expect(createTaskCore(ctx.db, { title: 'x' }, ctx.alex).kind).toBe('task');
+  });
+
+  test('promotion keeps the row id, so every reference to it survives', () => {
+    const captured = createTaskCore(ctx.db, { title: 'renovate the kitchen' }, ctx.alex);
+    const promoted = updateTaskCore(ctx.db, captured.id, { kind: 'project' }, ctx.alex);
+    expect(promoted.id).toBe(captured.id);
+    expect(promoted.kind).toBe('project');
+  });
+
+  test('400 on a create that breaks the level rule, naming which rule', () => {
+    const project = createTaskCore(ctx.db, { title: 'p', kind: 'project' }, ctx.alex);
+    expect(() =>
+      createTaskCore(ctx.db, { title: 'nested', kind: 'project', parentId: project.id }, ctx.alex),
+    ).toThrow(/a project cannot be filed under another task/);
+    expect(() => createTaskCore(ctx.db, { title: 'loose', kind: 'epic' }, ctx.alex)).toThrow(
+      /an epic must be filed under a project/,
+    );
+    const plain = createTaskCore(ctx.db, { title: 'plain' }, ctx.alex);
+    expect(() => createTaskCore(ctx.db, { title: 'sub', parentId: plain.id }, ctx.alex)).toThrow(
+      /a task cannot be filed under another task/,
+    );
+  });
+
+  test('one PATCH may move both halves of the pair at once', () => {
+    // Promoting a filed task to a project has to unfile it in the same call,
+    // or neither half is ever legal on its own.
+    const project = createTaskCore(ctx.db, { title: 'p', kind: 'project' }, ctx.alex);
+    const child = createTaskCore(ctx.db, { title: 'c', parentId: project.id }, ctx.alex);
+    expect(() => updateTaskCore(ctx.db, child.id, { kind: 'project' }, ctx.alex)).toThrow(
+      /a project cannot be filed under another task/,
+    );
+    const moved = updateTaskCore(ctx.db, child.id, { kind: 'project', parentId: null }, ctx.alex);
+    expect(moved.kind).toBe('project');
+    expect(moved.parentId).toBeNull();
+  });
+
+  test('a demotion that would strand a child is refused, and nothing changes', () => {
+    const project = createTaskCore(ctx.db, { title: 'p', kind: 'project' }, ctx.alex);
+    const epic = createTaskCore(ctx.db, { title: 'e', kind: 'epic', parentId: project.id }, ctx.alex);
+    expect(() => updateTaskCore(ctx.db, project.id, { kind: 'task' }, ctx.alex)).toThrow(
+      new RegExp(`task ${epic.id} would no longer fit under it`),
+    );
+    expect(getTaskCore(ctx.db, project.id).task.kind).toBe('project');
+  });
+
+  test('a trashed child still constrains its parent’s level', () => {
+    // Soft-delete leaves the row filed where it was and restore returns it in
+    // place, so a demotion waved through here would come back as an illegal
+    // pairing the moment the child is restored — with no write left to catch it.
+    const project = createTaskCore(ctx.db, { title: 'p', kind: 'project' }, ctx.alex);
+    const child = createTaskCore(ctx.db, { title: 'c', parentId: project.id }, ctx.alex);
+    deleteTaskCore(ctx.db, child.id, ctx.alex);
+    expect(() => updateTaskCore(ctx.db, project.id, { kind: 'task' }, ctx.alex)).toThrow(
+      /would no longer fit under it/,
+    );
+    // Demoting to an epic is fine — a task fits under an epic — but only once
+    // the project is itself filed under a project.
+    const outer = createTaskCore(ctx.db, { title: 'outer', kind: 'project' }, ctx.alex);
+    const demoted = updateTaskCore(
+      ctx.db,
+      project.id,
+      { kind: 'epic', parentId: outer.id },
+      ctx.alex,
+    );
+    expect(demoted.kind).toBe('epic');
+  });
+
+  test('a childless demotion to task is allowed', () => {
+    const project = createTaskCore(ctx.db, { title: 'never mind', kind: 'project' }, ctx.alex);
+    expect(updateTaskCore(ctx.db, project.id, { kind: 'task' }, ctx.alex).kind).toBe('task');
+  });
+
+  test('clone carries the level of every row in the subtree', () => {
+    const project = createTaskCore(ctx.db, { title: 'p', kind: 'project' }, ctx.alex);
+    createTaskCore(ctx.db, { title: 'e', kind: 'epic', parentId: project.id }, ctx.alex);
+    const cloned = cloneTaskCore(ctx.db, project.id, ctx.alex);
+    expect(cloned.tasks.map((t) => t.kind).sort()).toEqual(['epic', 'project']);
   });
 });
 
@@ -311,7 +402,7 @@ describe('delete / restore', () => {
   });
 
   test('delete is shallow at this layer — children remain (cascade is at purge time only)', () => {
-    const p = createTaskCore(ctx.db, { title: 'p' }, ctx.alex);
+    const p = createTaskCore(ctx.db, { title: 'p', kind: 'project' }, ctx.alex);
     const c = createTaskCore(ctx.db, { title: 'c', parentId: p.id }, ctx.alex);
     deleteTaskCore(ctx.db, p.id, ctx.alex);
     // The child is NOT auto-trashed by soft-delete of the parent. The application
@@ -327,7 +418,7 @@ describe('cloneTaskCore', () => {
   beforeEach(() => { ctx = setup(); });
 
   test('clones root + descendants under the actor', () => {
-    const shop = createTaskCore(ctx.db, { title: 'shop' }, ctx.alex);
+    const shop = createTaskCore(ctx.db, { title: 'shop', kind: 'project' }, ctx.alex);
     createTaskCore(ctx.db, { title: 'milk', parentId: shop.id }, ctx.alex);
     createTaskCore(ctx.db, { title: 'eggs', parentId: shop.id }, ctx.alex);
     const cloned = cloneTaskCore(ctx.db, shop.id, ctx.elisa);
@@ -379,14 +470,23 @@ describe('listTasksCore', () => {
   test('inbox filter: parent null AND assignee null AND no defer', () => {
     createTaskCore(ctx.db, { title: 'in-1' }, ctx.alex);
     createTaskCore(ctx.db, { title: 'assigned', assignedTo: ctx.alex.userId }, ctx.alex);
-    const p = createTaskCore(ctx.db, { title: 'project' }, ctx.alex);
+    const p = createTaskCore(ctx.db, { title: 'project', kind: 'project' }, ctx.alex);
     createTaskCore(ctx.db, { title: 'child', parentId: p.id }, ctx.alex);
     const titles = listTasksCore(ctx.db, { inbox: true }, ctx.alex).map((t) => t.title).sort();
     expect(titles).toEqual(['in-1', 'project']);
   });
 
+  test('kind filter narrows to one level', () => {
+    const project = createTaskCore(ctx.db, { title: 'p', kind: 'project' }, ctx.alex);
+    createTaskCore(ctx.db, { title: 'e', kind: 'epic', parentId: project.id }, ctx.alex);
+    createTaskCore(ctx.db, { title: 't' }, ctx.alex);
+    expect(listTasksCore(ctx.db, { kind: 'project' }, ctx.alex).map((t) => t.title)).toEqual(['p']);
+    expect(listTasksCore(ctx.db, { kind: 'epic' }, ctx.alex).map((t) => t.title)).toEqual(['e']);
+    expect(listTasksCore(ctx.db, { kind: 'task' }, ctx.alex).map((t) => t.title)).toEqual(['t']);
+  });
+
   test('parentId filter narrows to a parent; absence returns root + children', () => {
-    const p = createTaskCore(ctx.db, { title: 'project' }, ctx.alex);
+    const p = createTaskCore(ctx.db, { title: 'project', kind: 'project' }, ctx.alex);
     const c = createTaskCore(ctx.db, { title: 'child', parentId: p.id }, ctx.alex);
     expect(listTasksCore(ctx.db, { parentId: p.id }, ctx.alex).map((t) => t.id)).toEqual([c.id]);
     expect(listTasksCore(ctx.db, {}, ctx.alex).map((t) => t.id).sort()).toEqual(
@@ -468,7 +568,7 @@ describe('getTaskCore', () => {
   beforeEach(() => { ctx = setup(); });
 
   test('returns task + children (children excludes trashed)', () => {
-    const p = createTaskCore(ctx.db, { title: 'p' }, ctx.alex);
+    const p = createTaskCore(ctx.db, { title: 'p', kind: 'project' }, ctx.alex);
     const a = createTaskCore(ctx.db, { title: 'a', parentId: p.id }, ctx.alex);
     const b = createTaskCore(ctx.db, { title: 'b', parentId: p.id }, ctx.alex);
     deleteTaskCore(ctx.db, b.id, ctx.alex);

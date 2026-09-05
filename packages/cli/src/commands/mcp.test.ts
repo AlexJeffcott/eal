@@ -46,7 +46,27 @@ describe('eal mcp tools', () => {
     await client.createTask({ title: 'Walk Leo to school' });
     const listed = await tool('list_tasks').run(client, {});
     expect(listed).toContain('Walk Leo to school');
-    expect(listed).toContain('[open]');
+    // Level and status ride together: the assistant needs to know a row is a
+    // project before it offers to file anything under it.
+    expect(listed).toContain('[task/open]');
+  });
+
+  test('list_tasks narrows to one level, and rejects a level it does not know', async () => {
+    await client.createTask({ title: 'Renovate the kitchen', kind: 'project' });
+    await client.createTask({ title: 'Walk Leo to school' });
+    expect(await tool('list_tasks').run(client, { kind: 'project' })).toBe(
+      '#1 [project/open] Renovate the kitchen',
+    );
+    // Dropping an unknown level would list everything and call it a filter.
+    await expect(tool('list_tasks').run(client, { kind: 'milestone' })).rejects.toThrow(
+      /kind must be/,
+    );
+  });
+
+  test('update_task promotes a captured task, keeping its id', async () => {
+    const created = await client.createTask({ title: 'Renovate the kitchen' });
+    const out = await tool('update_task').run(client, { id: created.id, kind: 'project' });
+    expect(out).toContain(`#${created.id} [project/open]`);
   });
 
   test('complete_task then reopen_task flips status both ways', async () => {

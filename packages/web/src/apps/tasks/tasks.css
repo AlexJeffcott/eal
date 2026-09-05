@@ -30,7 +30,9 @@
  */
 [data-action='tasks:toggle'],
 [data-action='tasks:expand'],
-[data-action='tasks:quick-add'] {
+[data-action='tasks:quick-add'],
+[data-action='tasks:enter-scope'],
+[data-action='tasks:leave-scope'] {
   min-block-size: 44px;
 }
 
@@ -67,4 +69,39 @@
 [data-tasks-list] [data-task-row] + [data-task-row] {
   border-block-start: var(--polly-border-width-default) solid var(--polly-border);
   padding-block-start: var(--polly-space-sm);
+}
+
+/*
+ * The breadcrumb — where the scoped list is standing, and the way back out.
+ *
+ * A crumb carries a task title, and titles are captured prose: "A parent title
+ * far too long to sit inside a badge unshortened" is a real one from the e2e
+ * suite. Uncapped, one crumb pushes the row past the 350px floor, so each is
+ * held to a phrase and the row wraps between crumbs rather than inside one.
+ */
+[data-tasks-breadcrumb] [data-action='tasks:enter-scope'],
+[data-tasks-breadcrumb] [data-action='tasks:leave-scope'] {
+  max-inline-size: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One crumb: its separator and its label, held together so a wrap breaks
+ * between crumbs rather than inside one. */
+.tasks-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--polly-space-xs);
+}
+
+/* The last crumb is the container itself — named, not a button, because
+ * entering the scope you are already in does nothing. */
+.tasks-crumb-current {
+  display: inline-block;
+  max-inline-size: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }

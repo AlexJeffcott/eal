@@ -1,9 +1,11 @@
 import type { DatabaseClient } from '../db/client.ts';
 import type { Principal } from '../auth/principals.ts';
-import type { TaskRow, TasksRepo, ListFilter } from '../db/repos/tasks.ts';
+import type { TaskRow, TasksRepo, ListFilter, TaskKind } from '../db/repos/tasks.ts';
 import { createTasksRepo } from '../db/repos/tasks.ts';
 import { createUsersRepo } from '../db/repos/users.ts';
 import { AuthError } from './auth.shared.ts';
+
+export type { TaskKind };
 
 /**
  * Wire shape — what the SPA and the CLI both see. CamelCase to match the rest
@@ -15,6 +17,7 @@ export interface Task {
   title: string;
   notes: string;
   status: 'open' | 'done';
+  kind: TaskKind;
   deferUntil: string | null;
   dueAt: string | null;
   createdBy: number;
@@ -34,6 +37,7 @@ export function toTask(row: TaskRow): Task {
     title: row.title,
     notes: row.notes,
     status: row.status,
+    kind: row.kind,
     deferUntil: row.defer_until,
     dueAt: row.due_at,
     createdBy: row.created_by,
@@ -49,6 +53,7 @@ export function toTask(row: TaskRow): Task {
 
 export interface CreateTaskInput {
   title: string;
+  kind?: TaskKind | undefined;
   parentId?: number | null | undefined;
   assignedTo?: number | null | undefined;
   notes?: string | undefined;
@@ -59,6 +64,7 @@ export interface CreateTaskInput {
 export interface UpdateTaskInput {
   title?: string | undefined;
   notes?: string | undefined;
+  kind?: TaskKind | undefined;
   assignedTo?: number | null | undefined;
   parentId?: number | null | undefined;
   deferUntil?: string | null | undefined;
@@ -68,6 +74,7 @@ export interface UpdateTaskInput {
 
 export interface ListTasksInput {
   parentId?: number | null | undefined;
+  kind?: TaskKind | undefined;
   assignedTo?: number | 'me' | undefined;
   createdBy?: number | 'me' | undefined;
   status?: 'open' | 'done' | undefined;
@@ -120,6 +127,59 @@ function requireLiveParent(repo: TasksRepo, parentId: number): TaskRow {
   return parent;
 }
 
+/**
+ * The one rule binding the three levels: project → epic → task.
+ *
+ * | kind    | allowed parent                         |
+ * |---------|----------------------------------------|
+ * | project | none — a project is always a root      |
+ * | epic    | a project                              |
+ * | task    | none, a project, or an epic            |
+ *
+ * The epic level is optional: a project may hold tasks directly, which is what
+ * the second row of the `task` case buys.
+ *
+ * SQLite cannot express this. A CHECK constraint sees only the row being
+ * written and this rule reads the *parent* row's kind, so it lives here in
+ * application code and is only as good as its tests — hence
+ * tasks.levels.property.test.ts, which generates arbitrary trees and arbitrary
+ * moves rather than enumerating the nine pairings by hand.
+ *
+ * Returns why a pairing is illegal, or null when it is allowed.
+ */
+export function levelViolation(kind: TaskKind, parentKind: TaskKind | null): string | null {
+  if (kind === 'project') {
+    if (parentKind === null) return null;
+    return 'a project cannot be filed under another task';
+  }
+  if (kind === 'epic') {
+    if (parentKind === 'project') return null;
+    return 'an epic must be filed under a project';
+  }
+  if (parentKind === 'task') return 'a task cannot be filed under another task';
+  return null;
+}
+
+/**
+ * The kind of the row `parentId` names, or null for a root. Reads through the
+ * trash: a soft-deleted parent still holds its children (delete does not
+ * cascade in the application layer), so its level still constrains them.
+ */
+function parentKindOf(tasks: TasksRepo, parentId: number | null): TaskKind | null {
+  if (parentId === null) return null;
+  const parent = tasks.findById(parentId, { includeDeleted: true });
+  // Stryker disable next-line all -- defensive: tasks.parent_id carries a
+  // foreign key with ON DELETE CASCADE, so a stored parent_id always names a
+  // row. Unreachable in practice; kept so a broken FK fails loudly.
+  if (parent === null) throw new AuthError(404, `parent task ${parentId} not found`);
+  return parent.kind;
+}
+
+function requireLevelAllowed(kind: TaskKind, parentKind: TaskKind | null): void {
+  const violation = levelViolation(kind, parentKind);
+  if (violation !== null) throw new AuthError(400, violation);
+}
+
 function defaultTodayCutoff(now: Date): string {
   // End of current UTC day. Callers can override per their local timezone.
   const eod = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59));
@@ -139,7 +199,13 @@ export function createTaskCore(
   validateIso('due_at', input.dueAt);
 
   const parentId = input.parentId ?? null;
-  if (parentId !== null) requireLiveParent(tasks, parentId);
+  const parent = parentId === null ? null : requireLiveParent(tasks, parentId);
+
+  // Capture defaults to the bottom level. "Write it down now, discover later
+  // it is a project" is the flow the kind column exists to serve, so quick-add
+  // never has to decide.
+  const kind = input.kind ?? 'task';
+  requireLevelAllowed(kind, parent === null ? null : parent.kind);
 
   const assignedTo = input.assignedTo ?? null;
   if (assignedTo !== null) requireUserExists(users, assignedTo, 'assigned_to');
@@ -148,6 +214,7 @@ export function createTaskCore(
     parentId,
     title,
     notes: input.notes ?? '',
+    kind,
     deferUntil: input.deferUntil ?? null,
     dueAt: input.dueAt ?? null,
     createdBy: principal.userId,
@@ -192,6 +259,7 @@ export function listTasksCore(
     }
     filter.status = 'open';
   }
+  if (input.kind !== undefined) filter.kind = input.kind;
   if (input.inbox) filter.inbox = true;
   if (input.trash) filter.deletedOnly = true;
   if (input.q !== undefined) filter.q = input.q;
@@ -249,11 +317,38 @@ export function updateTaskCore(
   if (input.parentId !== undefined) {
     if (input.parentId !== null) {
       requireLiveParent(tasks, input.parentId);
+      // Cycle first, level second. A move that both loops and breaks the level
+      // rule is a cycle above all else, and naming it that way is the more
+      // useful error: no choice of kinds would make the move legal.
       if (tasks.wouldCycle(id, input.parentId)) {
         throw new AuthError(400, 'would create cycle: cannot parent a task under itself or its descendants');
       }
     }
     patch.parentId = input.parentId;
+  }
+  if (input.kind !== undefined) patch.kind = input.kind;
+
+  // The level rule reads the pair (kind, parent kind), and either half can
+  // move in one PATCH — a promotion to project that also unfiles the row is a
+  // single call. Resolve both to their post-update values before deciding.
+  if (input.kind !== undefined || input.parentId !== undefined) {
+    const nextKind = input.kind ?? existing.kind;
+    const nextParentId = input.parentId === undefined ? existing.parent_id : input.parentId;
+    requireLevelAllowed(nextKind, parentKindOf(tasks, nextParentId));
+  }
+
+  // A change of kind revalidates downwards as well as upwards: demoting a
+  // project to a task would leave its children filed under something that
+  // cannot hold them. Trashed children count, because soft-delete leaves a row
+  // filed where it was and restore returns it in place — skipping them would
+  // let a later restore resurrect a pairing no write ever checked.
+  if (input.kind !== undefined && input.kind !== existing.kind) {
+    for (const child of tasks.list({ parentId: id, includeDeleted: true })) {
+      const stranded = levelViolation(child.kind, input.kind);
+      if (stranded !== null) {
+        throw new AuthError(400, `task ${child.id} would no longer fit under it: ${stranded}`);
+      }
+    }
   }
 
   const updated = tasks.update(id, patch);

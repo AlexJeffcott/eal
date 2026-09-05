@@ -17,6 +17,7 @@ import {
   restoreTaskCore,
   updateTaskCore,
   type Task,
+  type TaskKind,
 } from './tasks.shared.ts';
 
 export type TaskEvent =
@@ -24,6 +25,9 @@ export type TaskEvent =
   | { type: 'task:updated'; topic: 'tasks'; payload: Task }
   | { type: 'task:deleted'; topic: 'tasks'; payload: Task }
   | { type: 'task:tree-cloned'; topic: 'tasks'; payload: { rootId: number; tasks: Task[] } };
+
+/** The level vocabulary, as Elysia sees it on a create or update body. */
+const TASK_KIND = t.Union([t.Literal('project'), t.Literal('epic'), t.Literal('task')]);
 
 export interface TasksRoutesContext {
   db: DatabaseClient;
@@ -71,6 +75,13 @@ function parseStatus(raw: string | string[] | undefined): 'open' | 'done' | unde
   throw new AuthError(400, `status must be "open" or "done", got "${value}"`);
 }
 
+function parseKind(raw: string | string[] | undefined): TaskKind | undefined {
+  if (raw === undefined) return undefined;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (value === 'project' || value === 'epic' || value === 'task') return value;
+  throw new AuthError(400, `kind must be "project", "epic" or "task", got "${value}"`);
+}
+
 function parseBoolFlag(raw: string | string[] | undefined): boolean {
   if (raw === undefined) return false;
   const value = Array.isArray(raw) ? raw[0] : raw;
@@ -115,6 +126,7 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
           ctx.db,
           {
             title: body.title,
+            kind: body.kind,
             parentId: body.parent_id,
             assignedTo: body.assigned_to,
             notes: body.notes,
@@ -129,6 +141,7 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
       {
         body: t.Object({
           title: t.String(),
+          kind: t.Optional(TASK_KIND),
           parent_id: t.Optional(t.Union([t.Number(), t.Null()])),
           assigned_to: t.Optional(t.Union([t.Number(), t.Null()])),
           notes: t.Optional(t.String()),
@@ -143,6 +156,7 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
         ctx.db,
         {
           parentId: parseParentId(query['parent_id']),
+          kind: parseKind(query['kind']),
           assignedTo: parseAssigneeLike(query['assigned_to']),
           createdBy: parseAssigneeLike(query['created_by']),
           status: parseStatus(query['status']),
@@ -172,6 +186,7 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
           {
             title: body.title,
             notes: body.notes,
+            kind: body.kind,
             assignedTo: body.assigned_to,
             parentId: body.parent_id,
             deferUntil: body.defer_until,
@@ -187,6 +202,7 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
         body: t.Object({
           title: t.Optional(t.String()),
           notes: t.Optional(t.String()),
+          kind: t.Optional(TASK_KIND),
           assigned_to: t.Optional(t.Union([t.Number(), t.Null()])),
           parent_id: t.Optional(t.Union([t.Number(), t.Null()])),
           defer_until: t.Optional(t.Union([t.String(), t.Null()])),
