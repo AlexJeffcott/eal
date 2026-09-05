@@ -394,8 +394,16 @@ function addSubtask(parentId: number, title: string): void {
   commit('tasks:add-subtask', { taskId: String(parentId), value: title });
 }
 
+/** The id of the one listed row that is not `notThis`. Throws rather than
+ *  returning a widened type, so the caller reads a plain number. */
+function otherRowId(notThis: number): number {
+  const found = rowIds().find((id) => id !== notThis);
+  if (found === undefined) throw new Error(`no listed row other than ${notThis}`);
+  return found;
+}
+
 describe('subtasks', () => {
-  test('adding a subtask nests it under the parent with a progress badge', async () => {
+  test('a subtask gets its own row, right after its parent, naming it', async () => {
     signedIn();
     clickAction('tasks:set-view', { view: 'all' });
     const parentId = await addTask('Plan the trip');
@@ -404,15 +412,35 @@ describe('subtasks', () => {
     await waitFor(() => document.querySelector('[data-task-detail]') !== null);
 
     addSubtask(parentId, 'Book flights');
-    await waitFor(() => document.querySelector('[data-task-subtasks] [data-task-row]') !== null);
+    await waitFor(() => rowTitles().length === 2);
 
-    const subtaskRows = document.querySelectorAll('[data-task-subtasks] [data-task-row]');
-    expect(subtaskRows.length).toBe(1);
-    expect(subtaskRows[0]?.querySelector('[data-task-title]')?.textContent).toBe('Book flights');
+    // Tree order: the child follows the parent it belongs to.
+    expect(rowTitles()).toEqual(['Plan the trip', 'Book flights']);
 
-    // The parent's collapsed row gains a done/total progress badge.
+    // The child's row names its container; the parent's row carries none.
+    const parentBadges = document.querySelectorAll('[data-task-parent]');
+    expect(parentBadges.length).toBe(1);
+    expect(parentBadges[0]?.textContent).toContain('Plan the trip');
+
+    // The parent's row gains a done/total progress badge.
     await waitFor(() => document.querySelector('[data-task-progress]') !== null);
     expect(document.querySelector('[data-task-progress]')?.textContent).toContain('0/1');
+  });
+
+  test('progress counts the whole subtree, not just the direct children', async () => {
+    signedIn();
+    clickAction('tasks:set-view', { view: 'all' });
+    const parentId = await addTask('Plan the trip');
+    addSubtask(parentId, 'Book flights');
+    await waitFor(() => rowIds().length === 2);
+
+    addSubtask(otherRowId(parentId), 'Pick seats');
+    await waitFor(() => rowIds().length === 3);
+
+    const progress = document.querySelectorAll('[data-task-progress]');
+    // The root counts both descendants; the middle task counts its one.
+    expect(progress[0]?.textContent).toContain('0/2');
+    expect(progress[1]?.textContent).toContain('0/1');
   });
 
   test('a subtask is itself expandable — the tree is recursive', async () => {
@@ -422,16 +450,25 @@ describe('subtasks', () => {
     clickAction('tasks:expand', { 'task-id': String(parentId) });
     await waitFor(() => document.querySelector('[data-task-detail]') !== null);
     addSubtask(parentId, 'Book flights');
-    await waitFor(() => document.querySelector('[data-task-subtasks] [data-task-row]') !== null);
+    await waitFor(() => rowIds().length === 2);
 
-    const subRow = document.querySelector<HTMLElement>('[data-task-subtasks] [data-task-row]');
-    const subId = Number(subRow?.dataset['taskId']);
-    expect(Number.isFinite(subId)).toBe(true);
-
+    const subId = otherRowId(parentId);
     clickAction('tasks:expand', { 'task-id': String(subId) });
     // Parent detail + subtask detail are both open at once.
     await waitFor(() => document.querySelectorAll('[data-task-detail]').length === 2);
     expect(document.querySelectorAll('[data-task-detail]').length).toBe(2);
+  });
+
+  test('the inbox stays unfiled capture — a subtask never lands there', async () => {
+    signedIn();
+    clickAction('tasks:set-view', { view: 'all' });
+    const parentId = await addTask('Plan the trip');
+    addSubtask(parentId, 'Book flights');
+    await waitFor(() => rowTitles().length === 2);
+
+    clickAction('tasks:set-view', { view: 'inbox' });
+    await waitFor(() => rowTitles().length === 1);
+    expect(rowTitles()).toEqual(['Plan the trip']);
   });
 });
 

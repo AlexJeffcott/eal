@@ -33,6 +33,7 @@ import {
   TEXT_OPS,
   visibleFor,
 } from './filter.ts';
+import { type ChildIndex, indexChildren, progressOf } from './tree.ts';
 
 const VIEW_OPTIONS: ReadonlyArray<{ value: TaskView; label: string }> = [
   { value: 'inbox', label: 'Inbox' },
@@ -59,25 +60,24 @@ function memberName(users: readonly HouseholdMember[], id: number): string {
   return users.find((u) => u.id === id)?.displayName ?? `user ${id}`;
 }
 
-/** Live, non-deleted subtasks of a parent, in creation order. */
-function childrenOf(tasksById: ReadonlyMap<number, Task>, parentId: number): Task[] {
-  return [...tasksById.values()]
-    .filter((t) => t.parentId === parentId && t.deletedAt === null)
-    .sort((a, b) => a.id - b.id);
-}
-
-interface TaskTreeProps {
+interface TaskRowProps {
   task: Task;
   tasksById: ReadonlyMap<number, Task>;
+  index: ChildIndex;
   expandedIds: ReadonlySet<number>;
   users: readonly HouseholdMember[];
 }
 
-/** The inline detail editor — every field commits the moment it changes, and
- *  a Subtasks section nests child tasks (recursively, via TaskRow). */
-function TaskDetail({ task, tasksById, expandedIds, users }: TaskTreeProps) {
+interface TaskDetailProps {
+  task: Task;
+  users: readonly HouseholdMember[];
+}
+
+/** The inline detail editor — every field commits the moment it changes.
+ *  Subtasks are not listed here. The main list carries them in tree order,
+ *  directly beneath this task, so a task has exactly one row on screen. */
+function TaskDetail({ task, users }: TaskDetailProps) {
   const taskId = String(task.id);
-  const children = childrenOf(tasksById, task.id);
   return (
     <div data-task-detail class="tasks-detail">
       <Surface variant="callout" padding="var(--polly-space-md)">
@@ -127,21 +127,6 @@ function TaskDetail({ task, tasksById, expandedIds, users }: TaskTreeProps) {
             />
           </FilterField>
           <FilterField label="Subtasks">
-            {children.length > 0 ? (
-              <div data-task-subtasks>
-                <Layout gap="var(--polly-space-xs)">
-                  {children.map((c) => (
-                    <TaskRow
-                      key={c.id}
-                      task={c}
-                      tasksById={tasksById}
-                      expandedIds={expandedIds}
-                      users={users}
-                    />
-                  ))}
-                </Layout>
-              </div>
-            ) : null}
             <ActionInput
               value=""
               action="tasks:add-subtask"
@@ -157,14 +142,18 @@ function TaskDetail({ task, tasksById, expandedIds, users }: TaskTreeProps) {
   );
 }
 
-function TaskRow({ task, tasksById, expandedIds, users }: TaskTreeProps) {
+function TaskRow({ task, tasksById, index, expandedIds, users }: TaskRowProps) {
   const done = task.status === 'done';
   const trashed = task.deletedAt !== null;
   const expanded = expandedIds.has(task.id);
   const due = task.dueAt === null ? null : dateValue(task.dueAt);
-  const children = childrenOf(tasksById, task.id);
-  const childDone = children.filter((c) => c.status === 'done').length;
-  const hasBadges = children.length > 0 || task.assignedTo !== null || due !== null;
+  const progress = progressOf(index, task.id);
+  // The container badge. `undefined` covers both a root task and one whose
+  // parent has not reached this mirror yet — neither gets a badge, and neither
+  // is named with a placeholder.
+  const parent = task.parentId === null ? undefined : tasksById.get(task.parentId);
+  const hasBadges =
+    parent !== undefined || progress.total > 0 || task.assignedTo !== null || due !== null;
   let titleClass = 'tasks-title';
   if (done) titleClass += ' tasks-title--done';
   if (done || trashed) titleClass += ' eal-muted';
@@ -210,9 +199,19 @@ function TaskRow({ task, tasksById, expandedIds, users }: TaskTreeProps) {
            *  squeezing the title or overflowing the row. */}
           {hasBadges ? (
             <Cluster gap="var(--polly-space-xs)">
-              {children.length > 0 ? (
+              {parent !== undefined ? (
+                <span data-task-parent>
+                  <Badge variant="default">
+                    {'in '}
+                    <span class="tasks-parent" title={parent.title}>
+                      {parent.title}
+                    </span>
+                  </Badge>
+                </span>
+              ) : null}
+              {progress.total > 0 ? (
                 <span data-task-progress>
-                  <Badge variant="default">{`${childDone}/${children.length}`}</Badge>
+                  <Badge variant="default">{`${progress.done}/${progress.total}`}</Badge>
                 </span>
               ) : null}
               {task.assignedTo !== null ? (
@@ -239,9 +238,7 @@ function TaskRow({ task, tasksById, expandedIds, users }: TaskTreeProps) {
           />
         )}
       </Layout>
-      {expanded && !trashed ? (
-        <TaskDetail task={task} tasksById={tasksById} expandedIds={expandedIds} users={users} />
-      ) : null}
+      {expanded && !trashed ? <TaskDetail task={task} users={users} /> : null}
     </div>
   );
 }
@@ -382,6 +379,7 @@ export function TasksPanel() {
   const users = $householdUsers.value;
 
   const now = new Date();
+  const index = indexChildren(tasks);
   const visible = visibleFor(filter, tasks, recentlyCompleted, { now });
   // The denominator for the live count — how many rows the view holds before
   // any conditions narrow it.
@@ -491,6 +489,7 @@ export function TasksPanel() {
                   key={task.id}
                   task={task}
                   tasksById={tasks}
+                  index={index}
                   expandedIds={expandedIds}
                   users={users}
                 />

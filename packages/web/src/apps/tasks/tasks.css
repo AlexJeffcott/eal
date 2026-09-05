@@ -38,3 +38,33 @@
 [data-action='tasks:quick-add'] {
   min-inline-size: 44px;
 }
+
+/*
+ * The container badge names the task a row sits under. Views list tasks at
+ * every depth, so a child can appear far from its parent and needs the name.
+ *
+ * The title is capped rather than wrapped: an uncapped badge widens the row
+ * past the 350px floor, and a wrapped one turns a one-line row into four. The
+ * whole title stays on the element's `title` attribute.
+ */
+.tasks-parent {
+  display: inline-block;
+  max-inline-size: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/*
+ * Row separation.
+ *
+ * A row is two lines at the 350px floor: the title, then the badges that
+ * describe it. With nothing between rows, a badge line sits directly above the
+ * next title and reads as belonging to that one instead. Only rows after the
+ * first take the rule, so the list has no leading line.
+ */
+[data-tasks-list] [data-task-row] + [data-task-row] {
+  border-block-start: var(--polly-border-width-default) solid var(--polly-border);
+  padding-block-start: var(--polly-space-sm);
+}

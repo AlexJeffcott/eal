@@ -1,5 +1,6 @@
 import Fuse from 'fuse.js';
 import type { Task } from '@eal/client';
+import { tasksInTreeOrder } from './tree.ts';
 
 /**
  * The composable task filter. `view` is the structural scope (a one-tap
@@ -254,9 +255,9 @@ function inView(
   if (view === 'trash') return task.deletedAt !== null;
   if (task.deletedAt !== null) return false;
   if (view === 'inbox') {
-    // parentId is already guaranteed null here — visibleFor's top-level guard
-    // drops every subtask before inView runs on a non-trash view.
-    return task.assignedTo === null && task.deferUntil === null;
+    // The inbox is unfiled capture, so depth belongs to its definition rather
+    // than to the renderer: a subtask is already filed under its parent.
+    return task.parentId === null && task.assignedTo === null && task.deferUntil === null;
   }
   if (view === 'today') {
     const deferOk = task.deferUntil === null || task.deferUntil <= todayCutoff;
@@ -264,7 +265,7 @@ function inView(
     const statusOk = task.status === 'open' || recentlyCompleted.has(task.id);
     return deferOk && statusOk;
   }
-  return true; // 'all' — every live task
+  return true; // 'all' — every live task, at every depth
 }
 
 function hasLiveChildren(tasks: ReadonlyMap<number, Task>, parentId: number): boolean {
@@ -356,13 +357,13 @@ function conditionMatches(
   }
 }
 
-function orderByPositionId(a: Task, b: Task): number {
-  if (a.position !== b.position) return a.position - b.position;
-  return a.id - b.id;
-}
-
 /**
  * Resolve the canonical task store down to the rows visible under `filter`.
+ *
+ * Rows come back in tree order — a task sits directly under the one it belongs
+ * to — because every view but the inbox now lists tasks at any depth. Each row
+ * names its parent, so a view that selects a child without its parent still
+ * reads correctly.
  *
  * `recentlyCompleted` carries the linger set: ids the user ticked since the
  * last navigation. Those rows stay visible even when a status condition (or
@@ -376,11 +377,7 @@ export function visibleFor(
 ): Task[] {
   const todayCutoff = endOfDayIso(ctx.now);
   const out: Task[] = [];
-  for (const task of tasks.values()) {
-    // The main list is top-level only — subtasks are managed inside their
-    // parent's detail editor. Trash is the exception: it shows every deleted
-    // row flat so a trashed subtask is still reachable to restore.
-    if (filter.view !== 'trash' && task.parentId !== null) continue;
+  for (const task of tasksInTreeOrder(tasks)) {
     if (!inView(task, filter.view, todayCutoff, recentlyCompleted)) continue;
     let matched = true;
     for (const condition of filter.conditions) {
@@ -392,5 +389,5 @@ export function visibleFor(
     if (!matched) continue;
     out.push(task);
   }
-  return out.sort(orderByPositionId);
+  return out;
 }

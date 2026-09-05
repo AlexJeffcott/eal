@@ -39,6 +39,12 @@ test('tasks golden path: register, capture, organise, complete', async ({ page }
   const taskId = await row.getAttribute('data-task-id');
   expect(taskId).not.toBeNull();
 
+  // The subtask added below. It is a row of the main list in its own right —
+  // every view but the inbox lists tasks at any depth.
+  const subRow = page.locator('[data-task-row]', {
+    has: page.locator('[data-task-title]', { hasText: 'Make a list' }),
+  });
+
   await test.step('switch to the All view — the task stays visible', async () => {
     await page.locator('[data-action="tasks:set-view"][data-action-view="all"]').click();
     await expect(row).toBeVisible();
@@ -68,20 +74,20 @@ test('tasks golden path: register, capture, organise, complete', async ({ page }
     await expect(row.locator('[data-task-assignee]')).toContainText('pat');
   });
 
-  await test.step('add a subtask — the parent shows a 0/1 progress badge', async () => {
+  await test.step('add a subtask — it lists on its own and names its parent', async () => {
     // The subtask field is an ActionInput (commits on Enter).
     await row.locator('div[aria-label="Add a subtask"]').click();
     const subInput = row.locator('input[aria-label="Add a subtask"]');
     await subInput.fill('Make a list');
     await subInput.press('Enter');
-    await expect(row.locator('[data-task-subtasks] [data-task-title]')).toHaveText('Make a list');
+
+    await expect(subRow).toBeVisible();
+    await expect(subRow.locator('[data-task-parent]')).toContainText('Buy groceries');
     await expect(row.locator('[data-task-progress]')).toContainText('0/1');
   });
 
-  await test.step('complete the subtask — progress ticks to 1/1', async () => {
-    const subtaskId = await row
-      .locator('[data-task-subtasks] [data-task-row]')
-      .getAttribute('data-task-id');
+  await test.step('complete the subtask — the parent progress ticks to 1/1', async () => {
+    const subtaskId = await subRow.getAttribute('data-task-id');
     expect(subtaskId).not.toBeNull();
     await page.locator(`[data-action="tasks:toggle"][data-action-task-id="${subtaskId}"]`).click();
     await expect(row.locator('[data-task-progress]')).toContainText('1/1');
@@ -141,6 +147,36 @@ test.describe('tasks at the 350px floor', () => {
     const taskId = await row.getAttribute('data-task-id');
     await page.locator(`[data-action="tasks:expand"][data-action-task-id="${taskId}"]`).click();
     await expect(row.locator('[data-task-detail]')).toBeVisible();
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+  });
+
+  test('a subtask row fits — the container badge names a long parent title', async ({ page }) => {
+    // The All view lists every spec's rows out of the shared in-memory
+    // database, so both titles carry a stamp that only this run can match.
+    const stamp = Date.now();
+    const parentMark = `p${stamp}`;
+    const childMark = `c${stamp}`;
+    await page
+      .locator('#tasks-quick-add')
+      .fill(`A parent title far too long to sit inside a badge unshortened ${parentMark}`);
+    await page.locator('[data-action="tasks:quick-add"]').click();
+    // A subtask is filed, so it never lists in the inbox. All is where the
+    // container badge is read.
+    await page.locator('[data-action="tasks:set-view"][data-action-view="all"]').click();
+    const row = page.locator('[data-task-row]', {
+      has: page.locator('[data-task-title]', { hasText: parentMark }),
+    });
+    const taskId = await row.getAttribute('data-task-id');
+    await page.locator(`[data-action="tasks:expand"][data-action-task-id="${taskId}"]`).click();
+    await row.locator('div[aria-label="Add a subtask"]').click();
+    const subInput = row.locator('input[aria-label="Add a subtask"]');
+    await subInput.fill(`The child ${childMark}`);
+    await subInput.press('Enter');
+
+    const subRow = page.locator('[data-task-row]', {
+      has: page.locator('[data-task-title]', { hasText: childMark }),
+    });
+    await expect(subRow.locator('[data-task-parent]')).toBeVisible();
     expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
   });
 

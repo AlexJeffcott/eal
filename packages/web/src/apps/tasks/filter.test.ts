@@ -311,7 +311,7 @@ describe('visibleFor — view scoping', () => {
     expect(ids(visibleFor(withConds('trash', []), tasks, noLinger, ctx))).toEqual([2]);
   });
 
-  test('subtasks stay out of the main list; a deleted subtask still shows in trash', () => {
+  test('a subtask lists in all and today; the inbox is unfiled capture only', () => {
     const tasks = mapOf(
       task({ id: 1, title: 'parent' }),
       task({ id: 2, title: 'open subtask', parentId: 1 }),
@@ -319,10 +319,40 @@ describe('visibleFor — view scoping', () => {
     );
     const view = (v: TaskFilter['view']): number[] =>
       ids(visibleFor(withConds(v, []), tasks, noLinger, ctx));
-    expect(view('all')).toEqual([1]);
-    expect(view('today')).toEqual([1]);
+    expect(view('all')).toEqual([1, 2]);
+    expect(view('today')).toEqual([1, 2]);
+    // A subtask is already filed under its parent, so it is not capture.
     expect(view('inbox')).toEqual([1]);
     expect(view('trash')).toEqual([3]);
+  });
+
+  test('a subtask lists even when its own parent fails the view', () => {
+    const tasks = mapOf(
+      task({ id: 1, title: 'deferred parent', deferUntil: '2099-01-01T00:00:00Z' }),
+      task({ id: 2, title: 'subtask due now', parentId: 1 }),
+    );
+    expect(ids(visibleFor(withConds('today', []), tasks, noLinger, ctx))).toEqual([2]);
+  });
+});
+
+describe('visibleFor — tree order', () => {
+  test('a child follows its parent, not its own position among the roots', () => {
+    // Every position here is per-parent, so a flat position sort would put the
+    // child (position 0) ahead of the second root (position 1).
+    const tasks = mapOf(
+      task({ id: 1, title: 'first root', position: 0 }),
+      task({ id: 2, title: 'second root', position: 1 }),
+      task({ id: 3, title: 'child of the second', parentId: 2, position: 0 }),
+    );
+    expect(ids(visibleFor(withConds('all', []), tasks, noLinger, ctx))).toEqual([1, 2, 3]);
+  });
+
+  test('text search reaches a subtask', () => {
+    const tasks = mapOf(
+      task({ id: 1, title: 'Plan the trip' }),
+      task({ id: 2, title: 'Book flights', parentId: 1 }),
+    );
+    expect(ids(visibleFor(withConds('all', [txt('flights')]), tasks, noLinger, ctx))).toEqual([2]);
   });
 });
 
@@ -366,10 +396,11 @@ describe('visibleFor — conditions', () => {
       task({ id: 5, title: 'dead child', parentId: 4, deletedAt: '2026-05-20T09:00:00Z' }),
     );
     expect(ids(visibleFor(withConds('all', [sel('subtasks', ['has'])]), tasks, noLinger, ctx))).toEqual([1]);
-    // 4's only child is deleted, so it counts as having none.
+    // 2 is a leaf and lists like any other. 4's only child is deleted, so it
+    // counts as having none.
     expect(
       ids(visibleFor(withConds('all', [sel('subtasks', ['none'])]), tasks, noLinger, ctx)).sort(),
-    ).toEqual([3, 4]);
+    ).toEqual([2, 3, 4]);
   });
 
   test('due date: before / on / after, and no-due tasks fail any due condition', () => {
