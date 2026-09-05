@@ -6,7 +6,7 @@ function task(overrides: Partial<Task> & { id: number; title: string }): Task {
   return {
     parentId: null,
     notes: '',
-    status: 'open',
+    status: 'todo',
     kind: 'task',
     deferUntil: null,
     dueAt: null,

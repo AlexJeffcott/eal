@@ -88,16 +88,47 @@ describe('applySchema', () => {
         .prepare("INSERT INTO tasks (title, status, created_by, updated_by) VALUES ('t', 'done', 1, 1)")
         .run(),
     ).toThrow();
+    // The tie holds for every live state, not only the one that used to exist:
+    // a `blocked` row carrying a completion timestamp is as wrong as a `todo`
+    // one, and the board can move a card into any of the three.
+    for (const status of ['todo', 'doing', 'blocked']) {
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO tasks (title, status, completed_at, created_by, updated_by) VALUES ('t', '${status}', datetime('now'), 1, 1)`,
+          )
+          .run(),
+      ).toThrow();
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO tasks (title, status, created_by, updated_by) VALUES ('t', '${status}', 1, 1)`,
+          )
+          .run(),
+      ).not.toThrow();
+    }
+  });
+
+  test('tasks.status is CHECK-bounded to the four workflow states', () => {
+    applySchema(db);
+    db.prepare("INSERT INTO users (display_name) VALUES ('alex')").run();
+    // The vocabulary the widened column admits. 'open' is gone: a row still
+    // carrying it would have been rewritten by the rebuild, so accepting one
+    // now would let a half-migrated write back in.
+    for (const status of ['open', 'started', 'waiting', '']) {
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO tasks (title, status, created_by, updated_by) VALUES ('t', '${status}', 1, 1)`,
+          )
+          .run(),
+      ).toThrow();
+    }
     expect(() =>
       db
         .prepare(
-          "INSERT INTO tasks (title, status, completed_at, created_by, updated_by) VALUES ('t', 'open', datetime('now'), 1, 1)",
+          "INSERT INTO tasks (title, status, completed_at, created_by, updated_by) VALUES ('t', 'done', datetime('now'), 1, 1)",
         )
-        .run(),
-    ).toThrow();
-    expect(() =>
-      db
-        .prepare("INSERT INTO tasks (title, status, created_by, updated_by) VALUES ('t', 'open', 1, 1)")
         .run(),
     ).not.toThrow();
   });
@@ -108,7 +139,7 @@ describe('applySchema', () => {
     // A row written before the column existed reads as a plain task. A row
     // holding nothing stays there — only a row that already holds children is
     // levelled up, by promoteGrandfatheredContainers.
-    db.prepare("INSERT INTO tasks (title, status, created_by, updated_by) VALUES ('captured', 'open', 1, 1)").run();
+    db.prepare("INSERT INTO tasks (title, status, created_by, updated_by) VALUES ('captured', 'todo', 1, 1)").run();
 
     interface KindRow { kind: string }
     const before = db.prepare<KindRow, []>("SELECT kind FROM tasks WHERE title = 'captured'").get();
@@ -119,14 +150,14 @@ describe('applySchema', () => {
     expect(() =>
       db
         .prepare(
-          "INSERT INTO tasks (title, status, kind, created_by, updated_by) VALUES ('x', 'open', 'milestone', 1, 1)",
+          "INSERT INTO tasks (title, status, kind, created_by, updated_by) VALUES ('x', 'todo', 'milestone', 1, 1)",
         )
         .run(),
     ).toThrow();
     expect(() =>
       db
         .prepare(
-          "INSERT INTO tasks (title, status, kind, created_by, updated_by) VALUES ('x', 'open', 'project', 1, 1)",
+          "INSERT INTO tasks (title, status, kind, created_by, updated_by) VALUES ('x', 'todo', 'project', 1, 1)",
         )
         .run(),
     ).not.toThrow();
@@ -373,6 +404,165 @@ describe('applySchema', () => {
         )
         .run(),
     ).toThrow();
+  });
+
+  /**
+   * A tasks table in the shape stage 1 left behind: `kind` present, `status`
+   * still bounded to ('open','done'). This is the exact on-disk shape a real
+   * install has before stage 2, so applying over it runs the real rebuild.
+   */
+  function seedPreStatusTasks(db: DatabaseClient): void {
+    db.exec(`
+      CREATE TABLE users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        display_name TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO users (display_name) VALUES ('alex');
+      CREATE TABLE tasks (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        parent_id     INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
+        title         TEXT    NOT NULL,
+        notes         TEXT    NOT NULL DEFAULT '',
+        status        TEXT    NOT NULL CHECK (status IN ('open','done')),
+        kind          TEXT    NOT NULL DEFAULT 'task' CHECK (kind IN ('project','epic','task')),
+        defer_until   TEXT,
+        due_at        TEXT,
+        created_by    INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+        assigned_to   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        updated_by    INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+        created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+        updated_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+        completed_at  TEXT,
+        deleted_at    TEXT,
+        position      INTEGER NOT NULL DEFAULT 0,
+        CHECK ((status = 'done') = (completed_at IS NOT NULL))
+      );
+      CREATE INDEX idx_tasks_parent_position ON tasks (parent_id, position);
+      CREATE INDEX idx_tasks_assigned_to     ON tasks (assigned_to);
+      CREATE INDEX idx_tasks_status          ON tasks (status);
+      CREATE INDEX idx_tasks_defer_until     ON tasks (defer_until);
+      CREATE INDEX idx_tasks_deleted_at      ON tasks (deleted_at);
+      CREATE INDEX idx_tasks_kind            ON tasks (kind);
+    `);
+  }
+
+  interface TaskStateRow {
+    id: number;
+    title: string;
+    status: string;
+    kind: string;
+    parent_id: number | null;
+    completed_at: string | null;
+    deleted_at: string | null;
+    position: number;
+  }
+
+  function taskStates(db: DatabaseClient): TaskStateRow[] {
+    return db
+      .prepare<TaskStateRow, []>(
+        'SELECT id, title, status, kind, parent_id, completed_at, deleted_at, position FROM tasks ORDER BY id',
+      )
+      .all();
+  }
+
+  test("the status rebuild maps 'open' to 'todo' and carries every row across", () => {
+    seedPreStatusTasks(db);
+    const DONE_AT = '2026-03-01 09:15:00';
+    const TRASHED_AT = '2026-03-02 18:00:00';
+    db.exec(`
+      INSERT INTO tasks (id, parent_id, title, status, kind, completed_at, deleted_at, position, created_by, updated_by)
+      VALUES
+        (1, NULL, 'project',  'open', 'project', NULL,        NULL,          0, 1, 1),
+        (2, 1,    'epic',     'open', 'epic',    NULL,        NULL,          0, 1, 1),
+        (3, 2,    'finished', 'done', 'task',    '${DONE_AT}', NULL,          3, 1, 1),
+        (4, 2,    'open leaf','open', 'task',    NULL,        NULL,          7, 1, 1),
+        (5, 1,    'binned',   'done', 'task',    '${DONE_AT}', '${TRASHED_AT}', 1, 1, 1);
+    `);
+
+    applySchema(db);
+
+    expect(taskStates(db)).toEqual([
+      { id: 1, title: 'project', status: 'todo', kind: 'project', parent_id: null, completed_at: null, deleted_at: null, position: 0 },
+      { id: 2, title: 'epic', status: 'todo', kind: 'epic', parent_id: 1, completed_at: null, deleted_at: null, position: 0 },
+      { id: 3, title: 'finished', status: 'done', kind: 'task', parent_id: 2, completed_at: DONE_AT, deleted_at: null, position: 3 },
+      { id: 4, title: 'open leaf', status: 'todo', kind: 'task', parent_id: 2, completed_at: null, deleted_at: null, position: 7 },
+      { id: 5, title: 'binned', status: 'done', kind: 'task', parent_id: 1, completed_at: DONE_AT, deleted_at: TRASHED_AT, position: 1 },
+    ]);
+  });
+
+  test('the status rebuild keeps the self-referencing cascade working', () => {
+    // The failure this guards against is silent: a rebuild that dropped the
+    // ON DELETE CASCADE would leave the children of a hard-deleted project
+    // pointing at a row that no longer exists, and nothing would say so until
+    // a tree walk went missing.
+    seedPreStatusTasks(db);
+    db.exec(`
+      INSERT INTO tasks (id, parent_id, title, status, kind, position, created_by, updated_by)
+      VALUES (1, NULL, 'project', 'open', 'project', 0, 1, 1),
+             (2, 1, 'child', 'open', 'task', 0, 1, 1),
+             (3, 2, 'grandchild', 'open', 'task', 0, 1, 1);
+    `);
+    applySchema(db);
+
+    db.exec('PRAGMA foreign_keys = ON');
+    db.prepare('DELETE FROM tasks WHERE id = 1').run();
+    expect(taskStates(db)).toEqual([]);
+  });
+
+  test('the status rebuild puts every index back', () => {
+    seedPreStatusTasks(db);
+    applySchema(db);
+    interface IndexRow { name: string }
+    const indexes = db
+      .prepare<IndexRow, []>(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='tasks' AND sql IS NOT NULL",
+      )
+      .all()
+      .map((r) => r.name)
+      .sort();
+    expect(indexes).toEqual([
+      'idx_tasks_assigned_to',
+      'idx_tasks_defer_until',
+      'idx_tasks_deleted_at',
+      'idx_tasks_kind',
+      'idx_tasks_parent_position',
+      'idx_tasks_status',
+    ]);
+  });
+
+  test('the status rebuild is idempotent — a second apply neither rebuilds nor rewrites', () => {
+    seedPreStatusTasks(db);
+    db.exec(`
+      INSERT INTO tasks (id, parent_id, title, status, kind, position, created_by, updated_by)
+      VALUES (1, NULL, 'x', 'open', 'task', 0, 1, 1);
+    `);
+    applySchema(db);
+    // A lane chosen after the migration must survive the next boot. If the
+    // detection were wrong the table would rebuild again — harmless here, but
+    // it would also re-run the 'open' → 'todo' CASE over a column that has
+    // moved on, and nothing else would notice.
+    db.prepare("UPDATE tasks SET status = 'blocked' WHERE id = 1").run();
+    applySchema(db);
+    applySchema(db);
+    expect(taskStates(db).map((r) => r.status)).toEqual(['blocked']);
+  });
+
+  test('a fresh database is never rebuilt — the widened CHECK is there from the CREATE', () => {
+    applySchema(db);
+    interface SqlRow { sql: string }
+    const before = db
+      .prepare<SqlRow, []>("SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'")
+      .get();
+    // A rebuilt table comes back from `ALTER TABLE … RENAME` with its name
+    // quoted, so the CREATE text is how a rebuild announces itself.
+    expect(before?.sql.startsWith('CREATE TABLE tasks')).toBe(true);
+    expect(before?.sql).toContain("'doing'");
+    applySchema(db);
+    const after = db
+      .prepare<SqlRow, []>("SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'")
+      .get();
+    expect(after?.sql).toBe(before?.sql ?? '');
   });
 
   test('indexes survive repeated applySchema calls without duplication', () => {

@@ -56,7 +56,7 @@ async function waitForRowWithTitle(page: Page, title: string, timeoutMs = 10_000
 async function waitForRowStatus(
   page: Page,
   title: string,
-  status: 'open' | 'done',
+  status: 'todo' | 'doing' | 'blocked' | 'done',
   timeoutMs = 10_000,
 ): Promise<void> {
   await page.waitForFunction(
@@ -163,12 +163,13 @@ async function main(): Promise<number> {
     await waitForRowStatus(pageA, 'Pick up parcel', 'done');
     console.log('e2e-tasks-multi: complete propagated B → A');
 
-    // ─── 3. A reopens → B sees it back to open ──────────────────────────────
+    // ─── 3. A reopens → B sees it back at the top of the axis ───────────────
     // The Today filter excludes done rows, so before reopening B's row is in
-    // its inbox but visually checked. Reopening flips it back.
+    // its inbox but visually checked. Reopening flips it back to `todo` — the
+    // predictable-resurrection rule, not the lane it held before.
     await clickActionByTitle(pageA, 'tasks:toggle', 'Pick up parcel');
-    await waitForRowStatus(pageA, 'Pick up parcel', 'open');
-    await waitForRowStatus(pageB, 'Pick up parcel', 'open');
+    await waitForRowStatus(pageA, 'Pick up parcel', 'todo');
+    await waitForRowStatus(pageB, 'Pick up parcel', 'todo');
     console.log('e2e-tasks-multi: reopen propagated A → B');
 
     // ─── 4. A deletes → B sees it leave inbox; Trash on B shows it ──────────

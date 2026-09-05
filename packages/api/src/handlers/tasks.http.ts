@@ -15,9 +15,11 @@ import {
   listTasksCore,
   reopenTaskCore,
   restoreTaskCore,
+  setTaskStatusCore,
   updateTaskCore,
   type Task,
   type TaskKind,
+  type TaskStatus,
 } from './tasks.shared.ts';
 
 export type TaskEvent =
@@ -68,11 +70,29 @@ function parseParentId(
   return Math.trunc(n);
 }
 
-function parseStatus(raw: string | string[] | undefined): 'open' | 'done' | undefined {
+/**
+ * The one place a status string is admitted, whether it arrived as a `?status=`
+ * query value or in a `POST /:id/status` body. The body is typed `t.String()`
+ * rather than a union of four literals so the refusal comes from here: Elysia's
+ * own schema rejection is flattened to a 500 by the `onError` above, and "the
+ * server broke" is the wrong answer to "blockd" — the client maps the
+ * `{ error }` envelope and the person needs to read what went wrong.
+ */
+function requireStatus(value: string): TaskStatus {
+  if (value === 'todo' || value === 'doing' || value === 'blocked' || value === 'done') {
+    return value;
+  }
+  throw new AuthError(
+    400,
+    `status must be "todo", "doing", "blocked" or "done", got "${value}"`,
+  );
+}
+
+function parseStatus(raw: string | string[] | undefined): TaskStatus | undefined {
   if (raw === undefined) return undefined;
   const value = Array.isArray(raw) ? raw[0] : raw;
-  if (value === 'open' || value === 'done') return value;
-  throw new AuthError(400, `status must be "open" or "done", got "${value}"`);
+  if (value === undefined) return undefined;
+  return requireStatus(value);
 }
 
 function parseKind(raw: string | string[] | undefined): TaskKind | undefined {
@@ -212,7 +232,12 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
       },
     )
     .post('/:id/complete', ({ params, request }) => {
-      requires(taskStatusMachine.value.status === 'open', 'complete: must be open');
+      requires(
+        taskStatusMachine.value.status === 'todo' ||
+          taskStatusMachine.value.status === 'doing' ||
+          taskStatusMachine.value.status === 'blocked',
+        'complete: must be live and unfinished',
+      );
       const principal = requirePrincipal(ctx, request);
       const task = completeTaskCore(ctx.db, Number(params.id), principal);
       ctx.broadcastTask({ type: 'task:updated', topic: 'tasks', payload: task });
@@ -225,10 +250,53 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
       const principal = requirePrincipal(ctx, request);
       const task = reopenTaskCore(ctx.db, Number(params.id), principal);
       ctx.broadcastTask({ type: 'task:updated', topic: 'tasks', payload: task });
-      if (POLLY_ANCHOR) taskStatusMachine.value = { status: 'open' };
-      ensures(taskStatusMachine.value.status === 'open', 'reopen: end in open');
+      if (POLLY_ANCHOR) taskStatusMachine.value = { status: 'todo' };
+      ensures(taskStatusMachine.value.status === 'todo', 'reopen: end in todo');
       return { task };
     })
+    /**
+     * The board's lane move. Its own verb rather than a field on PATCH: the
+     * status axis is the one part of a task with a formal model behind it
+     * (specs/tasks-status-machine.ts), and a route that only ever moves along
+     * that axis is a thing the model can be anchored to. A title edit is not a
+     * workflow transition and should not be modelled as one.
+     */
+    .post(
+      '/:id/status',
+      ({ params, body, request }) => {
+        requires(
+          taskStatusMachine.value.status === 'todo' ||
+            taskStatusMachine.value.status === 'doing' ||
+            taskStatusMachine.value.status === 'blocked' ||
+            taskStatusMachine.value.status === 'done',
+          'setStatus: must be live',
+        );
+        const principal = requirePrincipal(ctx, request);
+        const next = requireStatus(body.status);
+        const task = setTaskStatusCore(ctx.db, Number(params.id), next, principal);
+        ctx.broadcastTask({ type: 'task:updated', topic: 'tasks', payload: task });
+        // Written as four literal assignments rather than one on `body.status`
+        // so polly's static extractor records every landing state: the model
+        // then explores all four and proves the ensures below on each. A single
+        // `{ status: body.status }` extracts to nothing and would model this
+        // route as changing no state at all.
+        if (POLLY_ANCHOR) {
+          if (task.status === 'done') taskStatusMachine.value = { status: 'done' };
+          else if (task.status === 'doing') taskStatusMachine.value = { status: 'doing' };
+          else if (task.status === 'blocked') taskStatusMachine.value = { status: 'blocked' };
+          else taskStatusMachine.value = { status: 'todo' };
+        }
+        ensures(
+          taskStatusMachine.value.status === 'todo' ||
+            taskStatusMachine.value.status === 'doing' ||
+            taskStatusMachine.value.status === 'blocked' ||
+            taskStatusMachine.value.status === 'done',
+          'setStatus: ends live — the workflow axis never reaches the trash',
+        );
+        return { task };
+      },
+      { body: t.Object({ status: t.String() }) },
+    )
     .post('/:id/clone', ({ params, request }) => {
       const principal = requirePrincipal(ctx, request);
       const result = cloneTaskCore(ctx.db, Number(params.id), principal);
@@ -237,8 +305,11 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
     })
     .delete('/:id', ({ params, request }) => {
       requires(
-        taskStatusMachine.value.status === 'open' || taskStatusMachine.value.status === 'done',
-        'delete: must be live (open or done)',
+        taskStatusMachine.value.status === 'todo' ||
+          taskStatusMachine.value.status === 'doing' ||
+          taskStatusMachine.value.status === 'blocked' ||
+          taskStatusMachine.value.status === 'done',
+        'delete: must be live (any of the four workflow states)',
       );
       const principal = requirePrincipal(ctx, request);
       const task = deleteTaskCore(ctx.db, Number(params.id), principal);
@@ -252,8 +323,8 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
       const principal = requirePrincipal(ctx, request);
       const task = restoreTaskCore(ctx.db, Number(params.id), principal);
       ctx.broadcastTask({ type: 'task:updated', topic: 'tasks', payload: task });
-      if (POLLY_ANCHOR) taskStatusMachine.value = { status: 'open' };
-      ensures(taskStatusMachine.value.status === 'open', 'restore: end in open (predictable resurrection)');
+      if (POLLY_ANCHOR) taskStatusMachine.value = { status: 'todo' };
+      ensures(taskStatusMachine.value.status === 'todo', 'restore: end in todo (predictable resurrection)');
       return { task };
     });
 }

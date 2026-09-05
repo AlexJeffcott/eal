@@ -8,7 +8,7 @@ import { createMockEalClient } from '@eal/client-mock';
 import type { Task } from '@eal/client';
 import { App } from '../../src/shell/app.tsx';
 import { createStores, resetStoresForTest } from '../../src/stores.ts';
-import { $householdUsers, $quickAddTitle } from '../../src/apps/tasks/stores.ts';
+import { $boardLane, $householdUsers, $quickAddTitle } from '../../src/apps/tasks/stores.ts';
 import { ACTION_REGISTRY } from '../../src/actions/registry.ts';
 import { $route } from '../../src/shell/router.ts';
 
@@ -150,7 +150,7 @@ describe('Tasks UI (browser)', () => {
     );
     clickAction('tasks:toggle', { 'task-id': String(id) });
     await waitFor(
-      () => document.querySelector<HTMLElement>(`[data-task-id="${id}"]`)?.dataset['taskStatus'] === 'open',
+      () => document.querySelector<HTMLElement>(`[data-task-id="${id}"]`)?.dataset['taskStatus'] === 'todo',
     );
   });
 
@@ -173,7 +173,7 @@ describe('Tasks UI (browser)', () => {
   });
 
   describe('composable filter', () => {
-    test('status condition: Open hides done tasks, Done shows only them', async () => {
+    test('status condition: To do hides done tasks, Done shows only them', async () => {
       signedIn();
       const a = await addTask('a');
       await addTask('b');
@@ -186,11 +186,11 @@ describe('Tasks UI (browser)', () => {
       await waitFor(() => document.querySelector('[data-condition-field="status"]') !== null);
 
       // Narrow to Open — adding the condition cleared linger, so done 'a' drops.
-      clickAction('tasks:toggle-condition-value', { value: 'open' });
+      clickAction('tasks:toggle-condition-value', { value: 'todo' });
       await waitFor(() => rowTitles().join(',') === 'b');
 
       // Flip the value set to Done.
-      clickAction('tasks:toggle-condition-value', { value: 'open' });
+      clickAction('tasks:toggle-condition-value', { value: 'todo' });
       clickAction('tasks:toggle-condition-value', { value: 'done' });
       await waitFor(() => rowTitles().join(',') === 'a');
     });
@@ -206,7 +206,7 @@ describe('Tasks UI (browser)', () => {
         parentId: null,
         title: 'mine one',
         notes: '',
-        status: 'open',
+        status: 'todo',
         kind: 'task',
         deferUntil: null,
         dueAt: null,
@@ -257,7 +257,7 @@ describe('Tasks UI (browser)', () => {
   });
 
   describe('linger', () => {
-    test('completing a task under a status=open condition keeps it visible until navigation', async () => {
+    test('completing a task under a status=todo condition keeps it visible until navigation', async () => {
       signedIn();
       const a = await addTask('a');
       await addTask('b');
@@ -265,7 +265,7 @@ describe('Tasks UI (browser)', () => {
       // Restrict to open FIRST, then complete — the completed task must linger.
       clickAction('tasks:add-condition', { field: 'status' });
       await waitFor(() => document.querySelector('[data-condition-field="status"]') !== null);
-      clickAction('tasks:toggle-condition-value', { value: 'open' });
+      clickAction('tasks:toggle-condition-value', { value: 'todo' });
       await waitFor(() => rowIds().length === 2);
 
       clickAction('tasks:toggle', { 'task-id': String(a) });
@@ -275,7 +275,7 @@ describe('Tasks UI (browser)', () => {
       // Still on screen — struck-through, not vanished.
       expect(rowIds().includes(a)).toBe(true);
 
-      // Navigating (any filter change) clears the linger; status=open hides it.
+      // Navigating (any filter change) clears the linger; status=todo hides it.
       clickAction('tasks:set-view', { view: 'all' });
       await waitFor(() => rowTitles().join(',') === 'b');
     });
@@ -302,7 +302,7 @@ describe('Tasks UI (browser)', () => {
         parentId: null,
         title: 'remote',
         notes: '',
-        status: 'open',
+        status: 'todo',
         kind: 'task',
         deferUntil: null,
         dueAt: null,
@@ -613,12 +613,218 @@ describe('scope and breadcrumb', () => {
 
   test('a scope naming a row this mirror lacks is empty and still escapable', async () => {
     signedIn();
-    stores.$taskFilter.value = { view: 'all', scope: 4242, conditions: [] };
+    stores.$taskFilter.value = { view: 'all', scope: 4242, layout: 'list', conditions: [] };
     await waitFor(() => document.querySelector('[data-tasks-breadcrumb]') !== null);
     expect(document.querySelector('[data-tasks-scope]')?.textContent).toContain('#4242');
     expect(document.querySelector('[data-tasks-empty]')).not.toBeNull();
     clickAction('tasks:leave-scope');
     await waitFor(() => document.querySelector('[data-tasks-breadcrumb]') === null);
+  });
+});
+
+describe('the board', () => {
+  /** Titles of the cards in one lane, whether or not CSS is showing it. */
+  function laneTitles(lane: string): string[] {
+    return Array.from(
+      document.querySelectorAll<HTMLElement>(
+        `[data-board-lane-column][data-lane="${lane}"] [data-board-card] [data-task-title]`,
+      ),
+    ).map((el) => el.textContent ?? '');
+  }
+
+  function laneCount(lane: string): string {
+    return (
+      document
+        .querySelector<HTMLElement>(
+          `[data-board-lane-column][data-lane="${lane}"] [data-board-lane-count]`,
+        )
+        ?.textContent ?? ''
+    );
+  }
+
+  test('switching to the board draws four lanes and back to the list draws rows', async () => {
+    signedIn();
+    await addTask('a card');
+    clickAction('tasks:set-layout', { layout: 'board' });
+    await waitFor(() => document.querySelector('[data-tasks-board]') !== null);
+    expect(document.querySelectorAll('[data-board-lane-column]').length).toBe(4);
+    expect(document.querySelector('[data-tasks-list]')).toBeNull();
+    // The layout rides the filter, so it survives into the URL like view= and in=.
+    expect(stores.$taskFilter.value.layout).toBe('board');
+
+    clickAction('tasks:set-layout', { layout: 'list' });
+    await waitFor(() => document.querySelector('[data-tasks-list]') !== null);
+    expect(document.querySelector('[data-tasks-board]')).toBeNull();
+  });
+
+  test('the switch marks which layout is showing', async () => {
+    // Two buttons that look identical while one of them is already active is
+    // the bug this pins: polly renders the chosen tier as a class, so the
+    // match is on the tier name rather than on a hashed CSS module suffix.
+    signedIn();
+    const tierOf = (layout: string): string =>
+      document.querySelector<HTMLElement>(
+        `[data-action="tasks:set-layout"][data-action-layout="${layout}"]`,
+      )?.className ?? '';
+    expect(tierOf('list')).toContain('tierPrimary');
+    expect(tierOf('board')).not.toContain('tierPrimary');
+
+    clickAction('tasks:set-layout', { layout: 'board' });
+    await waitFor(() => document.querySelector('[data-tasks-board]') !== null);
+    expect(tierOf('board')).toContain('tierPrimary');
+    expect(tierOf('list')).not.toContain('tierPrimary');
+  });
+
+  test('a card lands in the lane its status names, and moving it changes lanes', async () => {
+    signedIn();
+    const id = await addTask('paint the hall');
+    clickAction('tasks:set-layout', { layout: 'board' });
+    await waitFor(() => document.querySelector('[data-tasks-board]') !== null);
+    expect(laneTitles('todo')).toEqual(['paint the hall']);
+
+    commit('tasks:set-status', { taskId: String(id), value: 'blocked' });
+    await waitFor(() => laneTitles('blocked').length === 1);
+    expect(laneTitles('todo')).toEqual([]);
+    expect(laneCount('blocked')).toBe('1');
+    expect(stores.$tasksById.value.get(id)?.status).toBe('blocked');
+  });
+
+  test('moving a card into Done sets the completion timestamp; moving it out clears it', async () => {
+    signedIn();
+    const id = await addTask('take the bins out');
+    clickAction('tasks:set-layout', { layout: 'board' });
+    await waitFor(() => document.querySelector('[data-tasks-board]') !== null);
+
+    commit('tasks:set-status', { taskId: String(id), value: 'done' });
+    await waitFor(() => laneTitles('done').length === 1);
+    expect(stores.$tasksById.value.get(id)?.completedAt).not.toBeNull();
+
+    commit('tasks:set-status', { taskId: String(id), value: 'doing' });
+    await waitFor(() => laneTitles('doing').length === 1);
+    expect(stores.$tasksById.value.get(id)?.completedAt).toBeNull();
+  });
+
+  test('every lane is drawn even when empty — "nothing blocked" is an answer', async () => {
+    signedIn();
+    clickAction('tasks:set-layout', { layout: 'board' });
+    await waitFor(() => document.querySelector('[data-tasks-board]') !== null);
+    expect(document.querySelectorAll('[data-board-lane-empty]').length).toBe(4);
+    for (const lane of ['todo', 'doing', 'blocked', 'done']) {
+      expect(laneCount(lane)).toBe('0');
+    }
+  });
+
+  test('the lane picker pages forward and back, wrapping at both ends', async () => {
+    signedIn();
+    clickAction('tasks:set-layout', { layout: 'board' });
+    await waitFor(() => document.querySelector('[data-tasks-board]') !== null);
+    const shown = (): string =>
+      document.querySelector<HTMLElement>('[data-tasks-board]')?.dataset['boardLane'] ?? '';
+    expect(shown()).toBe('todo');
+
+    for (const expected of ['doing', 'blocked', 'done', 'todo']) {
+      clickAction('tasks:board-lane-step', { step: 'next' });
+      await waitFor(() => shown() === expected);
+    }
+    clickAction('tasks:board-lane-step', { step: 'prev' });
+    await waitFor(() => shown() === 'done');
+  });
+
+  test('paging lanes does not clear the linger set — it is not navigation', async () => {
+    signedIn();
+    const id = await addTask('tick me');
+    clickAction('tasks:set-layout', { layout: 'board' });
+    await waitFor(() => document.querySelector('[data-tasks-board]') !== null);
+    commit('tasks:set-status', { taskId: String(id), value: 'done' });
+    await waitFor(() => stores.$recentlyCompleted.value.has(id));
+
+    clickAction('tasks:board-lane-step', { step: 'next' });
+    await waitFor(() => $boardLane.value === 'doing');
+    expect(stores.$recentlyCompleted.value.has(id)).toBe(true);
+
+    // A layout change *is* navigation, and clears it.
+    clickAction('tasks:set-layout', { layout: 'list' });
+    await waitFor(() => stores.$recentlyCompleted.value.size === 0);
+  });
+
+  test('the board shows what the list shows — one query, two arrangements', async () => {
+    signedIn();
+    clickAction('tasks:set-view', { view: 'all' });
+    const shown = await addTask('in the view');
+    const hidden = await addTask('hidden by a condition');
+    clickAction('tasks:add-condition', { field: 'text' });
+    await waitFor(() => document.querySelector('[data-condition-field="text"]') !== null);
+    commit('tasks:set-condition-text', { conditionId: 'c-noop', value: 'x' });
+    // Drive the real condition by its own id, whatever the counter reached.
+    const conditionId = stores.$taskFilter.value.conditions[0]?.id ?? '';
+    commit('tasks:set-condition-text', { conditionId, value: 'in the view' });
+    await waitFor(() => rowTitles().join(',') === 'in the view');
+
+    clickAction('tasks:set-layout', { layout: 'board' });
+    await waitFor(() => document.querySelector('[data-tasks-board]') !== null);
+    expect(laneTitles('todo')).toEqual(['in the view']);
+    expect(shown).toBeGreaterThan(0);
+    expect(hidden).toBeGreaterThan(0);
+  });
+
+  test('a trashed card offers Restore, not a lane move that always 404s', async () => {
+    signedIn();
+    const id = await addTask('binned');
+    clickAction('tasks:delete', { 'task-id': String(id) });
+    await waitFor(() => rowIds().length === 0);
+    clickAction('tasks:set-view', { view: 'trash' });
+    clickAction('tasks:set-layout', { layout: 'board' });
+    await waitFor(() => document.querySelector('[data-board-card]') !== null);
+
+    const card = document.querySelector<HTMLElement>(`[data-board-card][data-task-id="${id}"]`);
+    expect(card).not.toBeNull();
+    expect(card?.querySelector('[data-task-status-picker]')).toBeNull();
+    expect(card?.querySelector('[data-action="tasks:restore"]')).not.toBeNull();
+  });
+
+  test('a rejected lane move surfaces the error instead of moving the card', async () => {
+    signedIn();
+    const id = await addTask('stubborn');
+    clickAction('tasks:set-layout', { layout: 'board' });
+    await waitFor(() => document.querySelector('[data-tasks-board]') !== null);
+    mock.mockTaskError(new Error('task 1 not found or in trash'));
+    commit('tasks:set-status', { taskId: String(id), value: 'doing' });
+    await waitFor(() => document.querySelector('[data-tasks-error]') !== null);
+    expect(document.querySelector('[data-tasks-error]')?.textContent).toContain(
+      'already removed by another device',
+    );
+    expect(laneTitles('todo')).toEqual(['stubborn']);
+  });
+});
+
+describe('the state badge on a list row', () => {
+  function stateBadge(id: number): string | null {
+    return (
+      document.querySelector<HTMLElement>(
+        `[data-task-row][data-task-id="${id}"] [data-task-state]`,
+      )?.textContent ?? null
+    );
+  }
+
+  test('names doing and blocked, and stays silent on todo and done', async () => {
+    signedIn();
+    const id = await addTask('the thing');
+    expect(stateBadge(id)).toBeNull();
+
+    commit('tasks:set-status', { taskId: String(id), value: 'doing' });
+    await waitFor(() => stateBadge(id) === 'doing');
+
+    commit('tasks:set-status', { taskId: String(id), value: 'blocked' });
+    await waitFor(() => stateBadge(id) === 'blocked');
+
+    // Done is already legible: a ticked box and a struck-through title.
+    commit('tasks:set-status', { taskId: String(id), value: 'done' });
+    await waitFor(
+      () =>
+        document.querySelector<HTMLElement>(`[data-task-id="${id}"]`)?.dataset['taskStatus'] ===
+        'done',
+    );
+    expect(stateBadge(id)).toBeNull();
   });
 });
 

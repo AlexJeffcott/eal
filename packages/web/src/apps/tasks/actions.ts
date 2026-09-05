@@ -1,11 +1,13 @@
 import type { ActionRegistry } from '@fairfox/polly/actions';
 import type { Task, TaskKind, UpdateTaskInput } from '@eal/client';
 import type { AppStores } from '../../stores.ts';
+import { adjacentLane, isTaskStatus } from './board.ts';
 import {
   isConditionField,
   isTextOp,
   newCondition,
   type TaskFilter,
+  type TaskLayout,
   type TaskView,
 } from './filter.ts';
 
@@ -75,6 +77,10 @@ function isTaskKind(value: string): value is TaskKind {
   return value === 'project' || value === 'epic' || value === 'task';
 }
 
+function isTaskLayout(value: string): value is TaskLayout {
+  return value === 'list' || value === 'board';
+}
+
 /**
  * The single seam through which the filter changes. Updating the filter is
  * "navigation" — it clears the linger set so just-completed tasks stop
@@ -92,6 +98,23 @@ export const TASKS_ACTIONS: ActionRegistry<AppStores> = {
     if (typeof view === 'string' && isTaskView(view)) {
       applyFilter(stores, { view });
     }
+  },
+
+  'tasks:set-layout': ({ data, stores }) => {
+    const layout = data['layout'];
+    if (typeof layout === 'string' && isTaskLayout(layout)) {
+      applyFilter(stores, { layout });
+    }
+  },
+
+  // Paging the board on a narrow screen. Not routed through applyFilter: the
+  // lane is where you are looking, not what you asked for, so it must not clear
+  // the linger set — a task you tick in the Doing lane should stay put long
+  // enough to see it move.
+  'tasks:board-lane-step': ({ data, stores }) => {
+    const step = data['step'];
+    if (step !== 'next' && step !== 'prev') return;
+    stores.$boardLane.value = adjacentLane(stores.$boardLane.value, step === 'next' ? 1 : -1);
   },
 
   'tasks:enter-scope': ({ data, stores }) => {
@@ -228,7 +251,10 @@ export const TASKS_ACTIONS: ActionRegistry<AppStores> = {
     const current = stores.$tasksById.value.get(id);
     if (!current) return;
     stores.$tasksError.value = null;
-    const completing = current.status === 'open';
+    // Any unfinished state completes; only `done` reopens. A task you started,
+    // and one you are stuck on, both tick off in one tap — being made to move a
+    // card to Doing before you may finish it would be a tax on the fast path.
+    const completing = current.status !== 'done';
     try {
       const task = completing
         ? await stores.client.completeTask(id)
@@ -326,6 +352,29 @@ export const TASKS_ACTIONS: ActionRegistry<AppStores> = {
     const value = data['value'];
     if (id === null || typeof value !== 'string' || !isTaskKind(value)) return;
     void commitTaskField(stores, id, { kind: value });
+  },
+
+  'tasks:set-status': async ({ data, stores }) => {
+    // The lane picker on a board card, and the Status field in the detail
+    // editor — one action, because moving a card and choosing a state from the
+    // editor are the same write.
+    const id = taskIdFromData(data);
+    const value = data['value'];
+    if (id === null || typeof value !== 'string' || !isTaskStatus(value)) return;
+    stores.$tasksError.value = null;
+    try {
+      const task = await stores.client.setTaskStatus(id, value);
+      patchTasks(stores, (m) => m.set(task.id, task));
+      // Same linger rule the checkbox follows: a card moved into Done stays
+      // visible under a status filter until the next navigation, and one moved
+      // back out loses the mark.
+      const linger = new Set(stores.$recentlyCompleted.value);
+      if (value === 'done') linger.add(id);
+      else linger.delete(id);
+      stores.$recentlyCompleted.value = linger;
+    } catch (err) {
+      stores.$tasksError.value = friendlyTaskError(err);
+    }
   },
 
   'tasks:restore': async ({ data, stores }) => {

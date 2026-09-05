@@ -9,9 +9,10 @@ import {
   Text,
   TextInput,
 } from '@fairfox/polly/ui';
-import type { HouseholdMember, Task, TaskKind } from '@eal/client';
+import type { HouseholdMember, Task, TaskKind, TaskStatus } from '@eal/client';
 import { $currentUser } from '../../shell/stores.ts';
 import {
+  $boardLane,
   $expandedTaskIds,
   $householdUsers,
   $quickAddTitle,
@@ -29,10 +30,12 @@ import {
   type SelectOptionSpec,
   STATUS_OPTIONS,
   SUBTASK_OPTIONS,
+  type TaskLayout,
   type TaskView,
   TEXT_OPS,
   visibleFor,
 } from './filter.ts';
+import { BOARD_LANES, type Lane, lanesFor } from './board.ts';
 import { ancestorsOf, type ChildIndex, indexChildren, progressOf } from './tree.ts';
 
 const VIEW_OPTIONS: ReadonlyArray<{ value: TaskView; label: string }> = [
@@ -48,6 +51,42 @@ const LEVEL_OPTIONS: ReadonlyArray<{ value: TaskKind; label: string }> = [
   { value: 'epic', label: 'Epic' },
   { value: 'task', label: 'Task' },
 ];
+
+const LAYOUT_OPTIONS: ReadonlyArray<{ value: TaskLayout; label: string }> = [
+  { value: 'list', label: 'List' },
+  { value: 'board', label: 'Board' },
+];
+
+/** The lane picker's options — the same four lanes, in the same order. */
+const STATUS_PICKER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = BOARD_LANES.map(
+  (lane) => ({ value: lane.status, label: lane.label }),
+);
+
+/**
+ * The word a row wears when its state is worth saying. `todo` is the resting
+ * state every task starts in, so badging it would put a badge on nearly every
+ * row and say nothing; `done` already shows as a struck-through title and a
+ * ticked box. What is left is the pair the household actually asked for.
+ */
+function statusBadge(status: TaskStatus): string | null {
+  if (status === 'doing') return 'doing';
+  if (status === 'blocked') return 'blocked';
+  return null;
+}
+
+/** The lane picker, as it appears on a board card and in the detail editor. */
+function StatusPicker({ task }: { task: Task }) {
+  return (
+    <span data-task-status-picker>
+      <ActionSelect
+        value={task.status}
+        options={[...STATUS_PICKER_OPTIONS]}
+        action="tasks:set-status"
+        actionData={{ taskId: String(task.id) }}
+      />
+    </span>
+  );
+}
 
 function FilterField(props: { label: string; children: preact.ComponentChildren }) {
   return (
@@ -103,6 +142,12 @@ function TaskDetail({ task, users }: TaskDetailProps) {
                 actionData={{ taskId }}
               />
             </span>
+          </FilterField>
+          {/* The workflow axis, reachable without leaving the list. The board
+            * is the same picker arranged as lanes; someone who never opens it
+            * still needs to be able to say "started" or "stuck". */}
+          <FilterField label="Status">
+            <StatusPicker task={task} />
           </FilterField>
           <FilterField label="Notes">
             <ActionInput
@@ -185,8 +230,12 @@ function TaskRow({ task, tasksById, index, expandedIds, users }: TaskRowProps) {
   // A container is a project or an epic — the two levels that can hold
   // anything, and so the two that are worth standing inside.
   const container = task.kind !== 'task';
+  // Which of the four states this row wears as a word. `null` for the two that
+  // are already legible without one — see statusBadge.
+  const state = statusBadge(task.status);
   const hasBadges =
     container ||
+    state !== null ||
     parent !== undefined ||
     progress.total > 0 ||
     task.assignedTo !== null ||
@@ -236,6 +285,16 @@ function TaskRow({ task, tasksById, index, expandedIds, users }: TaskRowProps) {
            *  squeezing the title or overflowing the row. */}
           {hasBadges ? (
             <Cluster gap="var(--polly-space-xs)">
+              {/* The state leads the badge line. "Everything is open and
+                * nothing distinguishes started from not-started from blocked"
+                * was the complaint the whole stage exists to answer, so the
+                * answer goes first and is coloured: blocked reads as a warning
+                * because it is one — something is waiting on a person. */}
+              {state === null ? null : (
+                <span data-task-state>
+                  <Badge variant={task.status === 'blocked' ? 'warning' : 'info'}>{state}</Badge>
+                </span>
+              )}
               {/* The level is named on the row, not only in the editor: a
                 * project and a task look identical otherwise, and the rule
                 * about what may hold what is the level's rule. */}
@@ -297,6 +356,176 @@ function TaskRow({ task, tasksById, index, expandedIds, users }: TaskRowProps) {
         )}
       </Layout>
       {expanded && !trashed ? <TaskDetail task={task} users={users} /> : null}
+    </div>
+  );
+}
+
+/**
+ * One card. Deliberately thinner than a list row: on a phone the board shows
+ * one lane filling the screen, and a card that repeated every badge would fit
+ * two to a screen. What survives is the title, where it is filed, when it is
+ * due, and the control that moves it — which is the whole point of the board.
+ */
+function BoardCard({
+  task,
+  tasksById,
+}: {
+  task: Task;
+  tasksById: ReadonlyMap<number, Task>;
+}) {
+  const parent = task.parentId === null ? undefined : tasksById.get(task.parentId);
+  const due = task.dueAt === null ? null : dateValue(task.dueAt);
+  const trashed = task.deletedAt !== null;
+  return (
+    <div data-board-card data-task-id={String(task.id)} data-task-status={task.status}>
+      <Layout gap="var(--polly-space-xs)">
+        {/* The title is text here, not a control. The list row opens an inline
+          * editor on tap; a card cannot, because at 1200px a lane is about
+          * 250px wide and the editor's two-column date row does not fit one. A
+          * title that looked tappable and did nothing would be worse than one
+          * that does not. Editing is the list's job, one tap away on the
+          * switch above. */}
+        <span
+          data-task-title
+          class={task.status === 'done' ? 'tasks-title tasks-title--done eal-muted' : 'tasks-title'}
+        >
+          {task.title}
+        </span>
+        <Cluster gap="var(--polly-space-xs)">
+          {parent === undefined ? null : (
+            <span data-task-parent>
+              <Badge variant="default">
+                {'in '}
+                <span class="tasks-parent" title={parent.title}>
+                  {parent.title}
+                </span>
+              </Badge>
+            </span>
+          )}
+          {due === null ? null : (
+            <span data-task-due>
+              <Badge variant="default">{due}</Badge>
+            </span>
+          )}
+        </Cluster>
+        {/* Moving the card. A picker, not a drag: a drag needs a pointer that
+          * can hover, and this board is used from a phone first. One tap opens
+          * it, a second lands the card.
+          *
+          * A trashed card gets Restore instead. Trash is a view over the same
+          * tree, so the board renders it too — but a lane move on a trashed row
+          * is a 404 every time, and the same rule stage 1 applied to the
+          * subtask field applies here: no button beats a button that always
+          * fails. */}
+        {trashed ? (
+          <Button
+            tier="tertiary"
+            size="small"
+            data-action="tasks:restore"
+            data-action-task-id={String(task.id)}
+            label="Restore"
+          />
+        ) : (
+          <StatusPicker task={task} />
+        )}
+      </Layout>
+    </div>
+  );
+}
+
+function BoardLane({
+  lane,
+  tasksById,
+}: {
+  lane: Lane;
+  tasksById: ReadonlyMap<number, Task>;
+}) {
+  return (
+    <section data-board-lane-column data-lane={lane.status} class="tasks-lane">
+      <Surface variant="sunken" padding="var(--polly-space-sm)">
+        <Layout gap="var(--polly-space-sm)">
+          <Cluster gap="var(--polly-space-xs)">
+            <Text size="sm" weight="bold">{lane.label}</Text>
+            <span data-board-lane-count>
+              <Badge variant="default">{String(lane.tasks.length)}</Badge>
+            </span>
+          </Cluster>
+          {lane.tasks.length === 0 ? (
+            <p data-board-lane-empty>
+              <Text size="sm" tone="muted">Nothing in this lane.</Text>
+            </p>
+          ) : (
+            <Layout gap="var(--polly-space-xs)">
+              {lane.tasks.map((task) => (
+                <BoardCard key={task.id} task={task} tasksById={tasksById} />
+              ))}
+            </Layout>
+          )}
+        </Layout>
+      </Surface>
+    </section>
+  );
+}
+
+/**
+ * The board.
+ *
+ * Every lane is in the DOM at every width; which of them you can see is a media
+ * query in tasks.css, not a width measured here. Four lanes at the 350px floor
+ * would be about 80px each, which fits neither a title nor a thumb, so below
+ * 900px the stylesheet shows one and the arrows below page between them.
+ *
+ * Rows come from `visibleFor`, the same call the list makes — the board is an
+ * arrangement, not a second query.
+ */
+function TaskBoard({
+  visible,
+  tasksById,
+  lane,
+}: {
+  visible: readonly Task[];
+  tasksById: ReadonlyMap<number, Task>;
+  lane: TaskStatus;
+}) {
+  const lanes = lanesFor(visible);
+  const current = lanes.find((l) => l.status === lane);
+  return (
+    <div data-tasks-board data-board-lane={lane}>
+      <Layout gap="var(--polly-space-sm)">
+        {/* The narrow-screen lane control. Hidden above 900px by the
+          * stylesheet, where all four lanes are on screen together and paging
+          * would be a control that does nothing visible. */}
+        <div data-board-lane-picker>
+          <Layout columns="auto minmax(0, 1fr) auto" gap="var(--polly-space-sm)" alignItems="center">
+            <Button
+              tier="tertiary"
+              size="small"
+              data-action="tasks:board-lane-step"
+              data-action-step="prev"
+              aria-label="Previous lane"
+              label={'\u25C2'}
+            />
+            <span data-board-lane-name class="tasks-lane-name">
+              <Text size="sm">
+                {current === undefined ? lane : `${current.label} · ${current.tasks.length}`}
+              </Text>
+            </span>
+            <Button
+              tier="tertiary"
+              size="small"
+              data-action="tasks:board-lane-step"
+              data-action-step="next"
+              aria-label="Next lane"
+              label={'\u25B8'}
+            />
+          </Layout>
+        </div>
+        <div class="tasks-board-lanes">
+          {lanes.map((l) => (
+            <BoardLane key={l.status} lane={l} tasksById={tasksById} />
+          ))}
+        </div>
+      </Layout>
     </div>
   );
 }
@@ -484,6 +713,7 @@ export function TasksPanel() {
   const user = $currentUser.value;
   const recentlyCompleted = $recentlyCompleted.value;
   const expandedIds = $expandedTaskIds.value;
+  const boardLane = $boardLane.value;
   const users = $householdUsers.value;
 
   const now = new Date();
@@ -492,7 +722,7 @@ export function TasksPanel() {
   // The denominator for the live count — how many rows the view holds before
   // any conditions narrow it.
   const viewTotal = visibleFor(
-    { view: filter.view, scope: filter.scope, conditions: [] },
+    { view: filter.view, scope: filter.scope, layout: filter.layout, conditions: [] },
     tasks,
     recentlyCompleted,
     { now },
@@ -523,6 +753,25 @@ export function TasksPanel() {
             />
           ))}
         </Layout>
+
+        {/* List or board — a second row rather than two more buttons on the
+          * view row, because at 350px six buttons on one line wrap into a
+          * shape where the view and the layout are no longer distinguishable
+          * as two separate questions. */}
+        <div data-tasks-layout-switch>
+          <Cluster gap="var(--polly-space-xs)">
+            {LAYOUT_OPTIONS.map((l) => (
+              <Button
+                key={l.value}
+                tier={l.value === filter.layout ? 'primary' : 'tertiary'}
+                size="small"
+                label={l.label}
+                data-action="tasks:set-layout"
+                data-action-layout={l.value}
+              />
+            ))}
+          </Cluster>
+        </div>
 
         {filter.scope === null ? null : (
           <Breadcrumb scope={filter.scope} tasksById={tasks} />
@@ -593,7 +842,13 @@ export function TasksPanel() {
           </span>
         ) : null}
 
-        {visible.length === 0 ? (
+        {/* The board renders its four lanes even when every one is empty: the
+          * lanes are the answer to "what is blocked", and an empty Blocked lane
+          * says "nothing" where a missing one would say "not a thing here". The
+          * list keeps its sentence, which has nowhere else to live. */}
+        {filter.layout === 'board' ? (
+          <TaskBoard visible={visible} tasksById={tasks} lane={boardLane} />
+        ) : visible.length === 0 ? (
           <p data-tasks-empty>
             <Text tone="muted">{emptyCopy(filter.view, refined, filter.scope !== null)}</Text>
           </p>

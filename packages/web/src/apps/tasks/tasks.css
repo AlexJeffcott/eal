@@ -105,3 +105,93 @@
   white-space: nowrap;
   vertical-align: bottom;
 }
+
+/*
+ * The board.
+ *
+ * The layout rule is here and only here. Above 900px the four lanes sit side by
+ * side; below it, one lane at a time and the arrows page between them. Every
+ * lane is in the DOM at both widths — the choice is a media query, never a
+ * width measured in JavaScript, so a rotation or a resize needs no re-render.
+ *
+ * 900px is the width at which four lanes stop being usable rather than a device
+ * class: at the 350px floor four lanes give about 80px each, which fits neither
+ * a task title nor a thumb, and even a 768px tablet leaves under 190px a lane.
+ */
+.tasks-board-lanes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--polly-space-sm);
+}
+
+.tasks-lane {
+  /* A lane's own content — a long title on a card — must not push the grid
+   * track wider than its share, which is what would send the document
+   * sideways at 350px. */
+  min-inline-size: 0;
+}
+
+/* The lane heading and its count, held on one line above the cards. */
+.tasks-lane-name {
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Thumb-sized paging arrows — the same 44px floor as every other control the
+ * phone drives. Measured in packages/e2e-tests/tests/tasks.spec.ts. */
+[data-action='tasks:board-lane-step'],
+[data-action='tasks:set-layout'] {
+  min-block-size: 44px;
+  min-inline-size: 44px;
+}
+
+/*
+ * The lane picker is a polly ActionSelect, whose button carries its own
+ * metrics: measured 84×40 at the 350px floor, four short in the block axis. It
+ * is the control that moves a card, so it is the one a mis-tap costs most.
+ * Sized on the control rather than by padding, as with every other target here.
+ */
+[data-task-status-picker] button {
+  min-block-size: 44px;
+}
+
+@media (min-width: 900px) {
+  .tasks-board-lanes {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    /* Lanes hold different numbers of cards; without this each stretches to
+     * the tallest, and three of the four end in a field of empty surface. */
+    align-items: start;
+  }
+  /* Above the breakpoint every lane is on screen, so paging between them is a
+   * control that does nothing visible. */
+  [data-board-lane-picker] {
+    display: none;
+  }
+}
+
+@media (max-width: 899px) {
+  [data-tasks-board] [data-board-lane-column] {
+    display: none;
+  }
+  /* One rule per lane: CSS cannot compare two attributes on different
+   * elements, so the pairing is written out. Four lines, and the board never
+   * shows two lanes at a width that cannot hold them. */
+  [data-tasks-board][data-board-lane='todo'] [data-board-lane-column][data-lane='todo'],
+  [data-tasks-board][data-board-lane='doing'] [data-board-lane-column][data-lane='doing'],
+  [data-tasks-board][data-board-lane='blocked'] [data-board-lane-column][data-lane='blocked'],
+  [data-tasks-board][data-board-lane='done'] [data-board-lane-column][data-lane='done'] {
+    display: block;
+  }
+}
+
+/*
+ * Card separation, the same problem the list rows had: a card is a title, then
+ * a badge line, then a lane picker, and with nothing between them the picker
+ * reads as belonging to the card below.
+ */
+[data-board-card] + [data-board-card] {
+  border-block-start: var(--polly-border-width-default) solid var(--polly-border);
+  padding-block-start: var(--polly-space-sm);
+}

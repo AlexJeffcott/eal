@@ -19,12 +19,30 @@ export const systemClock: Clock = () => new Date().toISOString().slice(0, 19).re
  */
 export type TaskKind = 'project' | 'epic' | 'task';
 
+/**
+ * The workflow axis, orthogonal to the level axis above: a project and a task
+ * each have one of these. `blocked` is deliberately distinct from `doing` —
+ * "started and moving" and "started and stuck waiting on someone" are the two
+ * states the household kept confusing while everything read 'open'.
+ *
+ * `defer_until` is NOT merged into this. Defer is time-based and clears itself;
+ * blocked is event-based and needs a person. Two questions, two fields.
+ *
+ * The column's own CHECK bounds the vocabulary, and a table-level CHECK ties
+ * `done` to `completed_at`. Which transitions are legal is application-level
+ * (handlers/tasks.shared.ts) and modelled in specs/tasks-status-machine.ts.
+ */
+export type TaskStatus = 'todo' | 'doing' | 'blocked' | 'done';
+
+/** The three states a task is in while there is still work in it. */
+export const LIVE_STATUSES: readonly TaskStatus[] = ['todo', 'doing', 'blocked'];
+
 export interface TaskRow {
   id: number;
   parent_id: number | null;
   title: string;
   notes: string;
-  status: 'open' | 'done';
+  status: TaskStatus;
   kind: TaskKind;
   defer_until: string | null;
   due_at: string | null;
@@ -67,7 +85,13 @@ export interface ListFilter {
   kind?: TaskKind;
   assignedTo?: number | null | 'any';
   createdBy?: number;
-  status?: 'open' | 'done';
+  status?: TaskStatus;
+  /**
+   * Everything still carrying work — the three live states. Not expressible as
+   * `status`, which is one equality, and the Today view needs all three: a task
+   * you have started, or one you are stuck on, is still on today's list.
+   */
+  unfinished?: boolean;
   includeDeleted?: boolean;
   deletedOnly?: boolean;
   defaultExcludeDeleted?: boolean;
@@ -87,7 +111,7 @@ export interface TasksRepo {
   /** True if `candidateAncestor` is the same as `id` or any of its ancestors. */
   wouldCycle(id: number, candidateAncestor: number): boolean;
   update(id: number, input: UpdateTaskInput): TaskRow | null;
-  setStatus(id: number, input: { status: 'open' | 'done'; updatedBy: number }): TaskRow | null;
+  setStatus(id: number, input: { status: TaskStatus; updatedBy: number }): TaskRow | null;
   softDelete(id: number, input: { updatedBy: number }): TaskRow | null;
   restore(id: number, input: { updatedBy: number }): TaskRow | null;
   /** Atomic clone of a task + every (non-deleted) descendant. Returns the cloned subtree. */
@@ -123,7 +147,7 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
   >(
     `INSERT INTO tasks
        (parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, position, created_at, updated_at)
-       VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING ${COLS}`,
   );
 
@@ -139,9 +163,14 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
     `SELECT COALESCE(MAX(position), -1) + 1 AS next FROM tasks WHERE parent_id = ?`,
   );
 
-  const setStatusOpenStmt = db.prepare<TaskRow, [number, string, number]>(
+  // Two statements, not four: the storage CHECK ties `done` to a non-NULL
+  // `completed_at` and every other state to a NULL one, so the completion
+  // timestamp — not the status name — is what splits the write. The live
+  // statement takes the status as a parameter because all three clear the
+  // timestamp the same way.
+  const setStatusLiveStmt = db.prepare<TaskRow, [TaskStatus, number, string, number]>(
     `UPDATE tasks
-        SET status = 'open',
+        SET status = ?,
             completed_at = NULL,
             updated_by = ?,
             updated_at = ?
@@ -171,7 +200,7 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
   const restoreStmt = db.prepare<TaskRow, [number, string, number]>(
     `UPDATE tasks
         SET deleted_at = NULL,
-            status = 'open',
+            status = 'todo',
             completed_at = NULL,
             updated_by = ?,
             updated_at = ?
@@ -269,6 +298,13 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
       if (filter.status !== undefined) {
         wheres.push('status = ?');
         params.push(filter.status);
+      }
+
+      // Everything not finished. Written as the negation rather than an
+      // `IN ('todo','doing','blocked')` list so a fifth live state added later
+      // is included by default instead of silently dropping out of Today.
+      if (filter.unfinished === true) {
+        wheres.push("status <> 'done'");
       }
 
       if (filter.dueBefore !== undefined) {
@@ -381,7 +417,7 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
       if (input.status === 'done') {
         return setStatusDoneStmt.get(ts, input.updatedBy, ts, id) ?? null;
       }
-      return setStatusOpenStmt.get(input.updatedBy, ts, id) ?? null;
+      return setStatusLiveStmt.get(input.status, input.updatedBy, ts, id) ?? null;
     },
 
     softDelete(id, input): TaskRow | null {

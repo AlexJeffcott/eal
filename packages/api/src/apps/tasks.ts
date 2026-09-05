@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   parent_id     INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
   title         TEXT    NOT NULL,
   notes         TEXT    NOT NULL DEFAULT '',
-  status        TEXT    NOT NULL CHECK (status IN ('open','done')),
+  status        TEXT    NOT NULL CHECK (status IN ('todo','doing','blocked','done')),
   defer_until   TEXT,
   due_at        TEXT,
   created_by    INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,

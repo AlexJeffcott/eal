@@ -3,6 +3,7 @@ import type {
   ListTasksInput,
   Task,
   TaskKind,
+  TaskStatus,
   UpdateTaskInput,
 } from '@eal/client';
 import type { CliMcpApp, EalMcpTool } from './types.ts';
@@ -10,7 +11,7 @@ import type { CliMcpApp, EalMcpTool } from './types.ts';
 /**
  * The tasks app's assistant tools — a bounded, **non-destructive** slice of the
  * eal task API. There is deliberately no delete tool: the assistant can create,
- * update, complete, and reopen, but never destroy.
+ * update, move along the workflow axis, complete and reopen, but never destroy.
  */
 
 function requireString(args: Record<string, unknown>, key: string): string {
@@ -36,6 +37,19 @@ function optionalKind(args: Record<string, unknown>, key: string): TaskKind | un
   if (value === undefined) return undefined;
   if (value === 'project' || value === 'epic' || value === 'task') return value;
   throw new Error(`${key} must be "project", "epic" or "task"`);
+}
+
+/**
+ * A workflow state argument. Throws on anything else for the same reason
+ * `optionalKind` does: an unrecognised state silently dropped would move a card
+ * nowhere and report success.
+ */
+function requireStatus(args: Record<string, unknown>, key: string): TaskStatus {
+  const value = args[key];
+  if (value === 'todo' || value === 'doing' || value === 'blocked' || value === 'done') {
+    return value;
+  }
+  throw new Error(`${key} must be "todo", "doing", "blocked" or "done"`);
 }
 
 function requireNumber(args: Record<string, unknown>, key: string): number {
@@ -68,6 +82,23 @@ const KIND_PROPERTY = {
   description: KIND_DESCRIPTION,
 };
 
+/**
+ * Shared prose for the workflow axis, which every status-bearing schema quotes.
+ * `blocked` is spelled out because an assistant that reads it as a synonym for
+ * `doing` would lose the one distinction the household asked for.
+ */
+const STATUS_DESCRIPTION =
+  'Workflow state. `todo` is written down but not started; `doing` is in ' +
+  'progress; `blocked` is started but stuck waiting on someone or something ' +
+  'else; `done` is finished. Independent of the level: a project and a task ' +
+  'each have one.';
+
+const STATUS_PROPERTY = {
+  type: 'string',
+  enum: ['todo', 'doing', 'blocked', 'done'],
+  description: STATUS_DESCRIPTION,
+};
+
 const TOOLS: EalMcpTool[] = [
   {
     name: 'list_tasks',
@@ -75,7 +106,7 @@ const TOOLS: EalMcpTool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        status: { type: 'string', enum: ['open', 'done'], description: 'Only tasks with this status' },
+        status: STATUS_PROPERTY,
         q: { type: 'string', description: 'Case-insensitive search over title and notes' },
         today: { type: 'boolean', description: 'Only tasks due or active today' },
         inbox: { type: 'boolean', description: 'Only top-level tasks with no project/parent' },
@@ -85,7 +116,14 @@ const TOOLS: EalMcpTool[] = [
     run: async (client, args) => {
       const input: ListTasksInput = {};
       const status = optionalString(args, 'status');
-      if (status === 'open' || status === 'done') input.status = status;
+      if (
+        status === 'todo' ||
+        status === 'doing' ||
+        status === 'blocked' ||
+        status === 'done'
+      ) {
+        input.status = status;
+      }
       const q = optionalString(args, 'q');
       if (q !== undefined) input.q = q;
       if (args['today'] === true) input.today = true;
@@ -192,7 +230,7 @@ const TOOLS: EalMcpTool[] = [
   },
   {
     name: 'reopen_task',
-    description: 'Reopen a completed task (set it back to open). Works at any level.',
+    description: 'Reopen a completed task (set it back to todo). Works at any level.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'number', description: 'The task id' } },
@@ -200,6 +238,26 @@ const TOOLS: EalMcpTool[] = [
     },
     run: async (client, args) => {
       return `Reopened ${formatTask(await client.reopenTask(requireNumber(args, 'id')))}`;
+    },
+  },
+  {
+    name: 'set_task_status',
+    description:
+      'Move a task along the workflow axis — what dragging its card to another ' +
+      'board lane does. Use this to say a task is started, or stuck. ' +
+      'Non-destructive: it can never trash a task or bring one back.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'number', description: 'The task id' },
+        status: STATUS_PROPERTY,
+      },
+      required: ['id', 'status'],
+    },
+    run: async (client, args) => {
+      const id = requireNumber(args, 'id');
+      const status = requireStatus(args, 'status');
+      return `Moved ${formatTask(await client.setTaskStatus(id, status))}`;
     },
   },
 ];

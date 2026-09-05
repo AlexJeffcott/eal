@@ -13,6 +13,7 @@ import {
   listTasksCore,
   reopenTaskCore,
   restoreTaskCore,
+  setTaskStatusCore,
   updateTaskCore,
 } from './tasks.shared.ts';
 
@@ -42,7 +43,7 @@ describe('createTaskCore', () => {
   test('happy path: creates a task with sensible defaults', () => {
     const t = createTaskCore(ctx.db, { title: 'buy milk' }, ctx.alex);
     expect(t.title).toBe('buy milk');
-    expect(t.status).toBe('open');
+    expect(t.status).toBe('todo');
     expect(t.completedAt).toBeNull();
     expect(t.deletedAt).toBeNull();
     expect(t.parentId).toBeNull();
@@ -352,15 +353,34 @@ describe('complete / reopen', () => {
     expect(second.updatedBy).toBe(ctx.alex.userId);
   });
 
-  test('reopen clears completed_at; reopening an open task is a no-op', () => {
+  test('reopen clears completed_at and lands in todo; reopening a live task is a no-op', () => {
     const t = createTaskCore(ctx.db, { title: 'x' }, ctx.alex);
     completeTaskCore(ctx.db, t.id, ctx.alex);
     const reopened = reopenTaskCore(ctx.db, t.id, ctx.alex);
-    expect(reopened.status).toBe('open');
+    expect(reopened.status).toBe('todo');
     expect(reopened.completedAt).toBeNull();
 
     const second = reopenTaskCore(ctx.db, t.id, ctx.elisa);
     expect(second.updatedBy).toBe(ctx.alex.userId); // no-op
+  });
+
+  test('complete finishes a task from every unfinished lane', () => {
+    for (const from of ['todo', 'doing', 'blocked'] as const) {
+      const t = createTaskCore(ctx.db, { title: from }, ctx.alex);
+      setTaskStatusCore(ctx.db, t.id, from, ctx.alex);
+      const done = completeTaskCore(ctx.db, t.id, ctx.alex);
+      expect(done.status).toBe('done');
+      expect(done.completedAt).not.toBeNull();
+    }
+  });
+
+  test('reopen from a lane that is not done is a no-op, not a reset to todo', () => {
+    const t = createTaskCore(ctx.db, { title: 'x' }, ctx.alex);
+    setTaskStatusCore(ctx.db, t.id, 'blocked', ctx.alex);
+    const same = reopenTaskCore(ctx.db, t.id, ctx.elisa);
+    expect(same.status).toBe('blocked');
+    // No write happened, so the row still belongs to whoever last moved it.
+    expect(same.updatedBy).toBe(ctx.alex.userId);
   });
 
   test('complete/reopen 404 when task is in trash', () => {
@@ -371,11 +391,53 @@ describe('complete / reopen', () => {
   });
 });
 
+describe('setTaskStatus', () => {
+  let ctx: Ctx;
+  beforeEach(() => { ctx = setup(); });
+
+  test('reaches every lane from every lane', () => {
+    const lanes = ['todo', 'doing', 'blocked', 'done'] as const;
+    for (const from of lanes) {
+      for (const to of lanes) {
+        const t = createTaskCore(ctx.db, { title: `${from}->${to}` }, ctx.alex);
+        setTaskStatusCore(ctx.db, t.id, from, ctx.alex);
+        const moved = setTaskStatusCore(ctx.db, t.id, to, ctx.alex);
+        expect(moved.status).toBe(to);
+        // The tie the storage CHECK enforces, checked on every landing.
+        expect(moved.completedAt === null).toBe(to !== 'done');
+      }
+    }
+  });
+
+  test('moving a card to the lane it is already in is a no-op', () => {
+    const t = createTaskCore(ctx.db, { title: 'x' }, ctx.alex);
+    const first = setTaskStatusCore(ctx.db, t.id, 'doing', ctx.alex);
+    const second = setTaskStatusCore(ctx.db, t.id, 'doing', ctx.elisa);
+    expect(second.updatedAt).toBe(first.updatedAt);
+    expect(second.updatedBy).toBe(ctx.alex.userId);
+  });
+
+  test('a trashed task cannot be moved between lanes', () => {
+    const t = createTaskCore(ctx.db, { title: 'x' }, ctx.alex);
+    deleteTaskCore(ctx.db, t.id, ctx.alex);
+    expect(() => setTaskStatusCore(ctx.db, t.id, 'doing', ctx.alex)).toThrow(
+      /not found or in trash/,
+    );
+  });
+
+  test('restore returns a card to todo, not to the lane it was binned from', () => {
+    const t = createTaskCore(ctx.db, { title: 'x' }, ctx.alex);
+    setTaskStatusCore(ctx.db, t.id, 'blocked', ctx.alex);
+    deleteTaskCore(ctx.db, t.id, ctx.alex);
+    expect(restoreTaskCore(ctx.db, t.id, ctx.alex).status).toBe('todo');
+  });
+});
+
 describe('delete / restore', () => {
   let ctx: Ctx;
   beforeEach(() => { ctx = setup(); });
 
-  test('delete soft-deletes; restore brings back as open', () => {
+  test('delete soft-deletes; restore brings back as todo', () => {
     const t = createTaskCore(ctx.db, { title: 'x' }, ctx.alex);
     completeTaskCore(ctx.db, t.id, ctx.alex);
     const trashed = deleteTaskCore(ctx.db, t.id, ctx.elisa);
@@ -383,7 +445,7 @@ describe('delete / restore', () => {
 
     const restored = restoreTaskCore(ctx.db, t.id, ctx.alex);
     expect(restored.deletedAt).toBeNull();
-    expect(restored.status).toBe('open');
+    expect(restored.status).toBe('todo');
     expect(restored.completedAt).toBeNull();
   });
 
@@ -498,12 +560,27 @@ describe('listTasksCore', () => {
     const open = createTaskCore(ctx.db, { title: 'open' }, ctx.alex);
     const done = createTaskCore(ctx.db, { title: 'done' }, ctx.alex);
     completeTaskCore(ctx.db, done.id, ctx.alex);
-    expect(listTasksCore(ctx.db, { status: 'open' }, ctx.alex).map((t) => t.id)).toEqual([
+    expect(listTasksCore(ctx.db, { status: 'todo' }, ctx.alex).map((t) => t.id)).toEqual([
       open.id,
     ]);
     expect(listTasksCore(ctx.db, { status: 'done' }, ctx.alex).map((t) => t.id)).toEqual([
       done.id,
     ]);
+  });
+
+  test('today keeps every unfinished lane and drops only the finished', () => {
+    const kept: number[] = [];
+    for (const status of ['todo', 'doing', 'blocked'] as const) {
+      const t = createTaskCore(ctx.db, { title: status }, ctx.alex);
+      setTaskStatusCore(ctx.db, t.id, status, ctx.alex);
+      kept.push(t.id);
+    }
+    const finished = createTaskCore(ctx.db, { title: 'finished' }, ctx.alex);
+    completeTaskCore(ctx.db, finished.id, ctx.alex);
+
+    expect(listTasksCore(ctx.db, { today: true }, ctx.alex).map((t) => t.id).sort()).toEqual(
+      [...kept].sort(),
+    );
   });
 
   test('dueBefore filter excludes tasks dated on or after the cutoff', () => {

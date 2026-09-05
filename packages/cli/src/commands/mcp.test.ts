@@ -25,6 +25,7 @@ describe('eal mcp tools', () => {
       'list_tasks',
       'place_call',
       'reopen_task',
+      'set_task_status',
       'update_task',
     ]);
     expect(names.some((n) => n.includes('delete') || n.includes('remove'))).toBe(false);
@@ -48,14 +49,14 @@ describe('eal mcp tools', () => {
     expect(listed).toContain('Walk Leo to school');
     // Level and status ride together: the assistant needs to know a row is a
     // project before it offers to file anything under it.
-    expect(listed).toContain('[task/open]');
+    expect(listed).toContain('[task/todo]');
   });
 
   test('list_tasks narrows to one level, and rejects a level it does not know', async () => {
     await client.createTask({ title: 'Renovate the kitchen', kind: 'project' });
     await client.createTask({ title: 'Walk Leo to school' });
     expect(await tool('list_tasks').run(client, { kind: 'project' })).toBe(
-      '#1 [project/open] Renovate the kitchen',
+      '#1 [project/todo] Renovate the kitchen',
     );
     // Dropping an unknown level would list everything and call it a filter.
     await expect(tool('list_tasks').run(client, { kind: 'milestone' })).rejects.toThrow(
@@ -66,7 +67,7 @@ describe('eal mcp tools', () => {
   test('update_task promotes a captured task, keeping its id', async () => {
     const created = await client.createTask({ title: 'Renovate the kitchen' });
     const out = await tool('update_task').run(client, { id: created.id, kind: 'project' });
-    expect(out).toContain(`#${created.id} [project/open]`);
+    expect(out).toContain(`#${created.id} [project/todo]`);
   });
 
   test('complete_task then reopen_task flips status both ways', async () => {
@@ -74,7 +75,33 @@ describe('eal mcp tools', () => {
     expect(await tool('complete_task').run(client, { id: created.id })).toContain('Completed');
     expect(client.peekTasks()[0]?.status).toBe('done');
     expect(await tool('reopen_task').run(client, { id: created.id })).toContain('Reopened');
-    expect(client.peekTasks()[0]?.status).toBe('open');
+    expect(client.peekTasks()[0]?.status).toBe('todo');
+  });
+
+  test('set_task_status moves a task along the workflow axis', async () => {
+    const created = await client.createTask({ title: 'Wait on the electrician' });
+    const out = await tool('set_task_status').run(client, { id: created.id, status: 'blocked' });
+    expect(out).toContain(`#${created.id} [task/blocked]`);
+    expect(client.peekTasks()[0]?.status).toBe('blocked');
+  });
+
+  test('set_task_status rejects a state outside the four', async () => {
+    const created = await client.createTask({ title: 'x' });
+    await expect(
+      tool('set_task_status').run(client, { id: created.id, status: 'started' }),
+    ).rejects.toThrow(/must be "todo", "doing", "blocked" or "done"/);
+  });
+
+  test('list_tasks filters by one of the four states', async () => {
+    const a = await client.createTask({ title: 'not started' });
+    const b = await client.createTask({ title: 'under way' });
+    await client.setTaskStatus(b.id, 'doing');
+    expect(await tool('list_tasks').run(client, { status: 'doing' })).toBe(
+      `#${b.id} [task/doing] under way`,
+    );
+    expect(await tool('list_tasks').run(client, { status: 'todo' })).toBe(
+      `#${a.id} [task/todo] not started`,
+    );
   });
 
   test('update_task changes the title', async () => {

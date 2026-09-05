@@ -111,7 +111,7 @@ function newTaskRow(input: CreateTaskInput, id: number, principalId: number): Ta
     parentId: input.parentId ?? null,
     title: input.title.trim(),
     notes: input.notes ?? '',
-    status: 'open',
+    status: 'todo',
     // The mock stores whatever it is handed. It deliberately does NOT police
     // the project/epic/task level rule: that lives on the server
     // (handlers/tasks.shared.ts:levelViolation), and a second copy here would
@@ -165,7 +165,9 @@ function applyFilter(tasks: readonly Task[], input: ListTasksInput | undefined, 
   if (input?.today) {
     const cutoff = input.todayCutoff ?? new Date().toISOString();
     result = result.filter((t) => t.deferUntil === null || t.deferUntil <= cutoff);
-    result = result.filter((t) => t.status === 'open');
+    // Today means "still carrying work", which is three states now: a task you
+    // started, and one you are stuck on, both belong on today's list.
+    result = result.filter((t) => t.status !== 'done');
   }
   if (input?.q !== undefined && input.q.trim().length > 0) {
     const needle = input.q.trim().toLowerCase();
@@ -649,11 +651,33 @@ export function createMockEalClient(): MockEalClient {
       const user = requireSignedIn();
       const task = store.byId.get(id);
       if (!task || task.deletedAt !== null) throw new Error(`task ${id} not found or in trash`);
-      if (task.status === 'open') return snapshot(task);
+      if (task.status !== 'done') return snapshot(task);
       const updated: Task = {
         ...task,
-        status: 'open',
+        status: 'todo',
         completedAt: null,
+        updatedBy: user.userId,
+        updatedAt: isoNow(),
+      };
+      store.byId.set(id, updated);
+      const out = snapshot(updated);
+      emit({ type: 'task:updated', topic: 'tasks', payload: out });
+      return out;
+    },
+
+    async setTaskStatus(id, status): Promise<Task> {
+      consumeTaskError();
+      const user = requireSignedIn();
+      const task = store.byId.get(id);
+      if (!task || task.deletedAt !== null) throw new Error(`task ${id} not found or in trash`);
+      if (task.status === status) return snapshot(task);
+      const updated: Task = {
+        ...task,
+        status,
+        // The storage CHECK ties the two together server-side; the mock keeps
+        // the same tie so a browser-tier test cannot see a shape the api
+        // would never send.
+        completedAt: status === 'done' ? isoNow() : null,
         updatedBy: user.userId,
         updatedAt: isoNow(),
       };
@@ -688,7 +712,7 @@ export function createMockEalClient(): MockEalClient {
       const updated: Task = {
         ...task,
         deletedAt: null,
-        status: 'open',
+        status: 'todo',
         completedAt: null,
         updatedBy: user.userId,
         updatedAt: isoNow(),
@@ -712,7 +736,7 @@ export function createMockEalClient(): MockEalClient {
       const newRoot: Task = {
         ...root,
         id: newRootId,
-        status: 'open',
+        status: 'todo',
         completedAt: null,
         deletedAt: null,
         createdBy: user.userId,
@@ -739,7 +763,7 @@ export function createMockEalClient(): MockEalClient {
             ...child,
             id: newId,
             parentId: oldToNew.get(child.parentId ?? -1) ?? null,
-            status: 'open',
+            status: 'todo',
             completedAt: null,
             deletedAt: null,
             createdBy: user.userId,

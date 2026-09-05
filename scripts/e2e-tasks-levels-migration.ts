@@ -60,7 +60,7 @@ function insertLegacyTask(db: Database, title: string, parentId: number | null, 
   const row = db
     .prepare<IdRow, [number | null, string, number, number]>(
       `INSERT INTO tasks (parent_id, title, status, created_by, updated_by)
-       VALUES (?, ?, 'open', ?, ?) RETURNING id`,
+       VALUES (?, ?, 'todo', ?, ?) RETURNING id`,
     )
     .get(parentId, title, userId, userId);
   if (row === null) fail(`could not insert ${title}`);

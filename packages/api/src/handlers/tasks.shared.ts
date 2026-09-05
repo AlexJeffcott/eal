@@ -1,11 +1,11 @@
 import type { DatabaseClient } from '../db/client.ts';
 import type { Principal } from '../auth/principals.ts';
-import type { TaskRow, TasksRepo, ListFilter, TaskKind } from '../db/repos/tasks.ts';
+import type { TaskRow, TasksRepo, ListFilter, TaskKind, TaskStatus } from '../db/repos/tasks.ts';
 import { createTasksRepo } from '../db/repos/tasks.ts';
 import { createUsersRepo } from '../db/repos/users.ts';
 import { AuthError } from './auth.shared.ts';
 
-export type { TaskKind };
+export type { TaskKind, TaskStatus };
 
 /**
  * Wire shape — what the SPA and the CLI both see. CamelCase to match the rest
@@ -16,7 +16,7 @@ export interface Task {
   parentId: number | null;
   title: string;
   notes: string;
-  status: 'open' | 'done';
+  status: TaskStatus;
   kind: TaskKind;
   deferUntil: string | null;
   dueAt: string | null;
@@ -77,7 +77,7 @@ export interface ListTasksInput {
   kind?: TaskKind | undefined;
   assignedTo?: number | 'me' | undefined;
   createdBy?: number | 'me' | undefined;
-  status?: 'open' | 'done' | undefined;
+  status?: TaskStatus | undefined;
   dueBefore?: string | undefined;
   deferAfter?: string | undefined;
   today?: boolean | undefined;
@@ -257,7 +257,10 @@ export function listTasksCore(
     } else {
       filter.todayCutoff = defaultTodayCutoff(opts.now ?? new Date());
     }
-    filter.status = 'open';
+    // Today is "still carrying work", which is three states now, not one. A
+    // task you started this morning and one you are stuck on both belong on
+    // today's list; only `done` leaves it.
+    filter.unfinished = true;
   }
   if (input.kind !== undefined) filter.kind = input.kind;
   if (input.inbox) filter.inbox = true;
@@ -359,6 +362,15 @@ export function updateTaskCore(
   return toTask(updated);
 }
 
+/**
+ * Ticking the box. With four states, "complete" means the same thing from all
+ * three live ones: a task you had merely written down, one you had started, and
+ * one you were stuck on are all finished the same way, so there is no reason to
+ * make the person move a card to `doing` before they may finish it.
+ *
+ * Already done is a no-op returning the row, as before — two devices ticking
+ * the same box must not make the second one an error.
+ */
 export function completeTaskCore(
   db: DatabaseClient,
   id: number,
@@ -374,6 +386,16 @@ export function completeTaskCore(
   return toTask(done);
 }
 
+/**
+ * Untucking the box. Reopen lands in `todo`, never in the state the task held
+ * before it was completed — the same predictable-resurrection rule `restore`
+ * already follows (docs/tasks-v1.md). Storing "what it was before" would need a
+ * column, and a task you finished and then reopened is one you are starting
+ * again anyway.
+ *
+ * Only `done` is reopenable. Called on a live task it is a no-op returning the
+ * row, so an assistant that reopens twice does not get an error.
+ */
 export function reopenTaskCore(
   db: DatabaseClient,
   id: number,
@@ -382,11 +404,35 @@ export function reopenTaskCore(
   const tasks = createTasksRepo(db);
   const existing = tasks.findById(id);
   if (existing === null) throw new AuthError(404, `task ${id} not found or in trash`);
-  if (existing.status === 'open') return toTask(existing);
-  const open = tasks.setStatus(id, { status: 'open', updatedBy: principal.userId });
+  if (existing.status !== 'done') return toTask(existing);
+  const reopened = tasks.setStatus(id, { status: 'todo', updatedBy: principal.userId });
   // Stryker disable next-line all -- defensive: existence was verified above; this branch is unreachable in practice
-  if (open === null) throw new AuthError(404, `task ${id} not found or in trash`);
-  return toTask(open);
+  if (reopened === null) throw new AuthError(404, `task ${id} not found or in trash`);
+  return toTask(reopened);
+}
+
+/**
+ * Moving a card between lanes. The workflow axis and the trash axis are
+ * separate: this reaches every one of the four states and none of them is
+ * `deleted`, so no drag on the board can bin a task or resurrect one.
+ *
+ * A task already in the target lane is a no-op returning the row. Two devices
+ * dropping the same card into `doing` must both succeed.
+ */
+export function setTaskStatusCore(
+  db: DatabaseClient,
+  id: number,
+  status: TaskStatus,
+  principal: Principal,
+): Task {
+  const tasks = createTasksRepo(db);
+  const existing = tasks.findById(id);
+  if (existing === null) throw new AuthError(404, `task ${id} not found or in trash`);
+  if (existing.status === status) return toTask(existing);
+  const moved = tasks.setStatus(id, { status, updatedBy: principal.userId });
+  // Stryker disable next-line all -- defensive: existence was verified above; this branch is unreachable in practice
+  if (moved === null) throw new AuthError(404, `task ${id} not found or in trash`);
+  return toTask(moved);
 }
 
 export function deleteTaskCore(

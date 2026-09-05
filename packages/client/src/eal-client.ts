@@ -17,6 +17,7 @@ import type {
   Task,
   TaskDetail,
   TaskEvent,
+  TaskStatus,
   UpdateTaskInput,
 } from './task-types.ts';
 import type {
@@ -131,7 +132,11 @@ function isTaskShape(value: unknown): value is Task {
   return (
     'id' in value && typeof value.id === 'number' &&
     'title' in value && typeof value.title === 'string' &&
-    'status' in value && (value.status === 'open' || value.status === 'done')
+    'status' in value &&
+      (value.status === 'todo' ||
+        value.status === 'doing' ||
+        value.status === 'blocked' ||
+        value.status === 'done')
   );
 }
 
@@ -234,6 +239,8 @@ export interface EalClient {
   updateTask(id: number, input: UpdateTaskInput): Promise<Task>;
   completeTask(id: number): Promise<Task>;
   reopenTask(id: number): Promise<Task>;
+  /** Move a task along the workflow axis — what a board lane change is. */
+  setTaskStatus(id: number, status: TaskStatus): Promise<Task>;
   deleteTask(id: number): Promise<Task>;
   restoreTask(id: number): Promise<Task>;
   cloneTask(id: number): Promise<CloneTaskResult>;
@@ -888,6 +895,11 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
 
     async reopenTask(id): Promise<Task> {
       const { task } = await postJson<{ task: Task }>(`/api/v1/tasks/${id}/reopen`, {});
+      return task;
+    },
+
+    async setTaskStatus(id, status): Promise<Task> {
+      const { task } = await postJson<{ task: Task }>(`/api/v1/tasks/${id}/status`, { status });
       return task;
     },
 

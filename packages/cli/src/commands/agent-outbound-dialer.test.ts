@@ -97,6 +97,7 @@ function makeClient(): FakeClient {
     updateTask: notImplemented('updateTask'),
     completeTask: notImplemented('completeTask'),
     reopenTask: notImplemented('reopenTask'),
+    setTaskStatus: notImplemented('setTaskStatus'),
     deleteTask: notImplemented('deleteTask'),
     restoreTask: notImplemented('restoreTask'),
     cloneTask: notImplemented('cloneTask'),

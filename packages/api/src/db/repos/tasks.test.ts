@@ -54,11 +54,11 @@ describe('tasks repo', () => {
   });
 
   describe('insert', () => {
-    test('returns a fully-populated row with status="open" and no completed_at', () => {
+    test('returns a fully-populated row with status="todo" and no completed_at', () => {
       const row = ctx.tasks.insert(defaults({ createdBy: ctx.alex, title: 'buy milk' }));
       expect(row.id).toBeGreaterThan(0);
       expect(row.title).toBe('buy milk');
-      expect(row.status).toBe('open');
+      expect(row.status).toBe('todo');
       expect(row.completed_at).toBeNull();
       expect(row.deleted_at).toBeNull();
       expect(row.created_by).toBe(ctx.alex);
@@ -135,10 +135,20 @@ describe('tasks repo', () => {
       expect(done?.completed_at).not.toBeNull();
       expect(done?.updated_by).toBe(ctx.elisa);
 
-      const reopened = ctx.tasks.setStatus(row.id, { status: 'open', updatedBy: ctx.leo });
-      expect(reopened?.status).toBe('open');
+      const reopened = ctx.tasks.setStatus(row.id, { status: 'todo', updatedBy: ctx.leo });
+      expect(reopened?.status).toBe('todo');
       expect(reopened?.completed_at).toBeNull();
       expect(reopened?.updated_by).toBe(ctx.leo);
+    });
+
+    test('setStatus reaches each live lane and clears completed_at on the way out of done', () => {
+      const row = ctx.tasks.insert(defaults({ createdBy: ctx.alex }));
+      ctx.tasks.setStatus(row.id, { status: 'done', updatedBy: ctx.alex });
+      for (const status of ['doing', 'blocked', 'todo'] as const) {
+        const moved = ctx.tasks.setStatus(row.id, { status, updatedBy: ctx.elisa });
+        expect(moved?.status).toBe(status);
+        expect(moved?.completed_at).toBeNull();
+      }
     });
 
     test('cannot setStatus on a soft-deleted task (returns null)', () => {
@@ -158,14 +168,14 @@ describe('tasks repo', () => {
       expect(ctx.tasks.list({ deletedOnly: true })).toHaveLength(1);
     });
 
-    test('restore: undeletes AND forces status back to open (predictable resurrection)', () => {
+    test('restore: undeletes AND forces status back to todo (predictable resurrection)', () => {
       const row = ctx.tasks.insert(defaults({ createdBy: ctx.alex }));
       ctx.tasks.setStatus(row.id, { status: 'done', updatedBy: ctx.alex });
       ctx.tasks.softDelete(row.id, { updatedBy: ctx.alex });
 
       const restored = ctx.tasks.restore(row.id, { updatedBy: ctx.elisa });
       expect(restored?.deleted_at).toBeNull();
-      expect(restored?.status).toBe('open');
+      expect(restored?.status).toBe('todo');
       expect(restored?.completed_at).toBeNull();
       expect(restored?.updated_by).toBe(ctx.elisa);
     });
@@ -240,8 +250,25 @@ describe('tasks repo', () => {
       const a = ctx.tasks.insert(defaults({ createdBy: ctx.alex, title: 'a' }));
       const b = ctx.tasks.insert(defaults({ createdBy: ctx.alex, title: 'b' }));
       ctx.tasks.setStatus(b.id, { status: 'done', updatedBy: ctx.alex });
-      expect(ctx.tasks.list({ status: 'open' }).map((r) => r.id)).toEqual([a.id]);
+      expect(ctx.tasks.list({ status: 'todo' }).map((r) => r.id)).toEqual([a.id]);
       expect(ctx.tasks.list({ status: 'done' }).map((r) => r.id)).toEqual([b.id]);
+    });
+
+    test('unfinished keeps the three live lanes and drops done', () => {
+      const ids: number[] = [];
+      for (const status of ['todo', 'doing', 'blocked'] as const) {
+        const row = ctx.tasks.insert(defaults({ createdBy: ctx.alex, title: status }));
+        ctx.tasks.setStatus(row.id, { status, updatedBy: ctx.alex });
+        ids.push(row.id);
+      }
+      const finished = ctx.tasks.insert(defaults({ createdBy: ctx.alex, title: 'finished' }));
+      ctx.tasks.setStatus(finished.id, { status: 'done', updatedBy: ctx.alex });
+
+      expect(ctx.tasks.list({ unfinished: true }).map((r) => r.id).sort()).toEqual(
+        [...ids].sort(),
+      );
+      // Off by default: an unset flag must not narrow the list.
+      expect(ctx.tasks.list({}).length).toBe(4);
     });
 
     test('todayCutoff includes undated AND deferred up to the cutoff', () => {
@@ -337,8 +364,8 @@ describe('tasks repo', () => {
       expect(titles).toEqual(['eggs', 'milk', 'shop']);
       // All new ids
       expect(subtree.every((r) => r.id !== p.id && r.id !== m.id && r.id !== e.id)).toBe(true);
-      // Every clone is open with no completed_at
-      expect(subtree.every((r) => r.status === 'open')).toBe(true);
+      // Every clone starts at the top of the workflow axis with no completed_at
+      expect(subtree.every((r) => r.status === 'todo')).toBe(true);
       expect(subtree.every((r) => r.completed_at === null)).toBe(true);
       // Created by the new creator
       expect(subtree.every((r) => r.created_by === ctx.elisa)).toBe(true);

@@ -12,24 +12,28 @@ rather than a commit belongs in `~/projects/TODO.md`.
 failure. The pre-push hook runs `devctl check` and then that command; the
 pre-commit hook runs `devctl check` and the unit tier only.
 
-| Command | Passing count, 2026-09-05 | Runs in the pre-push sweep |
+| Command | Passing count, 2026-09-06 | Runs in the pre-push sweep |
 |---|---|---|
 | `bun devctl check` | tsc + 7 lint scripts | yes |
-| `bun devctl test unit` | 1163 tests, 100 files; coverage ok, 131 files, 27 exempt | yes |
-| `bun devctl test browser` | 79 tests | yes |
-| `bun devctl test e2e` | 43 Playwright tests, 2 projects | yes |
-| `bun devctl test multi` | 22 `scripts/e2e-*.ts`, each exiting 0 | yes |
+| `bun devctl test unit` | 1204 tests, 101 files; coverage ok, 132 files, 27 exempt | yes |
+| `bun devctl test browser` | 90 tests | yes |
+| `bun devctl test e2e` | 48 Playwright tests, 2 projects | yes |
+| `bun devctl test multi` | 23 `scripts/e2e-*.ts`, each exiting 0 | yes |
 | `bun devctl test mutation` | see below — not part of `all` | no |
-| `bun devctl verify` | TLC model checking; needs Docker | no |
+| `bun devctl verify` | TLC: `tasks` ✓ 7.0s, `pairing` ✓ 1.7s, **`auth` never finishes** — see below | no |
 
 The multi tier now includes `e2e-registration-closed.ts` (the registration
 gate), `e2e-tasks-reconnect.ts` (the WS drop and resync),
 `e2e-agent-offline.ts` (the assistant-availability signal) and
 `e2e-tasks-levels-migration.ts` (the project/epic/task migration, driven over
-a real pre-migration database file). The offline one drops a live socket from
-inside the page, so it fails if the reconnect handler is removed. The levels
-one fails at the first check if the promote pass is removed — both checked,
-not assumed.
+a real pre-migration database file) and `e2e-tasks-status-migration.ts` (the
+todo/doing/blocked/done widening, driven over a real pre-migration database
+file). The offline one drops a live socket from inside the page, so it fails if
+the reconnect handler is removed. The levels one fails at the first check if the
+promote pass is removed. The status one fails at its first check with
+`"Redecorate the hall" reads status open, expected todo — the status rebuild did
+not run` when `rebuildTasksStatusIfLegacy` is taken out of `applySchema` — all
+three checked, not assumed.
 
 Every tier runs with the developer's own `.env` in place and needs no
 environment override. Tests take their config explicitly: `createTestApp`
@@ -85,6 +89,15 @@ what remains there is a machine to install it on.
       `push.http.ts`'s own header comment already promises, and a 60-second
       scan in the api process. → `docs/plans/04-due-date-reminders.md` ·
       ~2–3 days
+- [ ] **Reordering inside a board lane.** Deliberately not built with the
+      board. `position` is one integer numbered per parent
+      (`nextSiblingPosition` in the tasks repo) and a lane cuts across parents,
+      so the first child of two projects both hold position 0 and a lane-scoped
+      drag has no coordinate space to write into. Lanes sort by
+      `(dueAt, position, id)` instead — `packages/web/src/apps/tasks/board.ts`.
+      Doing it properly needs either a second position column scoped to the
+      lane, or fractional indexing.
+
 - [ ] **05 — Recurring tasks.** No recurrence column, route field or control.
       Deferred deliberately at v1 (`docs/tasks-v1.md`). A small fixed rule set
       with a `basis: 'due' | 'completed'` anchor, not RFC 5545. →
@@ -137,11 +150,23 @@ user-facing feature works.
       root config has never finished a run. `specs`, `cli-lib` and `web-logic`
       have no current score either. Run `bun devctl test mutation`, then
       `bun mutation:report` for the redundancy and theatre signals.
-- [ ] **Run the TLC model checker.** `bun run verify:validate` passes, so the
-      config in `specs/verification.config.ts` is complete, but `bun devctl
-      verify` needs Docker and Docker is not running on this machine. Run it,
-      record the result, and decide whether it belongs in the pre-push sweep or
-      stays manual.
+- [x] **The TLC model checker runs.** Ran 2026-09-06 with Docker up.
+      `tasks` ✓ (7 handlers, 5 ensures, 8 states, 7.0s) and `pairing` ✓
+      (2 handlers, 2 ensures, 8 states, 1.7s). Non-interference and
+      precondition locality both verified. 93 handlers belong to no subsystem
+      and are not checked, which is the documented partition, not a regression.
+- [!] **The `auth` subsystem does not finish.** Two runs, 2245s and 1580s of
+      TLC wall time, neither reaching a verdict; both were killed, and the
+      `✗ auth` line in the report is that kill, not a violated invariant. It
+      models nine handlers over two co-modelled fields (`authMachine.phase` ×
+      `sessionsMachine.outstanding`) at `maxInFlight: 2`, and 2 messages in
+      flight across 9 handlers is where the blow-up is. Java gets roughly a
+      quarter of a core inside the container and TLC runs `-workers 1`.
+      Nothing about it is specific to the tasks work — the `auth` block of
+      `specs/verification.config.ts` is untouched since before `0c34d83`.
+      Fix by dropping `auth` to `maxInFlight: 1`, splitting it in two, or
+      raising the worker count. **Until then `devctl verify` exits non-zero on
+      `auth` alone and cannot join any sweep.**
 - [ ] **Commit `scripts/e2e-pstn-live.ts`.** Every other user-facing path has a
       committed verification artefact that runs in one command. The live Twilio
       trunk does not — see Phase 7E below.

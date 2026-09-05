@@ -23,7 +23,7 @@ function task(overrides: Partial<Task> & { id: number; title: string }): Task {
   return {
     parentId: null,
     notes: '',
-    status: 'open',
+    status: 'todo',
     kind: 'task',
     deferUntil: null,
     dueAt: null,
@@ -58,11 +58,11 @@ function txt(query: string, op: TextOp = 'contains'): Condition {
   return { id: 'c-text', kind: 'text', field: 'text', op, query };
 }
 function withConds(view: TaskFilter['view'], conditions: Condition[]): TaskFilter {
-  return { view, scope: null, conditions };
+  return { view, scope: null, layout: 'list', conditions };
 }
 /** A filter standing inside one container. */
 function inScope(view: TaskFilter['view'], scope: number, conditions: Condition[] = []): TaskFilter {
-  return { view, scope, conditions };
+  return { view, scope, layout: 'list', conditions };
 }
 function ids(out: Task[]): number[] {
   return out.map((t) => t.id);
@@ -70,15 +70,20 @@ function ids(out: Task[]): number[] {
 
 describe('parseFilterFromUrl', () => {
   test('empty search → default filter (inbox, no conditions)', () => {
-    expect(parseFilterFromUrl('')).toEqual({ view: 'inbox', scope: null, conditions: [] });
+    expect(parseFilterFromUrl('')).toEqual({
+      view: 'inbox',
+      scope: null,
+      layout: 'list',
+      conditions: [],
+    });
   });
 
   test('parses the view and a list of conditions', () => {
-    const f = parseFilterFromUrl('?view=all&c=status:open&c=text:contains:milk');
+    const f = parseFilterFromUrl('?view=all&c=status:todo&c=text:contains:milk');
     expect(f.view).toBe('all');
     expect(f.conditions).toHaveLength(2);
     const [a, b] = f.conditions;
-    expect(a).toMatchObject({ kind: 'select', field: 'status', values: ['open'] });
+    expect(a).toMatchObject({ kind: 'select', field: 'status', values: ['todo'] });
     expect(b).toMatchObject({ kind: 'text', field: 'text', op: 'contains', query: 'milk' });
   });
 
@@ -124,14 +129,14 @@ describe('parseFilterFromUrl', () => {
   });
 
   test('every condition gets a distinct id', () => {
-    const f = parseFilterFromUrl('?c=status:open&c=status:done');
+    const f = parseFilterFromUrl('?c=status:todo&c=status:done');
     expect(f.conditions[0]?.id).not.toBe(f.conditions[1]?.id);
   });
 
   test('select conditions drop invalid values and keep the valid ones', () => {
-    expect(parseFilterFromUrl('?c=status:open,purple,done').conditions[0]).toMatchObject({
+    expect(parseFilterFromUrl('?c=status:todo,purple,blocked,done').conditions[0]).toMatchObject({
       field: 'status',
-      values: ['open', 'done'],
+      values: ['todo', 'blocked', 'done'],
     });
     expect(parseFilterFromUrl('?c=subtasks:has,bogus,none').conditions[0]).toMatchObject({
       field: 'subtasks',
@@ -196,7 +201,9 @@ describe('field catalogue', () => {
 
   test('the select-option and date-op catalogues', () => {
     expect(STATUS_OPTIONS).toEqual([
-      { value: 'open', label: 'Open' },
+      { value: 'todo', label: 'To do' },
+      { value: 'doing', label: 'Doing' },
+      { value: 'blocked', label: 'Blocked' },
       { value: 'done', label: 'Done' },
     ]);
     expect(SUBTASK_OPTIONS).toEqual([
@@ -217,9 +224,9 @@ describe('serializeFilterToUrl', () => {
   test('emits the view and one c param per non-empty condition', () => {
     expect(
       serializeFilterToUrl(
-        withConds('all', [sel('status', ['open']), dat('due', 'after', '2026-06-01')]),
+        withConds('all', [sel('status', ['todo']), dat('due', 'after', '2026-06-01')]),
       ),
-    ).toBe('?view=all&c=status%3Aopen&c=due%3Aafter%3A2026-06-01');
+    ).toBe('?view=all&c=status%3Atodo&c=due%3Aafter%3A2026-06-01');
   });
 
   test('a text condition serialises with its op', () => {
@@ -238,9 +245,24 @@ describe('serializeFilterToUrl', () => {
 
   test('a scope emits in=<id>, alongside the view and the conditions', () => {
     expect(serializeFilterToUrl(inScope('all', 42))).toBe('?view=all&in=42');
-    expect(serializeFilterToUrl(inScope('inbox', 7, [sel('status', ['open'])]))).toBe(
-      '?in=7&c=status%3Aopen',
+    expect(serializeFilterToUrl(inScope('inbox', 7, [sel('status', ['todo'])]))).toBe(
+      '?in=7&c=status%3Atodo',
     );
+  });
+
+  test('the board layout rides the URL beside the view, the scope and the conditions', () => {
+    const board: TaskFilter = { view: 'all', scope: 42, layout: 'board', conditions: [] };
+    expect(serializeFilterToUrl(board)).toBe('?view=all&in=42&layout=board');
+    // The list is the default, so it is not spelled out — the canonical inbox
+    // URL stays empty.
+    expect(serializeFilterToUrl({ ...board, layout: 'list' })).toBe('?view=all&in=42');
+  });
+
+  test('layout=board parses back; anything else degrades to the list', () => {
+    expect(parseFilterFromUrl('?layout=board').layout).toBe('board');
+    expect(parseFilterFromUrl('?layout=kanban').layout).toBe('list');
+    expect(parseFilterFromUrl('?layout=').layout).toBe('list');
+    expect(parseFilterFromUrl('').layout).toBe('list');
   });
 
   test('serialize ∘ parse ∘ serialize is stable for any filter', () => {
@@ -249,6 +271,7 @@ describe('serializeFilterToUrl', () => {
       withConds('trash', [dat('hideUntil', 'on', '2026-12-25')]),
       withConds('all', [sel('subtasks', ['has'])]),
       inScope('all', 42, [txt('tiles')]),
+      { view: 'all', scope: 42, layout: 'board', conditions: [sel('status', ['blocked'])] },
       DEFAULT_FILTER,
     ];
     for (const f of filters) {
@@ -309,7 +332,7 @@ describe('visibleFor — view scoping', () => {
     expect(ids(visibleFor(withConds('inbox', []), tasks, noLinger, ctx))).toEqual([1]);
   });
 
-  test('today: open tasks deferred up to end of today or undeferred', () => {
+  test('today: unfinished tasks deferred up to end of today or undeferred', () => {
     const tasks = mapOf(
       task({ id: 1, title: 'undeferred' }),
       task({ id: 2, title: 'past defer', deferUntil: '2020-01-01T00:00:00Z' }),
@@ -317,6 +340,18 @@ describe('visibleFor — view scoping', () => {
       task({ id: 4, title: 'done', status: 'done', completedAt: '2026-05-20T09:00:00Z' }),
     );
     expect(ids(visibleFor(withConds('today', []), tasks, noLinger, ctx)).sort()).toEqual([1, 2]);
+  });
+
+  test('today keeps a started task and a blocked one — only done leaves the list', () => {
+    // The two states stage 2 added are the whole point of the view: a task you
+    // are stuck on is more on today's list than one you have not touched.
+    const tasks = mapOf(
+      task({ id: 1, title: 'not started' }),
+      task({ id: 2, title: 'under way', status: 'doing' }),
+      task({ id: 3, title: 'stuck', status: 'blocked' }),
+      task({ id: 4, title: 'finished', status: 'done', completedAt: '2026-05-20T09:00:00Z' }),
+    );
+    expect(ids(visibleFor(withConds('today', []), tasks, noLinger, ctx)).sort()).toEqual([1, 2, 3]);
   });
 
   test('today: a task deferred to exactly end-of-day stays visible (inclusive cutoff)', () => {
@@ -438,10 +473,10 @@ describe('visibleFor — conditions', () => {
       task({ id: 1, title: 'open' }),
       task({ id: 2, title: 'done', status: 'done', completedAt: '2026-05-20T09:00:00Z' }),
     );
-    expect(ids(visibleFor(withConds('all', [sel('status', ['open'])]), tasks, noLinger, ctx))).toEqual([1]);
+    expect(ids(visibleFor(withConds('all', [sel('status', ['todo'])]), tasks, noLinger, ctx))).toEqual([1]);
     expect(ids(visibleFor(withConds('all', [sel('status', ['done'])]), tasks, noLinger, ctx))).toEqual([2]);
     expect(
-      ids(visibleFor(withConds('all', [sel('status', ['open', 'done'])]), tasks, noLinger, ctx)).sort(),
+      ids(visibleFor(withConds('all', [sel('status', ['todo', 'done'])]), tasks, noLinger, ctx)).sort(),
     ).toEqual([1, 2]);
   });
 
@@ -573,13 +608,13 @@ describe('visibleFor — conditions', () => {
 
   test('conditions are AND-ed — every one must pass', () => {
     const tasks = mapOf(
-      task({ id: 1, title: 'milk', status: 'open', assignedTo: 1 }),
+      task({ id: 1, title: 'milk', status: 'todo', assignedTo: 1 }),
       task({ id: 2, title: 'milk', status: 'done', assignedTo: 1, completedAt: '2026-05-20T09:00:00Z' }),
-      task({ id: 3, title: 'milk', status: 'open', assignedTo: 2 }),
+      task({ id: 3, title: 'milk', status: 'todo', assignedTo: 2 }),
     );
     const filter = withConds('all', [
       txt('milk'),
-      sel('status', ['open']),
+      sel('status', ['todo']),
       sel('assignee', ['1']),
     ]);
     expect(ids(visibleFor(filter, tasks, noLinger, ctx))).toEqual([1]);
@@ -587,12 +622,12 @@ describe('visibleFor — conditions', () => {
 });
 
 describe('visibleFor — linger', () => {
-  test('a recently-completed task stays visible under a status=open condition', () => {
+  test('a recently-completed task stays visible under a status=todo condition', () => {
     const tasks = mapOf(
       task({ id: 1, title: 'just done', status: 'done', completedAt: '2026-05-20T11:00:00Z' }),
       task({ id: 2, title: 'still open' }),
     );
-    const filter = withConds('all', [sel('status', ['open'])]);
+    const filter = withConds('all', [sel('status', ['todo'])]);
     expect(ids(visibleFor(filter, tasks, new Set(), ctx))).toEqual([2]);
     expect(ids(visibleFor(filter, tasks, new Set([1]), ctx)).sort()).toEqual([1, 2]);
   });
@@ -602,10 +637,10 @@ describe('visibleFor — linger', () => {
       task({ id: 1, title: 'done + hers', status: 'done', completedAt: '2026-05-20T11:00:00Z', assignedTo: 2 }),
     );
     expect(
-      visibleFor(withConds('all', [sel('status', ['open']), sel('assignee', ['1'])]), tasks, new Set([1]), ctx),
+      visibleFor(withConds('all', [sel('status', ['todo']), sel('assignee', ['1'])]), tasks, new Set([1]), ctx),
     ).toHaveLength(0);
     expect(
-      visibleFor(withConds('all', [sel('status', ['open']), txt('nope')]), tasks, new Set([1]), ctx),
+      visibleFor(withConds('all', [sel('status', ['todo']), txt('nope')]), tasks, new Set([1]), ctx),
     ).toHaveLength(0);
   });
 });

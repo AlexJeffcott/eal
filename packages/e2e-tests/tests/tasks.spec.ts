@@ -234,6 +234,138 @@ test('tasks hierarchy: file a project, an epic and tasks, then scope in and out'
 });
 
 /**
+ * The workflow axis, end to end: three states set through the real controls,
+ * then the same rows read back as a board.
+ *
+ * The board is the stage's user-facing claim — "everything is open and nothing
+ * distinguishes started from not-started from blocked" was the complaint — so
+ * it is driven here through the documented UI against a real API from a cold
+ * `:memory:` database, not asserted from inside a component test.
+ *
+ * Every title carries a per-run stamp: the e2e suite shares one in-memory
+ * database across specs and both Playwright projects.
+ */
+test('tasks board: set three states, then read them back as four lanes', async ({ page }) => {
+  const stamp = `b${Date.now()}`;
+  const STARTED = `Strip the wallpaper ${stamp}`;
+  const STUCK = `Wait for the plasterer ${stamp}`;
+  const FINISHED = `Buy dust sheets ${stamp}`;
+  const UNTOUCHED = `Choose a colour ${stamp}`;
+
+  const rowFor = (title: string) =>
+    page.locator('[data-task-row]', {
+      has: page.locator('[data-task-title]', { hasText: title }),
+    });
+  const cardFor = (title: string) =>
+    page.locator('[data-board-card]', {
+      has: page.locator('[data-task-title]', { hasText: title }),
+    });
+  const lane = (status: string) => page.locator(`[data-board-lane-column][data-lane="${status}"]`);
+
+  async function quickAdd(title: string): Promise<void> {
+    await page.locator('#tasks-quick-add').fill(title);
+    await page.locator('[data-action="tasks:quick-add"]').click();
+    await expect(rowFor(title)).toBeVisible();
+  }
+
+  /** Drive the Status ActionSelect inside one expanded row's detail editor. */
+  async function setStatusFromTheList(title: string, label: string): Promise<void> {
+    const row = rowFor(title);
+    const id = await row.getAttribute('data-task-id');
+    await page.locator(`[data-action="tasks:expand"][data-action-task-id="${id}"]`).click();
+    const picker = row.locator('[data-task-status-picker]');
+    await picker.getByRole('button').click();
+    await picker.getByRole('option', { name: label, exact: true }).click();
+    await expect(row).toHaveAttribute('data-task-status', label.toLowerCase().replace(' ', ''));
+    await page.locator(`[data-action="tasks:expand"][data-action-task-id="${id}"]`).click();
+  }
+
+  await attachVirtualAuthenticator(page);
+  await page.goto('/');
+  await registerPasskey(page, `boarder-${stamp}`);
+  await page.locator('[data-landing-app="tasks"] [data-action="shell:navigate"]').click();
+  await expect(page.locator('[data-tasks-panel]')).toBeVisible();
+
+  await test.step('capture four tasks — every one starts in To do', async () => {
+    for (const title of [STARTED, STUCK, FINISHED, UNTOUCHED]) await quickAdd(title);
+    await expect(rowFor(UNTOUCHED)).toHaveAttribute('data-task-status', 'todo');
+  });
+
+  await test.step('say what is started and what is stuck, from the list', async () => {
+    await setStatusFromTheList(STARTED, 'Doing');
+    await setStatusFromTheList(STUCK, 'Blocked');
+    // The row wears the word, which is the complaint this stage answers: a
+    // started task and a stuck one no longer look identical.
+    await expect(rowFor(STARTED).locator('[data-task-state]')).toContainText('doing');
+    await expect(rowFor(STUCK).locator('[data-task-state]')).toContainText('blocked');
+    await expect(rowFor(UNTOUCHED).locator('[data-task-state]')).toHaveCount(0);
+  });
+
+  await test.step('tick one off — completing works straight from To do', async () => {
+    const id = await rowFor(FINISHED).getAttribute('data-task-id');
+    await page.locator(`[data-action="tasks:toggle"][data-action-task-id="${id}"]`).click();
+    await expect(rowFor(FINISHED)).toHaveAttribute('data-task-status', 'done');
+  });
+
+  await test.step('switch to the board — four lanes, side by side at 1200px', async () => {
+    await page.setViewportSize({ width: 1200, height: 900 });
+    await page.locator('[data-action="tasks:set-layout"][data-action-layout="board"]').click();
+    await expect(page.locator('[data-tasks-board]')).toBeVisible();
+    // The switch says which arrangement is showing. Two buttons that look the
+    // same while one is already active is a small thing that makes a person
+    // tap the one they are already on.
+    await expect(
+      page.locator('[data-action="tasks:set-layout"][data-action-layout="board"]'),
+    ).toHaveClass(/tierPrimary/);
+    await expect(
+      page.locator('[data-action="tasks:set-layout"][data-action-layout="list"]'),
+    ).not.toHaveClass(/tierPrimary/);
+    // Above the 900px breakpoint every lane is on screen at once.
+    await expect(page.locator('[data-board-lane-column]:visible')).toHaveCount(4);
+    // …and the lane picker, which only pages a one-lane board, is not.
+    await expect(page.locator('[data-board-lane-picker]')).toBeHidden();
+
+    for (const [status, title] of [
+      ['todo', UNTOUCHED],
+      ['doing', STARTED],
+      ['blocked', STUCK],
+      ['done', FINISHED],
+    ] as const) {
+      await expect(lane(status).locator('[data-task-title]', { hasText: title })).toBeVisible();
+    }
+
+    // The artefact: what the whole board looks like on the laptop.
+    await page.screenshot({
+      path: test.info().outputPath('tasks-1200-board.png'),
+      fullPage: true,
+      // Settle the tier transitions first. Measured on the layout switch: a
+      // shot taken straight after the click caught the selected button at
+      // 0.12 alpha and the unselected one at 0.81, so the artefact showed the
+      // toggle backwards. This finishes every transition rather than waiting a
+      // fixed time for one.
+      animations: 'disabled',
+    });
+  });
+
+  await test.step('move a card between lanes from the board itself', async () => {
+    const picker = cardFor(STUCK).locator('[data-task-status-picker]');
+    await picker.getByRole('button').click();
+    await picker.getByRole('option', { name: 'Doing', exact: true }).click();
+    await expect(lane('doing').locator('[data-task-title]', { hasText: STUCK })).toBeVisible();
+    await expect(lane('blocked').locator('[data-task-title]', { hasText: STUCK })).toHaveCount(0);
+  });
+
+  await test.step('the layout is in the URL, so the board survives a reload', async () => {
+    await expect(page).toHaveURL(/layout=board/);
+    await page.reload();
+    await expect(page.locator('[data-tasks-board]')).toBeVisible();
+  });
+
+  // Nothing in the flow was refused by the server.
+  await expect(page.locator('[data-tasks-error]')).toHaveCount(0);
+});
+
+/**
  * The 350px floor.
  *
  * 350px is the smallest phone eal must serve, and the tasks panel plus the
@@ -358,11 +490,148 @@ test.describe('tasks at the 350px floor', () => {
 
     // The artefact the brief asks for: what the hierarchy looks like on the
     // owner's phone. Lands under packages/e2e-tests/test-results/.
-    await page.screenshot({ path: test.info().outputPath('tasks-350-scoped.png'), fullPage: true });
+    await page.screenshot({
+      path: test.info().outputPath('tasks-350-scoped.png'),
+      fullPage: true,
+      // Settle the tier transitions first. Measured on the layout switch: a
+      // shot taken straight after the click caught the selected button at
+      // 0.12 alpha and the unselected one at 0.81, so the artefact showed the
+      // toggle backwards. This finishes every transition rather than waiting a
+      // fixed time for one.
+      animations: 'disabled',
+    });
 
     await page.locator('[data-action="tasks:leave-scope"]').click();
     await expect(page.locator('[data-tasks-breadcrumb]')).toHaveCount(0);
     expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+  });
+
+  test('the board is one lane at a time, and the arrows page through all four', async ({ page }) => {
+    // Four lanes at 350px would be about 80px each: too narrow for a task
+    // title and far too narrow for a thumb. One lane at a time is not a
+    // compromise here, it is the correct phone rendering — and the choice is a
+    // media query in tasks.css, not a width read in JavaScript.
+    const stamp = `n${Date.now()}`;
+    const STARTED = `Sand the door ${stamp}`;
+    const STUCK = `Chase the delivery ${stamp}`;
+
+    const rowFor = (title: string) =>
+      page.locator('[data-task-row]', {
+        has: page.locator('[data-task-title]', { hasText: title }),
+      });
+
+    async function setStatus(title: string, label: string): Promise<void> {
+      const row = rowFor(title);
+      const id = await row.getAttribute('data-task-id');
+      await page.locator(`[data-action="tasks:expand"][data-action-task-id="${id}"]`).click();
+      const picker = row.locator('[data-task-status-picker]');
+      await picker.getByRole('button').click();
+      await picker.getByRole('option', { name: label, exact: true }).click();
+      await expect(row).toHaveAttribute('data-task-status', label.toLowerCase());
+      await page.locator(`[data-action="tasks:expand"][data-action-task-id="${id}"]`).click();
+    }
+
+    for (const title of [STARTED, STUCK]) {
+      await page.locator('#tasks-quick-add').fill(title);
+      await page.locator('[data-action="tasks:quick-add"]').click();
+      await expect(rowFor(title)).toBeVisible();
+    }
+    await setStatus(STARTED, 'Doing');
+    await setStatus(STUCK, 'Blocked');
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+
+    await page.locator('[data-action="tasks:set-layout"][data-action-layout="board"]').click();
+    await expect(page.locator('[data-tasks-board]')).toBeVisible();
+
+    // All four lanes are in the DOM; exactly one of them is on screen.
+    await expect(page.locator('[data-board-lane-column]')).toHaveCount(4);
+    await expect(page.locator('[data-board-lane-column]:visible')).toHaveCount(1);
+    await expect(page.locator('[data-board-lane-picker]')).toBeVisible();
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+
+    // The artefact the brief asks for: the board as the owner sees it on the
+    // phone. Lands under packages/e2e-tests/test-results/.
+    await page.screenshot({
+      path: test.info().outputPath('tasks-350-board.png'),
+      fullPage: true,
+      // Settle the tier transitions first. Measured on the layout switch: a
+      // shot taken straight after the click caught the selected button at
+      // 0.12 alpha and the unselected one at 0.81, so the artefact showed the
+      // toggle backwards. This finishes every transition rather than waiting a
+      // fixed time for one.
+      animations: 'disabled',
+    });
+
+    // Page all the way round. Each stop shows exactly one lane and nothing
+    // pushes the document sideways — a card carrying a long title included.
+    const next = page.locator('[data-action="tasks:board-lane-step"][data-action-step="next"]');
+    for (const lane of ['doing', 'blocked', 'done', 'todo']) {
+      await next.click();
+      await expect(page.locator('[data-tasks-board]')).toHaveAttribute('data-board-lane', lane);
+      await expect(page.locator('[data-board-lane-column]:visible')).toHaveCount(1);
+      expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    }
+
+    // The two tasks are each in the lane their state names.
+    await next.click();
+    await expect(
+      page.locator('[data-board-lane-column][data-lane="doing"] [data-task-title]', {
+        hasText: STARTED,
+      }),
+    ).toBeVisible();
+    await page
+      .locator('[data-action="tasks:board-lane-step"][data-action-step="prev"]')
+      .click();
+    await expect(page.locator('[data-tasks-board]')).toHaveAttribute('data-board-lane', 'todo');
+
+    await expect(page.locator('[data-tasks-error]')).toHaveCount(0);
+  });
+
+  test('a board card moves lane at the floor, by tap where there is a touchscreen', async ({
+    page,
+  }) => {
+    // A real tap where the context can produce one. `.tap()` throws on a
+    // context without touch, so the `mobile-350` project — touch, mobile UA,
+    // device pixel ratio — taps, and the desktop project drives the identical
+    // control with the mouse. Both run; only the input differs.
+    const touch = test.info().project.use.hasTouch === true;
+    const activate = async (target: ReturnType<typeof page.locator>): Promise<void> => {
+      if (touch) await target.tap();
+      else await target.click();
+    };
+    // Dragging needs a pointer that can hover; this board is used from a phone
+    // first, so the lane picker on the card is the whole move.
+    const stamp = `m${Date.now()}`;
+    const TITLE = `Move me by tap ${stamp}`;
+    await page.locator('#tasks-quick-add').fill(TITLE);
+    await page.locator('[data-action="tasks:quick-add"]').click();
+    await expect(
+      page.locator('[data-task-row]', {
+        has: page.locator('[data-task-title]', { hasText: TITLE }),
+      }),
+    ).toBeVisible();
+
+    await page.locator('[data-action="tasks:set-layout"][data-action-layout="board"]').click();
+    const card = page.locator('[data-board-card]', {
+      has: page.locator('[data-task-title]', { hasText: TITLE }),
+    });
+    await expect(card).toBeVisible();
+
+    const picker = card.locator('[data-task-status-picker]');
+    await activate(picker.getByRole('button'));
+    await activate(picker.getByRole('option', { name: 'Blocked', exact: true }));
+
+    // The card left the visible To do lane for one the phone is not showing.
+    // It is still in the DOM — every lane is, and the media query decides which
+    // one is on screen — so this is a visibility assertion, not a count.
+    await expect(card).toBeHidden();
+    await expect(card).toHaveAttribute('data-task-status', 'blocked');
+    await page.locator('[data-action="tasks:board-lane-step"][data-action-step="next"]').click();
+    await page.locator('[data-action="tasks:board-lane-step"][data-action-step="next"]').click();
+    await expect(page.locator('[data-tasks-board]')).toHaveAttribute('data-board-lane', 'blocked');
+    await expect(card).toBeVisible();
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    await expect(page.locator('[data-tasks-error]')).toHaveCount(0);
   });
 
   test('the controls a thumb hits are at least 44px', async ({ page }) => {
@@ -389,6 +658,8 @@ test.describe('tasks at the 350px floor', () => {
     const targets: ReadonlyArray<[label: string, selector: string]> = [
       ['quick-add submit', '[data-action="tasks:quick-add"]'],
       ['leave scope', '[data-action="tasks:leave-scope"]'],
+      ['layout list', '[data-action="tasks:set-layout"][data-action-layout="list"]'],
+      ['layout board', '[data-action="tasks:set-layout"][data-action-layout="board"]'],
     ];
     const measured: Array<[string, number, number]> = [];
     for (const [label, selector] of targets) {
@@ -402,6 +673,20 @@ test.describe('tasks at the 350px floor', () => {
       ['complete', `[data-action="tasks:toggle"][data-action-task-id="${taskId}"]`],
       ['expand', `[data-action="tasks:expand"][data-action-task-id="${taskId}"]`],
       ['enter scope', `[data-action="tasks:enter-scope"][data-action-task-id="${taskId}"]`],
+    ] as const) {
+      const box = await page.locator(selector).first().boundingBox();
+      if (box === null) throw new Error(`${label}: no bounding box for ${selector}`);
+      measured.push([label, Math.round(box.width), Math.round(box.height)]);
+    }
+
+    // The board's own controls, measured where they live — the lane arrows
+    // only exist below the 900px breakpoint, which is where this test runs.
+    await page.locator('[data-action="tasks:set-layout"][data-action-layout="board"]').click();
+    await expect(page.locator('[data-tasks-board]')).toBeVisible();
+    for (const [label, selector] of [
+      ['lane prev', '[data-action="tasks:board-lane-step"][data-action-step="prev"]'],
+      ['lane next', '[data-action="tasks:board-lane-step"][data-action-step="next"]'],
+      ['card lane picker', '[data-board-card] [data-task-status-picker] button'],
     ] as const) {
       const box = await page.locator(selector).first().boundingBox();
       if (box === null) throw new Error(`${label}: no bounding box for ${selector}`);

@@ -9,6 +9,12 @@ import { descendantIds, indexChildren, tasksInTreeOrder } from './tree.ts';
  * a shareable, reload-surviving link — see tasks/url-sync.ts.
  */
 export type TaskView = 'inbox' | 'today' | 'all' | 'trash';
+/**
+ * How the selected rows are drawn. Both renderers consume the output of
+ * `visibleFor` — the board is a second arrangement of one query, not a second
+ * query — so every view, scope and condition means the same thing in either.
+ */
+export type TaskLayout = 'list' | 'board';
 export type DateOp = 'before' | 'on' | 'after';
 export type TextOp = 'contains' | 'starts-with' | 'exact' | 'fuzzy';
 
@@ -48,17 +54,29 @@ export interface TaskFilter {
    * whatever the view already selected.
    */
   scope: number | null;
+  /**
+   * List or board. Orthogonal to `view` and `scope` in the same way they are
+   * orthogonal to each other: "the board, for what is due today, inside the
+   * kitchen project" is a sentence, and each of the three narrows or redraws
+   * what the others already chose.
+   */
+  layout: TaskLayout;
   conditions: Condition[];
 }
 
 /** The canonical default — used for view comparison in serialisation. The
  *  signal store creates fresh `{ view, scope, conditions: [] }` literals so
  *  nothing ever mutates this shared object. */
-export const DEFAULT_FILTER: TaskFilter = { view: 'inbox', scope: null, conditions: [] };
+export const DEFAULT_FILTER: TaskFilter = {
+  view: 'inbox',
+  scope: null,
+  layout: 'list',
+  conditions: [],
+};
 
 /** A fresh default filter — its own `conditions` array. */
 export function freshFilter(): TaskFilter {
-  return { view: 'inbox', scope: null, conditions: [] };
+  return { view: 'inbox', scope: null, layout: 'list', conditions: [] };
 }
 
 // ── Condition ids ──────────────────────────────────────────────────────────
@@ -89,7 +107,9 @@ export interface SelectOptionSpec {
   label: string;
 }
 export const STATUS_OPTIONS: readonly SelectOptionSpec[] = [
-  { value: 'open', label: 'Open' },
+  { value: 'todo', label: 'To do' },
+  { value: 'doing', label: 'Doing' },
+  { value: 'blocked', label: 'Blocked' },
   { value: 'done', label: 'Done' },
 ];
 export const SUBTASK_OPTIONS: readonly SelectOptionSpec[] = [
@@ -156,6 +176,17 @@ function asView(value: string | null): TaskView {
 }
 
 /**
+ * `layout=board`. Degrades to the list for the same reason `asView` degrades to
+ * the inbox: a hand-edited URL should open the app, not error at someone
+ * holding a phone.
+ */
+function asLayout(value: string | null): TaskLayout {
+  // Stryker disable next-line StringLiteral: 'list' is also the default
+  // fallback below — an equivalent mutant.
+  return value === 'board' ? 'board' : 'list';
+}
+
+/**
  * `in=<id>`. Anything else degrades to "everywhere", the same way `asView`
  * degrades to the inbox — a hand-edited or truncated URL opens the app rather
  * than erroring at someone holding a phone.
@@ -168,7 +199,9 @@ function asScope(value: string | null): number | null {
 }
 
 function isValidSelectValue(field: SelectCondition['field'], value: string): boolean {
-  if (field === 'status') return value === 'open' || value === 'done';
+  if (field === 'status') {
+    return value === 'todo' || value === 'doing' || value === 'blocked' || value === 'done';
+  }
   if (field === 'subtasks') return value === 'has' || value === 'none';
   return value === 'unassigned' || /^\d+$/.test(value);
 }
@@ -225,6 +258,7 @@ export function parseFilterFromUrl(search: string): TaskFilter {
   return {
     view: asView(params.get('view')),
     scope: asScope(params.get('in')),
+    layout: asLayout(params.get('layout')),
     conditions,
   };
 }
@@ -250,6 +284,7 @@ export function serializeFilterToUrl(filter: TaskFilter): string {
   const params = new URLSearchParams();
   if (filter.view !== DEFAULT_FILTER.view) params.set('view', filter.view);
   if (filter.scope !== null) params.set('in', String(filter.scope));
+  if (filter.layout !== DEFAULT_FILTER.layout) params.set('layout', filter.layout);
   for (const c of filter.conditions) {
     const encoded = encodeCondition(c);
     if (encoded !== null) params.append('c', encoded);
@@ -286,8 +321,10 @@ function inView(
   }
   if (view === 'today') {
     const deferOk = task.deferUntil === null || task.deferUntil <= todayCutoff;
-    // A just-completed task lingers in Today even though Today is open-only.
-    const statusOk = task.status === 'open' || recentlyCompleted.has(task.id);
+    // Today is "still carrying work", which is three states: a task you started
+    // and one you are stuck on are both still on today's list. A just-completed
+    // task lingers anyway, so ticking one off does not make it vanish.
+    const statusOk = task.status !== 'done' || recentlyCompleted.has(task.id);
     return deferOk && statusOk;
   }
   return true; // 'all' — every live task, at every depth

@@ -1,6 +1,19 @@
 # Tasks (v1) — design
 
 Status: draft, awaiting approval.
+
+> **Two later stages have moved past this document; it is kept as the v1
+> record, not as current documentation.**
+>
+> - **Stage 1** added `tasks.kind` — project → epic → task — with the pairing
+>   rule in `handlers/tasks.shared.ts:levelViolation`.
+> - **Stage 2** widened `status` from `('open','done')` to
+>   `('todo','doing','blocked','done')` and added a board. Wherever this page
+>   says `open`, read `todo`; wherever it says the status machine has three
+>   states, read five (`packages/api/src/specs/tasks-status-machine.ts` is the
+>   live model). The predictable-resurrection rule this page introduced still
+>   holds — `restore` now lands in `todo`, and so does `reopen`.
+
 Replaces: the `greetings` / `say-hello` / `hello:said` demo end-to-end.
 
 ## Purpose
@@ -238,6 +251,10 @@ are consistent. It does not prove the production code matches the specs;
 that's the test layers' job.
 
 ### `tasks-status-machine`
+
+**Superseded by stage 2** — see the header note. The live model has five
+states (`todo`, `doing`, `blocked`, `done`, `deleted`) and adds a `setStatus`
+transition for the board's lane move. What follows is the v1 shape.
 
 Models a single task's lifecycle. Three states: `open`, `done`, `deleted`.
 Plus the implicit `gone` state once a row is purged.

@@ -7,7 +7,7 @@ import { defineVerification } from '@fairfox/polly/verify';
  *   auth-machine.ts          → `auth.phase`           anonymous ↔ authenticating ↔ authenticated
  *   ws-machine.ts            → `ws.state`             idle → connecting → connected | error → idle
  *   sessions-machine.ts      → `sessions.outstanding` bounded counter 0..2
- *   tasks-status-machine.ts  → `taskStatus.status`    open → done → open; either → deleted → open
+ *   tasks-status-machine.ts  → `taskStatus.status`    todo/doing/blocked ⇄ done; any → deleted → todo
  *   auth-gate-machine.ts     → `authGate.state`       undecided → {public, appOwned, principalRequired} → {handled, rejected}
  *
  * Each shadow module declares its `$sharedState` and annotates every
@@ -23,8 +23,13 @@ import { defineVerification } from '@fairfox/polly/verify';
  *   - outstanding never goes negative
  *   - outstanding never exceeds the model bound
  *   - revokeAllSessions deterministically zeros the counter
- *   - complete is only valid from open; reopen is only valid from done
- *   - restore always lands in open (predictable resurrection)
+ *   - complete is valid from any unfinished state (todo, doing, blocked) and
+ *     always lands in done; reopen is only valid from done and lands in todo
+ *   - the board's lane move (POST /:id/status) reaches all four workflow states
+ *     and none of them is `deleted`: no lane change can bin a task or bring one
+ *     back, which is what keeping the workflow axis and the trash axis separate
+ *     is worth
+ *   - restore always lands in todo (predictable resurrection)
  *   - the auth gate's `handled` state is reachable only after a classification
  *     (public, appOwned, or principalRequired+principalPresent) — no request
  *     passes through without one of the three checks
@@ -41,7 +46,10 @@ export default defineVerification({
     'authMachine.phase': { type: 'enum', values: ['anonymous', 'authenticating', 'authenticated'] },
     'wsMachine.state': { type: 'enum', values: ['idle', 'connecting', 'connected', 'error'] },
     'sessionsMachine.outstanding': { type: 'number', min: 0, max: 2 },
-    'taskStatusMachine.status': { type: 'enum', values: ['open', 'done', 'deleted'] },
+    'taskStatusMachine.status': {
+      type: 'enum',
+      values: ['todo', 'doing', 'blocked', 'done', 'deleted'],
+    },
     'authGateMachine.state': {
       type: 'enum',
       values: ['undecided', 'public', 'appOwned', 'principalRequired', 'handled', 'rejected'],
@@ -122,6 +130,7 @@ export default defineVerification({
       handlers: [
         'POST /:id/complete',
         'POST /:id/reopen',
+        'POST /:id/status',
         'POST /:id/clone',
         'POST /:id/restore',
         'DELETE /:id',

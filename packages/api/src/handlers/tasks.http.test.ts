@@ -46,18 +46,28 @@ async function fetch(
 interface MinimalTask {
   id: number;
   title: string;
-  status: 'open' | 'done';
+  status: 'todo' | 'doing' | 'blocked' | 'done';
   deletedAt: string | null;
+  completedAt: string | null;
 }
 
 function isMinimalTask(value: unknown): value is MinimalTask {
   if (typeof value !== 'object' || value === null) return false;
-  if (!('id' in value && 'title' in value && 'status' in value && 'deletedAt' in value)) return false;
+  if (
+    !('id' in value && 'title' in value && 'status' in value && 'deletedAt' in value &&
+      'completedAt' in value)
+  ) {
+    return false;
+  }
   return (
     typeof value.id === 'number' &&
     typeof value.title === 'string' &&
-    (value.status === 'open' || value.status === 'done') &&
-    (value.deletedAt === null || typeof value.deletedAt === 'string')
+    (value.status === 'todo' ||
+      value.status === 'doing' ||
+      value.status === 'blocked' ||
+      value.status === 'done') &&
+    (value.deletedAt === null || typeof value.deletedAt === 'string') &&
+    (value.completedAt === null || typeof value.completedAt === 'string')
   );
 }
 
@@ -110,7 +120,7 @@ describe('tasks http wire contract', () => {
     expect(isTaskEnvelope(res.body)).toBe(true);
     if (!isTaskEnvelope(res.body)) throw new Error('unreachable');
     expect(res.body.task.title).toBe('buy milk');
-    expect(res.body.task.status).toBe('open');
+    expect(res.body.task.status).toBe('todo');
   });
 
   test('POST /api/v1/tasks: 400 with {error} envelope when title is empty', async () => {
@@ -175,13 +185,105 @@ describe('tasks http wire contract', () => {
   test('POST /complete + /reopen flip status and return {task}', async () => {
     const app = await createTestApp(db, { principalOverride: alex });
     const created = unwrapTask((await fetch(app, 'POST', '/api/v1/tasks', { title: 'x' })).body);
+    expect(created.status).toBe('todo');
 
     const done = await fetch(app, 'POST', `/api/v1/tasks/${created.id}/complete`);
     expect(done.status).toBe(200);
     expect(unwrapTask(done.body).status).toBe('done');
 
     const open = await fetch(app, 'POST', `/api/v1/tasks/${created.id}/reopen`);
-    expect(unwrapTask(open.body).status).toBe('open');
+    expect(unwrapTask(open.body).status).toBe('todo');
+  });
+
+  test('POST /:id/status moves a card between lanes and keeps the completion tie', async () => {
+    const app = await createTestApp(db, { principalOverride: alex });
+    const created = unwrapTask((await fetch(app, 'POST', '/api/v1/tasks', { title: 'x' })).body);
+
+    for (const status of ['doing', 'blocked', 'todo'] as const) {
+      const moved = await fetch(app, 'POST', `/api/v1/tasks/${created.id}/status`, { status });
+      expect(moved.status).toBe(200);
+      expect(unwrapTask(moved.body).status).toBe(status);
+      // Only `done` carries a completion timestamp — the storage CHECK says so
+      // and the route must not be able to break it.
+      expect(unwrapTask(moved.body).completedAt).toBeNull();
+    }
+
+    const finished = await fetch(app, 'POST', `/api/v1/tasks/${created.id}/status`, {
+      status: 'done',
+    });
+    expect(unwrapTask(finished.body).completedAt).not.toBeNull();
+
+    // …and back out of Done, which clears it again.
+    const back = await fetch(app, 'POST', `/api/v1/tasks/${created.id}/status`, { status: 'doing' });
+    expect(unwrapTask(back.body).status).toBe('doing');
+    expect(unwrapTask(back.body).completedAt).toBeNull();
+  });
+
+  test('completing works from every unfinished lane, not only from todo', async () => {
+    const app = await createTestApp(db, { principalOverride: alex });
+    for (const from of ['todo', 'doing', 'blocked'] as const) {
+      const created = unwrapTask(
+        (await fetch(app, 'POST', '/api/v1/tasks', { title: `x-${from}` })).body,
+      );
+      await fetch(app, 'POST', `/api/v1/tasks/${created.id}/status`, { status: from });
+      const done = await fetch(app, 'POST', `/api/v1/tasks/${created.id}/complete`);
+      expect(done.status).toBe(200);
+      expect(unwrapTask(done.body).status).toBe('done');
+    }
+  });
+
+  test('a lane move can neither trash a task nor bring one back', async () => {
+    // The two axes are separate, and this is the property that says so: the
+    // status route only ever touches the workflow axis.
+    const app = await createTestApp(db, { principalOverride: alex });
+    const created = unwrapTask((await fetch(app, 'POST', '/api/v1/tasks', { title: 'x' })).body);
+    await fetch(app, 'DELETE', `/api/v1/tasks/${created.id}`);
+
+    const moved = await fetch(app, 'POST', `/api/v1/tasks/${created.id}/status`, {
+      status: 'doing',
+    });
+    expect(moved.status).toBe(404);
+    if (!isErrorEnvelope(moved.body)) throw new Error('expected {error} envelope');
+    expect(moved.body.error).toContain('not found or in trash');
+
+    const trash = await fetch(app, 'GET', '/api/v1/tasks?trash=1');
+    if (!isTasksList(trash.body)) throw new Error('expected {tasks} envelope');
+    expect(trash.body.tasks).toHaveLength(1);
+  });
+
+  test('an unknown status is a 400 in the {error} envelope, on the body and the query', async () => {
+    const app = await createTestApp(db, { principalOverride: alex });
+    const created = unwrapTask((await fetch(app, 'POST', '/api/v1/tasks', { title: 'x' })).body);
+
+    const body = await fetch(app, 'POST', `/api/v1/tasks/${created.id}/status`, {
+      status: 'started',
+    });
+    expect(body.status).toBe(400);
+    if (!isErrorEnvelope(body.body)) throw new Error('expected {error} envelope');
+    expect(body.body.error).toContain('status must be');
+
+    // 'open' is specifically gone; accepting it would let a caller written
+    // against the old vocabulary think it had moved a card.
+    const legacy = await fetch(app, 'GET', '/api/v1/tasks?status=open');
+    expect(legacy.status).toBe(400);
+    if (!isErrorEnvelope(legacy.body)) throw new Error('expected {error} envelope');
+    expect(legacy.body.error).toContain('status must be');
+  });
+
+  test('?today=1 keeps the started and the stuck, and drops only the finished', async () => {
+    const app = await createTestApp(db, { principalOverride: alex });
+    const ids: number[] = [];
+    for (const status of ['todo', 'doing', 'blocked', 'done'] as const) {
+      const created = unwrapTask(
+        (await fetch(app, 'POST', '/api/v1/tasks', { title: status })).body,
+      );
+      await fetch(app, 'POST', `/api/v1/tasks/${created.id}/status`, { status });
+      ids.push(created.id);
+    }
+    const today = await fetch(app, 'GET', '/api/v1/tasks?today=1');
+    if (!isTasksList(today.body)) throw new Error('expected {tasks} envelope');
+    expect(today.body.tasks.map((t) => t.title).sort()).toEqual(['blocked', 'doing', 'todo']);
+    expect(ids).toHaveLength(4);
   });
 
   test('DELETE soft-deletes; POST /restore brings it back', async () => {

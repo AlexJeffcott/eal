@@ -145,6 +145,11 @@ export function applySchema(db: DatabaseClient): void {
   // Not part of the tasks app's own schema fragment: the column it indexes is
   // added by the ensureColumn above, which runs after every app fragment.
   db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_kind ON tasks (kind)');
+  // Tasks stage 2: `status` widens from ('open','done') to the four workflow
+  // states. Unlike `kind`, this cannot ride in on ensureColumn — SQLite has no
+  // way to ALTER a CHECK constraint — so the table is rebuilt. Runs after every
+  // ensureColumn above so the column set it copies is already the final one.
+  rebuildTasksStatusIfLegacy(db);
   promoteGrandfatheredContainers(db);
   // Phase 7D: the single user-less device row voicemails land in when
   // no household member was specifically being called. Idempotent —
@@ -225,6 +230,101 @@ function promoteGrandfatheredContainers(db: DatabaseClient): void {
 interface TableNameRow { name: string }
 
 interface TableSqlRow { sql: string | null }
+
+/**
+ * Widen `tasks.status` from ('open','done') to ('todo','doing','blocked','done').
+ *
+ * SQLite cannot ALTER a CHECK constraint, so this is a table rebuild — the same
+ * shape as rebuildFamilyPhoneDevicesIfLegacy below, and for the same reason.
+ * Detection reads the CREATE statement out of sqlite_master and looks for the
+ * new 'doing' literal: a database built by the app's own schema fragment
+ * already has it and falls straight through, so this is idempotent.
+ *
+ * `tasks.parent_id` is a self-referencing foreign key with ON DELETE CASCADE,
+ * which makes getting this wrong destructive: a copy that lost parent_id would
+ * orphan every subtask, and a DROP with foreign keys live would cascade the
+ * children away. So: foreign keys off, one transaction, every row copied with
+ * its parent, `PRAGMA foreign_key_check` before the commit rather than after.
+ * The `finally` restores the pragma whether the rebuild committed or threw.
+ *
+ * Indexes are replayed from their own CREATE statements rather than re-typed
+ * here. Six index definitions live across two files (the tasks app's schema
+ * fragment and the `kind` index above); reading them back out of sqlite_master
+ * means a seventh added later is carried across without touching this function.
+ *
+ * Data migration: 'open' → 'todo', everything else copied as it stands. There
+ * is no fallback for an unrecognised status — the new CHECK rejects it and the
+ * transaction rolls back, which is the loud failure such a row deserves.
+ */
+function rebuildTasksStatusIfLegacy(db: DatabaseClient): void {
+  const table = db
+    .prepare<TableSqlRow, []>("SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'")
+    .get();
+  if (!table || table.sql === null) return;
+  if (table.sql.includes("'doing'")) return;
+
+  const indexes = db
+    .prepare<TableSqlRow, []>(
+      "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='tasks' AND sql IS NOT NULL",
+    )
+    .all();
+
+  // The pragma is a no-op inside a transaction, so it has to be set around one.
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE tasks_stage2 (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          parent_id     INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
+          title         TEXT    NOT NULL,
+          notes         TEXT    NOT NULL DEFAULT '',
+          status        TEXT    NOT NULL CHECK (status IN ('todo','doing','blocked','done')),
+          kind          TEXT    NOT NULL DEFAULT 'task' CHECK (kind IN ('project','epic','task')),
+          defer_until   TEXT,
+          due_at        TEXT,
+          created_by    INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+          assigned_to   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          updated_by    INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+          created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+          updated_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+          completed_at  TEXT,
+          deleted_at    TEXT,
+          position      INTEGER NOT NULL DEFAULT 0,
+          CHECK ((status = 'done') = (completed_at IS NOT NULL))
+        );
+        INSERT INTO tasks_stage2
+          (id, parent_id, title, notes, status, kind, defer_until, due_at, created_by,
+           assigned_to, updated_by, created_at, updated_at, completed_at, deleted_at, position)
+          SELECT id, parent_id, title, notes,
+                 CASE status WHEN 'open' THEN 'todo' ELSE status END,
+                 kind, defer_until, due_at, created_by,
+                 assigned_to, updated_by, created_at, updated_at, completed_at, deleted_at, position
+            FROM tasks;
+        DROP TABLE tasks;
+        ALTER TABLE tasks_stage2 RENAME TO tasks;
+      `);
+      for (const index of indexes) {
+        // Stryker disable next-line all -- defensive: the query already filters
+        // `sql IS NOT NULL`, so this narrowing is unreachable. Kept because the
+        // column's type is nullable and dropping the guard would need a cast.
+        if (index.sql === null) continue;
+        db.exec(index.sql);
+      }
+      // Belt and braces on the one relationship a bad copy would break. Runs
+      // inside the transaction so a violation rolls the whole rebuild back
+      // rather than leaving a half-migrated table on disk.
+      const orphans = db.prepare<{ rowid: number }, []>('PRAGMA foreign_key_check(tasks)').all();
+      if (orphans.length > 0) {
+        throw new Error(
+          `[schema] tasks status rebuild left ${orphans.length} broken foreign key reference(s); rolled back`,
+        );
+      }
+    })();
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
 
 /**
  * Drop and rebuild family_phone_devices when the on-disk shape is the

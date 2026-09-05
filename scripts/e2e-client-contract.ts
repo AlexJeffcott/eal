@@ -149,6 +149,25 @@ async function main(): Promise<number> {
       throw new Error('completeTask did not set completedAt');
     }
 
+    // ─── Step 7b: setTaskStatus shape — the board's lane move ──────────────
+    // The mock is what the browser tier drives, so a lane it moves cards into
+    // differently from the api is a green tier that proves nothing.
+    const realBlocked = await real.setTaskStatus(realTask.id, 'blocked');
+    const mockBlocked = await mock.setTaskStatus(mockTask.id, 'blocked');
+    assertShape('setTaskStatus', realBlocked, mockBlocked);
+    if (realBlocked.status !== 'blocked' || mockBlocked.status !== 'blocked') {
+      throw new Error(
+        `setTaskStatus did not land in blocked: real=${realBlocked.status} mock=${mockBlocked.status}`,
+      );
+    }
+    // Leaving Done clears the completion timestamp on both sides — the tie the
+    // storage CHECK enforces server-side and the mock has to mirror.
+    if (realBlocked.completedAt !== null || mockBlocked.completedAt !== null) {
+      throw new Error(
+        `setTaskStatus left a completedAt behind: real=${realBlocked.completedAt} mock=${mockBlocked.completedAt}`,
+      );
+    }
+
     // ─── Step 8: deleteTask shape — soft delete, row stays ─────────────────
     const realGone = await real.deleteTask(realTask.id);
     const mockGone = await mock.deleteTask(mockTask.id);
