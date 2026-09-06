@@ -50,6 +50,14 @@ export async function ensurePushSubscription(): Promise<SerializedPushSubscripti
   if (!pushSupported()) return null;
   if (Notification.permission !== 'granted') return null;
 
+  // `navigator.serviceWorker.ready` never settles when nothing is registered —
+  // not a rejection, not a timeout, just a promise that hangs for the life of
+  // the page. Measured in the browser tier: a control that awaited it sat on
+  // "Just a moment…" until the 5s test timeout and would have sat there
+  // forever in a real tab. `getRegistration()` resolves either way, so ask it
+  // first and treat "no registration" as the recoverable failure it is.
+  const registered = await navigator.serviceWorker.getRegistration();
+  if (!registered) return null;
   const registration = await navigator.serviceWorker.ready;
 
   let publicKey: string;
@@ -97,7 +105,12 @@ export async function ensurePushSubscription(): Promise<SerializedPushSubscripti
 export async function dropPushSubscription(): Promise<string | null> {
   if (!pushSupported()) return null;
   try {
-    const registration = await navigator.serviceWorker.ready;
+    // `getRegistration()`, not `.ready`, for the reason spelled out above: with
+    // nothing registered `.ready` hangs forever, and unsubscribing does not
+    // need an *active* worker anyway — only a registration that might hold a
+    // subscription. No registration, nothing to drop.
+    const registration = await navigator.serviceWorker.getRegistration();
+    if (!registration) return null;
     const existing = await registration.pushManager.getSubscription();
     if (!existing) return null;
     const endpoint = existing.endpoint;

@@ -217,3 +217,26 @@
   border-block-start: var(--polly-border-width-default) solid var(--polly-border);
   padding-block-start: var(--polly-space-sm);
 }
+
+/*
+ * Reminders.
+ *
+ * The two states that offer a tap are thumb-sized for the same reason every
+ * other control in this panel is: at the 350px floor a polly small Button
+ * measures short in the block axis, and this is a control whose two outcomes —
+ * "the phone will buzz for deadlines" and "it will not" — are worth a
+ * deliberate tap rather than a near miss. Set on the control, not by padding
+ * inside it, so the label keeps its own metrics.
+ *
+ * The denied state is a sentence, not a button: nothing eal renders can undo a
+ * site-level block, so there is nothing to make thumb-sized. It wraps rather
+ * than overflowing — the sentence is longer than 350px allows on one line.
+ */
+[data-action='tasks:enable-reminders'],
+[data-action='tasks:disable-reminders'] {
+  min-block-size: 44px;
+}
+
+[data-tasks-reminders] {
+  overflow-wrap: anywhere;
+}

@@ -42,6 +42,43 @@ Every value is required — the server has no fallbacks and fails loud at boot.
 The replica config (`deploy/litestream.yml`) is plain S3 driven by these env
 vars — Fly's **Tigris** is the natural fit, but any S3-compatible store works.
 
+### Web Push (due-date reminders)
+
+Due-date reminders are **off by default**. The 60-second scan that fires them
+runs inside the api process and starts only when all three VAPID values are
+set; with none of them set it logs that reminders are off and starts nothing,
+and with only some of them set the api **fails to boot** — there is no
+half-configured push identity (`loadPushVapidConfig`,
+`packages/api/src/handlers/push.http.ts`).
+
+Subscriptions are accepted either way, so a browser that has already tapped
+"Remind me" starts being delivered to as soon as the keys are set. Nothing
+needs re-tapping.
+
+| Variable | Secret? | Example | Notes |
+|---|---|---|---|
+| `EAL_VAPID_PUBLIC_KEY` | no | `BJ…` (87 chars) | The application server key the SPA binds its subscription to. Served to any client at `/public/push/vapid-public-key`; it is public by design. |
+| `EAL_VAPID_PRIVATE_KEY` | **yes** | — | Signs every push. Anyone holding it can push to every subscribed browser. |
+| `EAL_VAPID_SUBJECT` | no | `mailto:you@example.com` | Contact the push vendor can reach. Must start with `mailto:` or `https://`; the api refuses to boot otherwise. |
+| `EAL_REMINDER_TICK_MS` | no | — | **Do not set in production.** The scan's cadence, defaulting to 60000. It exists so `scripts/e2e-task-reminder.ts` can watch several passes in a few seconds. Set to anything but a positive integer, the api fails to boot. |
+
+Generate the pair with the `web-push` CLI that ships inside `packages/api`:
+
+```sh
+bun packages/api/node_modules/.bin/web-push generate-vapid-keys
+fly secrets set EAL_VAPID_PRIVATE_KEY=… EAL_VAPID_PUBLIC_KEY=… \
+  EAL_VAPID_SUBJECT=mailto:you@example.com
+```
+
+**Not done.** As of 2026-09-06 no VAPID pair has been generated and none of the
+three secrets is set on Fly, so the deployed instance accepts subscriptions and
+sends nothing. The code is built and verified locally
+(`scripts/e2e-task-reminder.ts`); this is the owner's step.
+
+**iOS caveat, not measured.** iOS delivers Web Push only to a PWA that has been
+added to the home screen, on iOS 16.4 and later. That has not been verified on
+the owner's phone. Test it there before counting reminders as working.
+
 ### Twilio PSTN trunk (Phase 7)
 
 The family-phone PSTN trunk is **off by default**. It mounts only when

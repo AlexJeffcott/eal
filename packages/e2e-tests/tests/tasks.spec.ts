@@ -447,6 +447,52 @@ test.describe('tasks at the 350px floor', () => {
     expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
   });
 
+  test('the reminder control fits, is thumb-sized, and says where this browser stands', async ({
+    page,
+  }) => {
+    // Stage 4's only surface, in both the states this harness can reach.
+    //
+    // Playwright's Chromium denies notifications unless a test grants them, so
+    // the state a fresh context lands in is `denied` — which renders a sentence
+    // and no button, because nothing eal draws can undo a site-level block. It
+    // is also the longest thing this control ever renders, so it is the case
+    // that would push the document sideways.
+    await expect(page.locator('[data-tasks-reminders][data-reminder-state="denied"]')).toBeVisible();
+    await expect(page.locator('[data-action="tasks:enable-reminders"]')).toHaveCount(0);
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+
+    // The other state — the one that offers the tap, and so the one worth
+    // measuring. `grantPermissions(['notifications'])` does not move
+    // `Notification.permission` off 'denied' in this harness (measured: the
+    // control still rendered the denied sentence after a grant and a reload),
+    // so the permission the page reads is pinned before any page script runs.
+    // Nothing else is stubbed: the panel, the boot path and the store are the
+    // real ones, and they are what decides what renders.
+    await page.addInitScript(() => {
+      Object.defineProperty(Notification, 'permission', {
+        get: () => 'default',
+        configurable: true,
+      });
+    });
+    await page.reload();
+    await expect(page.locator('[data-tasks-panel]')).toBeVisible();
+    await expect(page.locator('[data-tasks-reminders][data-reminder-state="off"]')).toBeVisible();
+
+    const remind = page.locator('[data-action="tasks:enable-reminders"]');
+    await expect(remind).toBeVisible();
+    await expect(remind).toHaveText('Remind me');
+    const box = await remind.boundingBox();
+    if (box === null) throw new Error('the reminder control has no bounding box');
+    // The same 44px floor every other control in this panel is held to: its two
+    // outcomes — the phone buzzes for deadlines, or it does not — are worth a
+    // deliberate tap rather than a near miss.
+    expect(
+      Math.round(box.height),
+      `the reminder control measured ${Math.round(box.width)}×${Math.round(box.height)}`,
+    ).toBeGreaterThanOrEqual(44);
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+  });
+
   test('the filter builder fits with two conditions added', async ({ page }) => {
     await page.locator('[data-action="tasks:add-condition"][data-action-field="status"]').click();
     await page.locator('[data-action="tasks:add-condition"][data-action-field="due"]').click();
@@ -668,6 +714,9 @@ test.describe('tasks at the 350px floor', () => {
       ['view next', '[data-action="tasks:set-view"][data-action-view="next"]'],
       ['view all', '[data-action="tasks:set-view"][data-action-view="all"]'],
       ['view trash', '[data-action="tasks:set-view"][data-action-view="trash"]'],
+      // Stage 4's control is measured in its own case above, not here: this
+      // context denies notifications, so what renders is the denied sentence
+      // and there is no button to measure until the permission is granted.
     ];
     const measured: Array<[string, number, number]> = [];
     for (const [label, selector] of targets) {

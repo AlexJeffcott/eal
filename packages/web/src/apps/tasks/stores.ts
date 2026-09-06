@@ -38,6 +38,19 @@ export const $boardLane = $state<TaskStatus>('todo');
 /** The household roster — populates the assignee picker in the task editor. */
 export const $householdUsers = $state<HouseholdMember[]>([]);
 
+/**
+ * Whether this browser will buzz when a deadline passes.
+ *
+ * Five states rather than a boolean, because "off" and "denied" need different
+ * words: `off` is a tap away, `denied` is only reachable through the browser's
+ * own site settings and no button in eal can undo it. `unsupported` hides the
+ * control entirely — a browser with no PushManager will never have one — and
+ * `working` covers the permission prompt and the vendor round-trip, which on a
+ * cold service worker takes long enough to look stuck.
+ */
+export type ReminderState = 'unsupported' | 'off' | 'working' | 'on' | 'denied';
+export const $reminderState = $state<ReminderState>('off');
+
 export interface TasksStores {
   $tasksById: typeof $tasksById;
   $tasksError: typeof $tasksError;
@@ -47,6 +60,7 @@ export interface TasksStores {
   $expandedTaskIds: typeof $expandedTaskIds;
   $boardLane: typeof $boardLane;
   $householdUsers: typeof $householdUsers;
+  $reminderState: typeof $reminderState;
 }
 
 export function createTasksStores(): TasksStores {
@@ -59,6 +73,7 @@ export function createTasksStores(): TasksStores {
     $expandedTaskIds,
     $boardLane,
     $householdUsers,
+    $reminderState,
   };
 }
 
@@ -71,4 +86,5 @@ export function resetTasksStores(): void {
   $expandedTaskIds.value = new Set();
   $boardLane.value = 'todo';
   $householdUsers.value = [];
+  $reminderState.value = 'off';
 }

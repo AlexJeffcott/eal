@@ -4,6 +4,7 @@ import webpush from 'web-push';
 import { createDb, type DatabaseClient } from './db/client.ts';
 import { getPrincipal } from './auth/principals.ts';
 import { loadPushVapidConfig } from './handlers/push.http.ts';
+import { startAppBackground } from './apps/background.ts';
 import { createAppInternal } from './server-factory.ts';
 
 export { type App } from './server-factory.ts';
@@ -49,7 +50,13 @@ export function createApp(db: DatabaseClient) {
   return createAppInternal(db, (request) => getPrincipal(request, db));
 }
 
-export const app = await createApp(createDb(resolveDatabasePath()));
+/**
+ * Held rather than inlined into `createApp` below: `bootServer` needs the same
+ * handle to start the installed apps' background workers against.
+ */
+const db = createDb(resolveDatabasePath());
+
+export const app = await createApp(db);
 
 /**
  * TLS handling. The server binds plaintext only when SKIP_TLS=1 — two cases
@@ -93,6 +100,16 @@ function resolvePort(): number {
 async function bootServer(): Promise<void> {
   const tlsResolution = resolveTls();
   const port = resolvePort();
+
+  // The one place an installed app's background worker is started. Deliberately
+  // inside `bootServer`, which runs only under `import.meta.main` — importing
+  // this module for its `app` export (as the SPA build and the type-only
+  // consumers do) starts no loops, and `createTestApp` cannot reach this line
+  // at all. See apps/background.ts.
+  const background = startAppBackground({ db, env: process.env });
+  if (background.started.length > 0) {
+    console.log(`EAL_API_BACKGROUND started=${background.started.join(',')}`);
+  }
 
   const server = 'tls' in tlsResolution
     ? app.listen({ port, tls: tlsResolution.tls })

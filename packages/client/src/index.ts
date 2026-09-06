@@ -7,6 +7,7 @@ export type {
   CurrentUser,
   HouseholdMember,
 } from './auth-types.ts';
+export type { PushSubscriptionInput } from './types.ts';
 export type {
   CloneTaskResult,
   CreateTaskInput,

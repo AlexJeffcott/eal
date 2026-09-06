@@ -15,10 +15,10 @@ pre-commit hook runs `devctl check` and the unit tier only.
 | Command | Passing count, 2026-09-06 | Runs in the pre-push sweep |
 |---|---|---|
 | `bun devctl check` | tsc + 7 lint scripts | yes |
-| `bun devctl test unit` | 1251 tests, 103 files; coverage ok, 133 files, 27 exempt | yes |
-| `bun devctl test browser` | 96 tests | yes |
-| `bun devctl test e2e` | 50 Playwright tests, 2 projects | yes |
-| `bun devctl test multi` | 24 `scripts/e2e-*.ts`, each exiting 0 | yes |
+| `bun devctl test unit` | 1316 tests, 106 files; coverage ok, 138 files, 28 exempt | yes |
+| `bun devctl test browser` | 103 tests | yes |
+| `bun devctl test e2e` | 52 Playwright tests, 2 projects | yes |
+| `bun devctl test multi` | 25 `scripts/e2e-*.ts`, each exiting 0 | yes |
 | `bun devctl test mutation` | see below — not part of `all` | no |
 | `bun devctl verify` | TLC: `tasks` ✓ 7.4s, `pairing` ✓ 1.8s, **`auth` never finishes** — see below | no |
 
@@ -39,6 +39,12 @@ open, expected todo — the status rebuild did not run` when
 fails with `the sequential column is not on the table after boot — the status
 rebuild ate it` when its `ensureColumn` is moved above
 `rebuildTasksStatusIfLegacy` — all four checked, not assumed.
+
+It also includes `e2e-task-reminder.ts` (stage 4's due-date reminders, driven
+against a local HTTPS server impersonating a push vendor, with the payload
+decrypted). With the `reminded_at` stamp removed from the scan it fails with
+`the first deadline was announced 2 times across 3 pushes: [...]` — checked,
+not assumed.
 
 Every tier runs with the developer's own `.env` in place and needs no
 environment override. Tests take their config explicitly: `createTestApp`
@@ -86,14 +92,20 @@ what remains there is a machine to install it on.
       and recovers on its own, and unit templates in `deploy/`. Proved by
       `scripts/e2e-agent-offline.ts`. **Still open: pick the machine, pair it,
       install the unit, stop it sleeping.** → `docs/plans/03-always-on-agent.md`
-- [ ] **04 — Due-date reminders.** Push is configured
-      (`handlers/push.http.ts:36`) but the only sender is the missed-call wake
-      path, subscriptions are stored against a family-phone device
-      (`apps/family-phone.ts:112`), and `due_at` triggers nothing. Needs a
-      user-level subscription table, the two subscribe routes that
-      `push.http.ts`'s own header comment already promises, and a 60-second
-      scan in the api process. → `docs/plans/04-due-date-reminders.md` ·
-      ~2–3 days
+- [>] **04 — Due-date reminders.** Built 2026-09-06; **not deployed**. There is
+      now a `push` app owning a user-level `push_subscriptions` table, the two
+      subscribe/unsubscribe routes `push.http.ts`'s header comment has promised
+      since v1, a `tasks.reminded_at` column, a 60-second scan inside the api
+      process (`handlers/task-reminders.ts`), and a "Remind me" control in the
+      tasks panel. Proved by `scripts/e2e-task-reminder.ts`, which stands up a
+      fake push vendor over HTTPS and decrypts the payload it receives.
+      **Still open: generate a VAPID pair and set the three `EAL_VAPID_*`
+      secrets on Fly** (`docs/deploy.md` carries the table and the command),
+      **and then confirm on the owner's phone** — iOS delivers Web Push only to
+      a PWA added to the home screen, iOS 16.4+, and that has not been tested.
+      Until the secrets are set the deployed instance accepts subscriptions and
+      sends nothing, which it says at boot.
+      → `docs/plans/04-due-date-reminders.md`
 - [ ] **Ordering the work inside a project.** `sequential` (stage 3) decides
       *whether* a container hands out one step at a time; which step is first is
       `(position, id)`, and `position` is only ever set by insertion order —
@@ -171,6 +183,22 @@ user-facing feature works.
       it stands. Getting the two verdicts means dropping the `auth` block below
       for the run — with it in place, `auth` runs first and nothing after it is
       reached.
+
+      Re-run again 2026-09-06 after stage 4, same two verdicts (`tasks` ✓ 7.4s,
+      `pairing` ✓ 1.7s), and `git diff specs/verification.config.ts` empty
+      afterwards. **`reminded_at` is deliberately not modelled.** It is a
+      two-state lifecycle per task — unreminded ⇄ reminded — and exactly one of
+      its two transitions is an HTTP handler: `PATCH /:id` clears the stamp when
+      `due_at` moves. The other, the one that sets it, lives in a background
+      loop, and polly's analyzer extracts `requires`/`ensures`/assignments from
+      route handlers only — the same reason `ws.state` and `call.state` have
+      shadow modules but no subsystem. A machine with one anchorable transition
+      would explore a state space that can only ever go one way: it would prove
+      nothing while claiming coverage, which is worse than not modelling it.
+      The property that matters — one reminder per deadline, across restarts —
+      is instead held by the `reminded_at IS NULL` guard on `markReminded`
+      (unit-tested), and by `scripts/e2e-task-reminder.ts` watching three
+      consecutive scans over a still-overdue task.
 - [!] **The `auth` subsystem does not finish.** Two runs, 2245s and 1580s of
       TLC wall time, neither reaching a verdict; both were killed, and the
       `✗ auth` line in the report is that kill, not a violated invariant. It

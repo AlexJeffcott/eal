@@ -45,6 +45,7 @@ describe('applySchema', () => {
       'family_phone_push_subscriptions',
       'family_phone_voice_messages',
       'messages',
+      'push_subscriptions',
       'sessions',
       'tasks',
       'users',
@@ -67,6 +68,7 @@ describe('applySchema', () => {
       'notes',
       'parent_id',
       'position',
+      'reminded_at',
       'sequential',
       'status',
       'title',
@@ -337,8 +339,8 @@ describe('applySchema', () => {
     expect(userCols).toEqual(['created_at', 'display_name', 'id', 'in_ivr_menu']);
 
     const taskCols = columns(db, 'tasks').map((c) => c.name);
-    // Same set after the second apply. 17 since stage 3 added `sequential`.
-    expect(taskCols.length).toBe(17);
+    // Same set after the second apply. 18 since stage 4 added `reminded_at`.
+    expect(taskCols.length).toBe(18);
   });
 
   test('schema preserves rows across repeat applySchema calls', () => {
@@ -547,6 +549,66 @@ describe('applySchema', () => {
     ]);
   });
 
+  test('reminded_at survives an upgrade from the pre-stage-2 shape, and starts NULL', () => {
+    // The stage-3 trap, one column later, and it does not get safer with
+    // repetition. `rebuildTasksStatusIfLegacy` copies `tasks` through a
+    // hand-written column list in both its CREATE and its INSERT…SELECT, so an
+    // ensureColumn placed before it loses its column on exactly the database
+    // this test starts from — no error, no log, just a column that is not
+    // there and a reminder scan that throws on every tick.
+    //
+    // Moving the `reminded_at` ensureColumn above `rebuildTasksStatusIfLegacy`
+    // in db/schema.ts fails this test at the first expect.
+    seedPreStatusTasks(db);
+    db.exec(`
+      INSERT INTO tasks (id, parent_id, title, status, kind, due_at, position, created_by, updated_by)
+      VALUES (1, NULL, 'Bins out', 'open', 'task', '2026-01-01', 0, 1, 1),
+             (2, NULL, 'No deadline', 'open', 'task', NULL, 1, 1, 1);
+    `);
+
+    applySchema(db);
+
+    expect(columns(db, 'tasks').map((c) => c.name)).toContain('reminded_at');
+    interface RemindedRow { id: number; reminded_at: string | null; due_at: string | null }
+    expect(
+      db
+        .prepare<RemindedRow, []>('SELECT id, reminded_at, due_at FROM tasks ORDER BY id')
+        .all(),
+    ).toEqual([
+      // Every migrated row starts unreminded, including one whose deadline is
+      // years past. That is the deliberate choice: the scan will fire once for
+      // it on the first tick after the upgrade, rather than the migration
+      // silently deciding those deadlines were already dealt with.
+      { id: 1, reminded_at: null, due_at: '2026-01-01' },
+      { id: 2, reminded_at: null, due_at: null },
+    ]);
+
+    // The partial index the scan reads is on the rebuilt table too, and it is
+    // partial: a row with no deadline is not in it.
+    interface IndexSqlRow { sql: string }
+    const index = db
+      .prepare<IndexSqlRow, []>(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_tasks_due_reminder'",
+      )
+      .get();
+    expect(index?.sql).toContain('reminded_at IS NULL');
+  });
+
+  test('reminded_at set by hand survives a repeat apply', () => {
+    applySchema(db);
+    db.prepare("INSERT INTO users (display_name) VALUES ('alex')").run();
+    db.exec(
+      "INSERT INTO tasks (title, status, due_at, reminded_at, created_by, updated_by)" +
+        " VALUES ('x', 'todo', '2026-01-01', '2026-01-01 09:00:00', 1, 1)",
+    );
+    applySchema(db);
+    applySchema(db);
+    interface RemindedRow { reminded_at: string | null }
+    expect(
+      db.prepare<RemindedRow, []>('SELECT reminded_at FROM tasks').get()?.reminded_at,
+    ).toBe('2026-01-01 09:00:00');
+  });
+
   test("the status rebuild maps 'open' to 'todo' and carries every row across", () => {
     seedPreStatusTasks(db);
     const DONE_AT = '2026-03-01 09:15:00';
@@ -606,6 +668,10 @@ describe('applySchema', () => {
       'idx_tasks_assigned_to',
       'idx_tasks_defer_until',
       'idx_tasks_deleted_at',
+      // Created after the rebuild, not replayed by it: it filters on
+      // `reminded_at`, whose ensureColumn also runs after the rebuild. The
+      // ordering is the whole hazard — see the stage-4 test below.
+      'idx_tasks_due_reminder',
       'idx_tasks_kind',
       'idx_tasks_parent_position',
       'idx_tasks_status',
@@ -676,11 +742,13 @@ describe('applySchema', () => {
       'idx_family_phone_push_subs_device_id',
       'idx_family_phone_voice_messages_to_read',
       'idx_messages_created_by',
+      'idx_push_subscriptions_user_id',
       'idx_sessions_expires_at',
       'idx_sessions_user_id',
       'idx_tasks_assigned_to',
       'idx_tasks_defer_until',
       'idx_tasks_deleted_at',
+      'idx_tasks_due_reminder',
       'idx_tasks_kind',
       'idx_tasks_parent_position',
       'idx_tasks_status',

@@ -7,7 +7,7 @@
  * flakes on a loaded machine, too long and every run wastes that time. The
  * guess is never right, only un-noticed.
  *
- * This file is the single sanctioned home for timer-backed waiting. Three
+ * This file is the single sanctioned home for timer-backed waiting. Four
  * primitives, each for a distinct intent:
  *
  * - `pollUntil(condition, opts)` — wait for something to become true. Re-checks
@@ -20,6 +20,9 @@
  * - `delay(ms)` — the one sanctioned fixed delay. Legal ONLY where the wait
  *   itself is the intended behaviour: retry/reconnect backoff, the cadence
  *   between polls of an external service. Never to "give the code a moment".
+ * - `createStoppableDelay()` — the same cadence, for a loop that must be able to
+ *   shut down between passes. Stopping it resolves every wait in flight and
+ *   clears its timer, so a stopped loop leaves nothing holding the process open.
  */
 
 /** Options for {@link pollUntil}. */
@@ -103,4 +106,65 @@ export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+/**
+ * A `delay` a loop can stop waiting on.
+ *
+ * `delay` is the right primitive for a poll cadence, and the wrong one for a
+ * loop that must be able to shut down: `stop()` sets a flag the loop only reads
+ * *after* the wait, so stopping a loop mid-interval means waiting out the rest
+ * of it — sixty seconds for the reminder scan, an hour for a test that pinned a
+ * long interval so it would not tick. Worse, the pending `setTimeout` keeps the
+ * process alive for that whole time, which turns "the loop is stopped" into
+ * "the tier hangs".
+ *
+ * This is `delay` plus a way out: `stop()` resolves every wait in flight and
+ * **clears its timer**, so nothing is left holding the event loop open, and
+ * every later `wait` returns already-resolved rather than starting a timer that
+ * will never matter.
+ *
+ * The wait itself is still the behaviour — this is a cadence, not a guess about
+ * how long something takes — which is why it belongs beside `delay` rather than
+ * being replaced by `pollUntil`.
+ */
+export interface StoppableDelay {
+  /** Resolve after `ms`, or at once if `stop()` has been (or is) called. */
+  wait(ms: number): Promise<void>;
+  /** Resolve every wait now and refuse to start new ones. Idempotent. */
+  stop(): void;
+  readonly stopped: boolean;
+}
+
+export function createStoppableDelay(): StoppableDelay {
+  let stopped = false;
+  const pending = new Set<() => void>();
+
+  return {
+    get stopped(): boolean {
+      return stopped;
+    },
+    wait(ms: number): Promise<void> {
+      if (stopped) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        const handle = setTimeout(() => {
+          pending.delete(release);
+          resolve();
+        }, ms);
+        const release = (): void => {
+          clearTimeout(handle);
+          resolve();
+        };
+        pending.add(release);
+      });
+    },
+    stop(): void {
+      stopped = true;
+      // Copied before iterating: each release deletes nothing from `pending`
+      // itself, but clearing the set first would drop the handles unreleased.
+      const releases = Array.from(pending);
+      pending.clear();
+      for (const release of releases) release();
+    },
+  };
 }

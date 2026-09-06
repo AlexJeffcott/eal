@@ -74,6 +74,10 @@ export const config: CoverageConfig = {
       reason: 'tasks action dispatchers run in the polly browser tier',
       claimedBy: 'packages/web/tests/browser/tasks.browser.tsx',
     },
+    'packages/web/src/platform/push.ts': {
+      reason: 'Web Push browser adapter — ServiceWorkerRegistration, PushManager.subscribe and Notification.requestPermission only exist, and only behave, in a real browser; a unit test here would exercise its own stubs. The reminder control drives pushPermission/requestPushPermission/dropPushSubscription in a real Chrome in the browser tier, and scripts/e2e-task-reminder.ts proves the server half of the same path end to end',
+      claimedBy: 'packages/web/tests/browser/tasks.browser.tsx',
+    },
     'packages/web/src/apps/family-phone/audio.ts': {
       reason: 'WebAudio capture/playback — AudioWorklet + getUserMedia only meaningful in a real browser',
       claimedBy: 'n/a — exercised by manual two-browser call session',

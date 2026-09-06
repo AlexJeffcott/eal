@@ -20,6 +20,7 @@ import type {
   TaskStatus,
   UpdateTaskInput,
 } from './task-types.ts';
+import type { PushSubscriptionInput } from './types.ts';
 import type {
   ChatAgentReply,
   ChatAgentRequest,
@@ -246,6 +247,17 @@ export interface EalClient {
   cloneTask(id: number): Promise<CloneTaskResult>;
   /** Fires for task:created, task:updated, task:deleted, task:tree-cloned. */
   subscribeTaskEvents(handler: (event: TaskEvent) => void): () => void;
+
+  // ── Web Push, per person ─────────────────────────────────────────────────
+  /**
+   * File this browser's push subscription against the signed-in person, so a
+   * due date can reach them with eal closed. The triple comes from
+   * `ensurePushSubscription()` in the web package, which can only produce it
+   * after a permission grant from a real user gesture.
+   */
+  subscribeUserPush(input: PushSubscriptionInput): Promise<{ endpoint: string }>;
+  /** Forget a subscription. Idempotent — an endpoint already gone reports false. */
+  unsubscribeUserPush(endpoint: string): Promise<{ removed: boolean }>;
 
   // ── Family-phone ─────────────────────────────────────────────────────────
   /** The signed-in user's family-phone devices. */
@@ -903,6 +915,18 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
     async setTaskStatus(id, status): Promise<Task> {
       const { task } = await postJson<{ task: Task }>(`/api/v1/tasks/${id}/status`, { status });
       return task;
+    },
+
+    async subscribeUserPush(input): Promise<{ endpoint: string }> {
+      const { subscription } = await postJson<{ subscription: { endpoint: string } }>(
+        '/api/v1/push/subscribe',
+        input,
+      );
+      return { endpoint: subscription.endpoint };
+    },
+
+    async unsubscribeUserPush(endpoint): Promise<{ removed: boolean }> {
+      return postJson<{ removed: boolean }>('/api/v1/push/unsubscribe', { endpoint });
     },
 
     async deleteTask(id): Promise<Task> {

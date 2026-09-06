@@ -98,6 +98,8 @@ function makeClient(): FakeClient {
     completeTask: notImplemented('completeTask'),
     reopenTask: notImplemented('reopenTask'),
     setTaskStatus: notImplemented('setTaskStatus'),
+    subscribeUserPush: notImplemented('subscribeUserPush'),
+    unsubscribeUserPush: notImplemented('unsubscribeUserPush'),
     deleteTask: notImplemented('deleteTask'),
     restoreTask: notImplemented('restoreTask'),
     cloneTask: notImplemented('cloneTask'),

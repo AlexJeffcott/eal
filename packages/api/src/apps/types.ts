@@ -94,6 +94,25 @@ export interface ApiAppContext {
 }
 
 /**
+ * What an app's background worker is built against. Deliberately narrower than
+ * `ApiAppContext`: a worker has no request, so no principal to resolve, and it
+ * addresses people rather than sockets.
+ */
+export interface ApiAppBackgroundContext {
+  db: DatabaseClient;
+  /** See `WsAppContext.env`. */
+  env: NodeJS.ProcessEnv;
+}
+
+/**
+ * A running background worker. `stop()` must be idempotent and must leave no
+ * timer able to keep the process alive.
+ */
+export interface ApiAppBackgroundTask {
+  stop(): void;
+}
+
+/**
  * An API app — a slice of database schema plus a route plugin — composed into
  * the server by server-factory. Global concerns (auth, users, the chat relay)
  * are NOT apps: they are always present regardless of which apps are installed.
@@ -124,4 +143,21 @@ export interface ApiApp {
     binaryTag?: number;
     handler: (ctx: WsAppContext) => WsMessageHandler;
   };
+  /**
+   * Optional background worker — a loop, a scan, anything that runs on its own
+   * clock rather than in answer to a request.
+   *
+   * **Building the app does not start it.** `createAppInternal` never calls
+   * this, and so neither does `createTestApp`: 1251 unit tests build a test app
+   * apiece, and a sixty-second interval leaking into each one would either hang
+   * the tier or fire real sends from a test that never asked to. The only
+   * caller is `startAppBackground` (apps/background.ts), and its only caller is
+   * `bootServer` in server.ts — the one place a long-lived process exists.
+   * `apps/background.test.ts` holds both halves of that claim.
+   *
+   * Return `null` to decline: an app whose worker is unconfigured (no VAPID
+   * keypair, say) says so at boot and starts nothing, rather than starting
+   * something that cannot work.
+   */
+  start?: (ctx: ApiAppBackgroundContext) => ApiAppBackgroundTask | null;
 }

@@ -437,6 +437,169 @@ describe('tasks repo', () => {
     });
   });
 
+  describe('the reminder columns', () => {
+    test('a new task is unreminded, whatever its deadline', () => {
+      const row = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, dueAt: '2020-01-01', title: 'long overdue' }),
+      );
+      expect(row.reminded_at).toBeNull();
+    });
+
+    test('markReminded stamps once and refuses a second time', () => {
+      const row = ctx.tasks.insert(defaults({ createdBy: ctx.alex, dueAt: '2026-01-01' }));
+      expect(ctx.tasks.markReminded(row.id, '2026-01-01 09:00:00')).toBe(true);
+      expect(ctx.tasks.findById(row.id)?.reminded_at).toBe('2026-01-01 09:00:00');
+      // The second call is what a second tick would do. It must change nothing:
+      // this is the guard that makes two overlapping scans harmless.
+      expect(ctx.tasks.markReminded(row.id, '2026-01-01 09:01:00')).toBe(false);
+      expect(ctx.tasks.findById(row.id)?.reminded_at).toBe('2026-01-01 09:00:00');
+    });
+
+    test('markReminded will not stamp a trashed task', () => {
+      const row = ctx.tasks.insert(defaults({ createdBy: ctx.alex, dueAt: '2026-01-01' }));
+      ctx.tasks.softDelete(row.id, { updatedBy: ctx.alex });
+      expect(ctx.tasks.markReminded(row.id, '2026-01-01 09:00:00')).toBe(false);
+    });
+
+    test('markReminded leaves updated_at and updated_by alone', () => {
+      const row = ctx.tasks.insert(defaults({ createdBy: ctx.alex, dueAt: '2026-01-01' }));
+      ctx.clock.now = '2026-06-01 12:00:00';
+      ctx.tasks.markReminded(row.id, '2026-06-01 12:00:00');
+      const after = ctx.tasks.findById(row.id);
+      // The scan is not a person editing the task. Touching these would push
+      // every overdue row to the top of a recently-changed ordering at whatever
+      // minute it happened to fire.
+      expect(after?.updated_at).toBe(row.updated_at);
+      expect(after?.updated_by).toBe(row.updated_by);
+    });
+
+    test('moving the deadline clears the stamp; re-writing the same one does not', () => {
+      const row = ctx.tasks.insert(defaults({ createdBy: ctx.alex, dueAt: '2026-01-01' }));
+      ctx.tasks.markReminded(row.id, '2026-01-01 09:00:00');
+
+      const same = ctx.tasks.update(row.id, { dueAt: '2026-01-01', updatedBy: ctx.alex });
+      expect(same?.reminded_at).toBe('2026-01-01 09:00:00');
+
+      const moved = ctx.tasks.update(row.id, { dueAt: '2026-02-01', updatedBy: ctx.alex });
+      expect(moved?.reminded_at).toBeNull();
+    });
+
+    test('clearing the deadline clears the stamp, and a null-to-null write does not', () => {
+      const row = ctx.tasks.insert(defaults({ createdBy: ctx.alex, dueAt: '2026-01-01' }));
+      ctx.tasks.markReminded(row.id, '2026-01-01 09:00:00');
+      expect(ctx.tasks.update(row.id, { dueAt: null, updatedBy: ctx.alex })?.reminded_at).toBeNull();
+
+      // And the symmetric case: a stamped row with no deadline, written null
+      // again, keeps its stamp. `IS` rather than `=` is what makes this work —
+      // SQL equality on two NULLs is unknown, which would clear it.
+      ctx.tasks.markReminded(row.id, '2026-01-02 09:00:00');
+      expect(ctx.tasks.update(row.id, { dueAt: null, updatedBy: ctx.alex })?.reminded_at).toBe(
+        '2026-01-02 09:00:00',
+      );
+    });
+
+    test('an edit that does not touch the deadline leaves the stamp alone', () => {
+      const row = ctx.tasks.insert(defaults({ createdBy: ctx.alex, dueAt: '2026-01-01' }));
+      ctx.tasks.markReminded(row.id, '2026-01-01 09:00:00');
+      const renamed = ctx.tasks.update(row.id, { title: 'renamed', updatedBy: ctx.alex });
+      expect(renamed?.reminded_at).toBe('2026-01-01 09:00:00');
+    });
+
+    test('a clone starts unreminded — it is a new deadline for a new row', () => {
+      const row = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, dueAt: '2026-01-01', title: 'original' }),
+      );
+      ctx.tasks.markReminded(row.id, '2026-01-01 09:00:00');
+      const [clone] = ctx.tasks.cloneSubtree(row.id, { createdBy: ctx.alex });
+      expect(clone?.due_at).toBe('2026-01-01');
+      expect(clone?.reminded_at).toBeNull();
+    });
+  });
+
+  describe('list: the reminder scan filters', () => {
+    test('dueOnOrBefore includes the boundary instant', () => {
+      const at = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, dueAt: '2026-05-19T10:00:00Z', title: 'exactly now' }),
+      );
+      const later = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, dueAt: '2026-05-19T10:00:01Z', title: 'a second later' }),
+      );
+      const found = ctx.tasks.list({ dueOnOrBefore: '2026-05-19 10:00:00' }).map((t) => t.id);
+      // `dueBefore` would drop the boundary row and push it to the next tick;
+      // for a deadline that is an exact instant, that is the wrong side.
+      expect(found).toEqual([at.id]);
+      expect(found).not.toContain(later.id);
+    });
+
+    test('dueOnOrBefore compares through datetime(), not as strings', () => {
+      // The three shapes a stored deadline actually takes. Raw string
+      // comparison gets two of them wrong: 'T' (0x54) sorts above ' ' (0x20),
+      // so any T-form timestamp would read as later than any space-form "now"
+      // on the same date, and an offset is not normalised at all.
+      const dateOnly = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, dueAt: '2026-05-19', title: 'date only' }),
+      );
+      const zulu = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, dueAt: '2026-05-19T08:00:00Z', title: 'zulu' }),
+      );
+      const offset = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, dueAt: '2026-05-19T10:00:00+02:00', title: 'offset' }),
+      );
+      const notYet = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, dueAt: '2026-05-19T23:00:00Z', title: 'tonight' }),
+      );
+
+      // 08:00Z: the date-only deadline (00:00Z), the zulu one, and the offset
+      // one (10:00+02:00 is 08:00Z) have all passed. Tonight has not.
+      const found = ctx.tasks.list({ dueOnOrBefore: '2026-05-19 08:00:00' }).map((t) => t.id);
+      expect(found.sort()).toEqual([dateOnly.id, zulu.id, offset.id].sort());
+      expect(found).not.toContain(notYet.id);
+    });
+
+    test('dueOnOrBefore never matches a task with no deadline', () => {
+      ctx.tasks.insert(defaults({ createdBy: ctx.alex, title: 'someday' }));
+      expect(ctx.tasks.list({ dueOnOrBefore: '2099-01-01 00:00:00' })).toEqual([]);
+    });
+
+    test('notReminded drops rows the scan has already been round', () => {
+      const fresh = ctx.tasks.insert(defaults({ createdBy: ctx.alex, dueAt: '2026-01-01' }));
+      const done = ctx.tasks.insert(defaults({ createdBy: ctx.alex, dueAt: '2026-01-01' }));
+      ctx.tasks.markReminded(done.id, '2026-01-01 09:00:00');
+      expect(ctx.tasks.list({ notReminded: true }).map((t) => t.id)).toEqual([fresh.id]);
+    });
+
+    test('the scan predicate — unfinished + due + unreminded — keeps blocked and drops done', () => {
+      const todo = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, dueAt: '2026-01-01', title: 'todo' }),
+      );
+      const doing = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, dueAt: '2026-01-01', title: 'doing' }),
+      );
+      const blocked = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, dueAt: '2026-01-01', title: 'blocked' }),
+      );
+      const finished = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, dueAt: '2026-01-01', title: 'done' }),
+      );
+      const trashed = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, dueAt: '2026-01-01', title: 'trashed' }),
+      );
+      ctx.tasks.setStatus(doing.id, { status: 'doing', updatedBy: ctx.alex });
+      ctx.tasks.setStatus(blocked.id, { status: 'blocked', updatedBy: ctx.alex });
+      ctx.tasks.setStatus(finished.id, { status: 'done', updatedBy: ctx.alex });
+      ctx.tasks.softDelete(trashed.id, { updatedBy: ctx.alex });
+
+      const found = ctx.tasks
+        .list({ unfinished: true, dueOnOrBefore: '2026-06-01 00:00:00', notReminded: true })
+        .map((t) => t.id);
+      // Blocked and overdue is the single most useful reminder there is: it is
+      // the case where something is waiting on a person and the deadline has
+      // now gone past. Excluding it would silence exactly the reminder worth
+      // hearing.
+      expect(found.sort()).toEqual([todo.id, doing.id, blocked.id].sort());
+    });
+  });
+
   describe('nextSiblingPosition', () => {
     test('zero for an empty parent, increments per child', () => {
       const p = ctx.tasks.insert(defaults({ createdBy: ctx.alex }));

@@ -19,6 +19,7 @@ import type {
   Message,
   PostVoiceMessageInput,
   PstnContact,
+  PushSubscriptionInput,
   Task,
   TaskDetail,
   TaskEvent,
@@ -91,6 +92,12 @@ export interface MockEalClient extends EalClient {
   emitChatRequest(request: ChatAgentRequest): void;
   /** Test hook: the replies passed to sendChatReply, in order. */
   peekChatReplies(): readonly ChatAgentReply[];
+  /**
+   * Test hook: the push subscriptions filed through subscribeUserPush, in
+   * order, minus any the browser has since unsubscribed. What the "Remind me"
+   * control's browser-tier test asserts against.
+   */
+  peekPushSubscriptions(): readonly PushSubscriptionInput[];
   /** Test hook: clear all subscribers and registered responses. */
   reset(): void;
 }
@@ -189,6 +196,12 @@ export function createMockEalClient(): MockEalClient {
   const agentStatusSubscribers = new Set<(online: boolean) => void>();
   /** Mocks an assistant that is up, which is the ordinary case a test wants. */
   let agentOnline = true;
+  /**
+   * Push subscriptions this browser has filed. The mock keeps them the way
+   * the server does — keyed by endpoint, last write wins — so a test that taps
+   * "Remind me" twice sees one row, not two.
+   */
+  let pushSubscriptions: PushSubscriptionInput[] = [];
 
   function emitConnectionState(state: WsConnectionState): void {
     if (state === connectionState) return;
@@ -669,6 +682,21 @@ export function createMockEalClient(): MockEalClient {
       return out;
     },
 
+    async subscribeUserPush(input): Promise<{ endpoint: string }> {
+      requireSignedIn();
+      const at = pushSubscriptions.findIndex((s) => s.endpoint === input.endpoint);
+      if (at >= 0) pushSubscriptions[at] = { ...input };
+      else pushSubscriptions.push({ ...input });
+      return { endpoint: input.endpoint };
+    },
+
+    async unsubscribeUserPush(endpoint): Promise<{ removed: boolean }> {
+      requireSignedIn();
+      const before = pushSubscriptions.length;
+      pushSubscriptions = pushSubscriptions.filter((s) => s.endpoint !== endpoint);
+      return { removed: pushSubscriptions.length < before };
+    },
+
     async setTaskStatus(id, status): Promise<Task> {
       consumeTaskError();
       const user = requireSignedIn();
@@ -871,6 +899,10 @@ export function createMockEalClient(): MockEalClient {
       return Array.from(store.byId.values());
     },
 
+    peekPushSubscriptions(): readonly PushSubscriptionInput[] {
+      return pushSubscriptions;
+    },
+
     reset(): void {
       taskEventSubscribers.clear();
       chatEventSubscribers.clear();
@@ -887,6 +919,7 @@ export function createMockEalClient(): MockEalClient {
       chatReplies = [];
       seededMessages = [];
       agentRequestHandler = null;
+      pushSubscriptions = [];
     },
   };
 }
@@ -915,6 +948,7 @@ type TestHookKeys =
   | 'peekSentChats'
   | 'emitChatRequest'
   | 'peekChatReplies'
+  | 'peekPushSubscriptions'
   | 'reset';
 type EalClientMethodKeys = keyof EalClient;
 type MockMethodKeys = Exclude<keyof MockEalClient, TestHookKeys>;

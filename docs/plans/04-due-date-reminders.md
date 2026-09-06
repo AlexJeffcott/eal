@@ -1,7 +1,12 @@
 # Plan 04 — Due-date reminders
 
-Status: not started. Depends on Plan 01 — do not attach push subscriptions to
-an instance anyone can join.
+Status: **steps 1–6 built and verified, 2026-09-06. Step 7 (deploy) is the
+owner's and is not done.** Depended on Plan 01 — do not attach push
+subscriptions to an instance anyone can join; registration has been closed
+since 2026-08-25.
+
+Two things in this plan were written before stages 2 and 3 and were stale by
+the time it was built. Both are corrected in place below.
 
 ## The reading
 
@@ -28,44 +33,91 @@ devices; do not overload it.
 
 ## Steps
 
-1. **Schema.** `push_subscriptions(user_id, endpoint, p256dh, auth,
-   created_at)` with a unique index on `endpoint`. A new `push` app in
-   `packages/api/src/apps/`. Do not reuse
-   `family_phone_push_subscriptions` — its foreign key is a device.
-2. **Routes.** `POST /api/v1/push/subscribe` and `/unsubscribe`, authed. The
-   header comment in `push.http.ts` already describes them; make them real.
-3. **Column.** `tasks.reminded_at TEXT` — non-null once a reminder for the
-   current `due_at` has been sent. Clearing or moving `due_at` clears it. This
-   is what makes the tick idempotent across restarts.
-4. **The tick.** Every 60 s: select open, non-deleted tasks where
-   `due_at <= now` and `reminded_at IS NULL`; send one push per subscription of
-   the assignee (or of every member when unassigned); stamp `reminded_at`.
-5. **Payload.** Reuse the shape the service worker already parses —
-   `{ kind: 'task', title, body, tag, url }` (`packages/api/src/spa.ts`, the
-   `serviceWorker` source). `url` deep-links to `/tasks`.
-6. **Web.** A "Remind me" control in the tasks panel that calls
-   `requestPushPermission()` then `ensurePushSubscription()`
-   (`packages/web/src/platform/push.ts`) and POSTs the result. Permission must
-   be requested from a real gesture.
-7. **Deploy.** Generate a VAPID pair, set the three `EAL_VAPID_*` values as Fly
-   secrets, add them to the `docs/deploy.md` table.
+1. ✅ **Schema.** `push_subscriptions(user_id, endpoint, p256dh, auth,
+   created_at, updated_at)`, `endpoint` unique. A new `push` app in
+   `packages/api/src/apps/push.ts`. Not `family_phone_push_subscriptions` —
+   its foreign key is a device, and unpairing a handset must not silence that
+   person's deadlines.
+2. ✅ **Routes.** `POST /api/v1/push/subscribe` and `/unsubscribe`, authed,
+   in `pushSubscriptionRoutes` (`handlers/push.http.ts`). The header comment
+   that promised them since v1 now describes what is there.
+3. ✅ **Column.** `tasks.reminded_at TEXT`. Cleared when `due_at` is written to
+   a *different* value — one `CASE` in the repo's UPDATE, so there is no
+   read-modify-write to race against. **It must be added after
+   `rebuildTasksStatusIfLegacy`**, which copies the table through a
+   hand-written column list; `schema.test.ts` drives that upgrade.
+4. ✅ **The tick.** Every 60 s, in the api process
+   (`handlers/task-reminders.ts`). ~~select open, non-deleted tasks~~ — **there
+   is no `open` status since `74550d3`.** The predicate is *not done*
+   (`ListFilter.unfinished`, the same spelling the Today view uses), so **a
+   blocked task still reminds**: blocked and overdue is the most useful
+   reminder there is. Deadlines are compared through SQLite's `datetime()`, not
+   lexicographically — a stored `due_at` may be a date, a Zulu timestamp or an
+   offset one, and raw string comparison gets the last two wrong.
+5. ✅ **Payload.** `{ kind: 'task', title, body, tag, url }`, confirmed against
+   the `serviceWorker` source at `packages/api/src/spa.ts:120-136`. Title is
+   the task's own title; `url` deep-links to `/tasks`.
+6. ✅ **Web.** A "Remind me" control at the top of the tasks panel, from a real
+   tap. It renders nothing on a browser with no PushManager, and a sentence
+   rather than a button when the site is blocked.
+7. ⬜ **Deploy.** Generate a VAPID pair, set the three `EAL_VAPID_*` values as
+   Fly secrets. `docs/deploy.md` now carries the table and the command. **Not
+   done — this is the owner's step.**
 
 ## Scope held back
 
-Exact-time reminders only. A morning digest ("everything due today, at 08:00")
-needs a per-user timezone, which `docs/tasks-v1.md` already records as a v1
-limitation. Add the column when you want the digest, not before.
+Exact-time reminders only, as planned. A morning digest ("everything due today,
+at 08:00") needs a per-user timezone, which `docs/tasks-v1.md` already records
+as a v1 limitation. Add the column when you want the digest, not before.
+
+No recurrence, no snooze, no lead time ("remind me 30 minutes before").
+
+## Decided while building, not in the plan
+
+- **A failed send still stamps.** Stamping only on success retries a broken
+  vendor every 60 s for as long as the row is overdue, and a deadline that
+  finally rings forty minutes late is worse than one that did not ring.
+- **A task with nobody subscribed still stamps.** Otherwise the day someone
+  first taps "Remind me" they are buried under every deadline that passed
+  before they did.
+- **404 / 410 deletes the subscription.** The vendor is saying it will never
+  accept another push; the browser mints a fresh endpoint next time. Any other
+  error keeps the row.
+- **`reminded_at` is not on the wire.** It is bookkeeping for the scan, not a
+  property of the task, and the SPA reconciles against every broadcast.
+- **No TLA+ model.** See `OPEN_TASKS.md` — one of its two transitions lives in
+  a background loop polly's analyzer cannot read, and a one-sided model would
+  claim coverage it does not have.
 
 ## Verification artefact
 
-`scripts/e2e-task-reminder.ts`, run by `bun devctl test multi`. Stand up a
-local HTTP server that impersonates the push vendor endpoint. Create a task due
-in two seconds. Assert exactly one request arrives, that its body carries the
-task title, and that the next tick sends nothing.
+`scripts/e2e-task-reminder.ts`, run by `bun devctl test multi`. Built as
+planned, with three corrections found while building it:
+
+- The vendor server must speak **HTTPS**. web-push dials the endpoint's scheme
+  and refuses plaintext, so an `http://` endpoint fails the TLS handshake
+  rather than testing anything. It reuses `packages/api/certs`, which every
+  multi-tier script already requires.
+- "Its body carries the task title" is only checkable by **decrypting** it: the
+  body is aes128gcm ciphertext (RFC 8188 over RFC 8291). The script holds the
+  subscription's private key and decrypts with `node:crypto` — which also
+  proves the payload was encrypted to that subscription and signed by the
+  configured VAPID identity.
+- "The next tick sends nothing" is proved by a **signal, not a sleep**: two
+  further tasks are created and waited for, so every push that arrives is
+  evidence another scan ran, and the first deadline must appear in none of them.
+
+Non-vacuity, measured: with `markReminded` removed from the scan it fails with
+`e2e-task-reminder: FAIL — the first deadline was announced 2 times across 3
+pushes: [...]` and exits 1.
 
 ## Done when
 
 A task due in two minutes rings your phone with the app closed.
+
+**This has not happened yet, and cannot until step 7 is done.** Everything up
+to the vendor is proved; what is unproved is the leg from a real push vendor to
+a real handset, which needs the secrets set and a phone in the room.
 
 ## Not measured
 

@@ -18,6 +18,7 @@ import { $tasksById } from './apps/tasks/stores.ts';
 import { bindShowcaseForm } from './apps/showcase/stores.ts';
 import { ACTION_REGISTRY } from './actions/registry.ts';
 import { bootstrapDevices } from './apps/devices/actions.ts';
+import { bootstrapTaskReminders } from './apps/tasks/actions.ts';
 import { refreshAgentRules } from './apps/agent-rules/actions.ts';
 import { installTaskUrlSync } from './apps/tasks/url-sync.ts';
 import { $route } from './shell/router.ts';
@@ -156,6 +157,10 @@ async function seedSessionData(stores: AppStores): Promise<void> {
   } catch (err) {
     stores.$devicesError.value = err instanceof Error ? err.message : String(err);
   }
+  // What this browser already knows about reminders, and a refreshed
+  // subscription if permission is already granted. Never asks for it — that
+  // needs a tap (apps/tasks/actions.ts).
+  await bootstrapTaskReminders(stores);
   // Rehydrate a previously-paired device on this tab — if IndexedDB has one,
   // its WS reconnects automatically and the user is ready to call.
   await bootstrapDevices(stores);

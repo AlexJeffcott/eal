@@ -60,6 +60,13 @@ export interface TaskRow {
    * it becomes a `boolean` on the wire.
    */
   sequential: number;
+  /**
+   * When the due-date reminder for this row's *current* `due_at` was sent, or
+   * NULL if it has not been. Server-side bookkeeping for the scan in
+   * handlers/task-reminders.ts, not a property of the task — which is why it is
+   * on the row but deliberately not on the wire shape (`toTask` skips it).
+   */
+  reminded_at: string | null;
 }
 
 export interface InsertTaskInput {
@@ -104,6 +111,25 @@ export interface ListFilter {
   deletedOnly?: boolean;
   defaultExcludeDeleted?: boolean;
   dueBefore?: string;
+  /**
+   * Due at or before this instant — the reminder scan's window, and the reason
+   * it is not `dueBefore`. `due_at` is an exact instant, so the tick that lands
+   * on it must include it; a strict `<` would push every deadline to the
+   * following tick.
+   *
+   * Compared through SQLite's `datetime()` rather than lexicographically.
+   * Stored deadlines come in three shapes — `2026-09-06`, `2026-09-06T08:00:00Z`
+   * and `2026-09-06T10:00:00+02:00` — and raw string comparison gets the last
+   * two wrong: `'T'` (0x54) sorts above `' '` (0x20), and an offset is not
+   * normalised at all. `datetime()` parses all three and yields UTC
+   * `YYYY-MM-DD HH:MM:SS`, so a date-only deadline fires at 00:00 UTC that day
+   * and an offset deadline fires at the instant it names. The partial index
+   * `idx_tasks_due_reminder` still applies: it is selected by the
+   * `reminded_at IS NULL` / `deleted_at IS NULL` clauses beside this one.
+   */
+  dueOnOrBefore?: string;
+  /** Rows the reminder scan has not been round yet. */
+  notReminded?: boolean;
   deferAfter?: string;
   todayCutoff?: string;
   inbox?: boolean;
@@ -125,15 +151,23 @@ export interface TasksRepo {
   /** Atomic clone of a task + every (non-deleted) descendant. Returns the cloned subtree. */
   cloneSubtree(rootId: number, input: { createdBy: number }): TaskRow[];
   nextSiblingPosition(parentId: number | null): number;
+  /**
+   * Record that the reminder for this row's current `due_at` has been sent.
+   * Returns false when the row moved underneath the scan — it was trashed, or
+   * its deadline was rewritten (which cleared the stamp) between the SELECT and
+   * this UPDATE. Guarded on `reminded_at IS NULL` so two ticks racing can only
+   * stamp once.
+   */
+  markReminded(id: number, at: string): boolean;
 }
 
 const COLS =
-  'id, parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, created_at, updated_at, completed_at, deleted_at, position, sequential';
+  'id, parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, created_at, updated_at, completed_at, deleted_at, position, sequential, reminded_at';
 
 // Same list, prefixed with the `tasks.` alias for queries that join recursive
 // CTEs (which themselves expose a column named `id`).
 const T_COLS =
-  'tasks.id, tasks.parent_id, tasks.title, tasks.notes, tasks.status, tasks.kind, tasks.defer_until, tasks.due_at, tasks.created_by, tasks.assigned_to, tasks.updated_by, tasks.created_at, tasks.updated_at, tasks.completed_at, tasks.deleted_at, tasks.position, tasks.sequential';
+  'tasks.id, tasks.parent_id, tasks.title, tasks.notes, tasks.status, tasks.kind, tasks.defer_until, tasks.due_at, tasks.created_by, tasks.assigned_to, tasks.updated_by, tasks.created_at, tasks.updated_at, tasks.completed_at, tasks.deleted_at, tasks.position, tasks.sequential, tasks.reminded_at';
 
 export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock): TasksRepo {
   const insertStmt = db.prepare<
@@ -205,6 +239,16 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
       WHERE id = ?
         AND deleted_at IS NULL
       RETURNING ${COLS}`,
+  );
+  // No `updated_at` / `updated_by` touch: the scan is not a person editing the
+  // task, and stamping it would push every overdue row to the top of any
+  // recently-changed ordering at whatever minute it happened to fire.
+  const markRemindedStmt = db.prepare<unknown, [string, number]>(
+    `UPDATE tasks
+        SET reminded_at = ?
+      WHERE id = ?
+        AND reminded_at IS NULL
+        AND deleted_at IS NULL`,
   );
   const restoreStmt = db.prepare<TaskRow, [number, string, number]>(
     `UPDATE tasks
@@ -322,6 +366,17 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
         params.push(filter.dueBefore);
       }
 
+      // See the ListFilter doc comment for why this is `datetime()` and `<=`
+      // where `dueBefore` above is raw and `<`.
+      if (filter.dueOnOrBefore !== undefined) {
+        wheres.push('due_at IS NOT NULL AND datetime(due_at) <= datetime(?)');
+        params.push(filter.dueOnOrBefore);
+      }
+
+      if (filter.notReminded === true) {
+        wheres.push('reminded_at IS NULL');
+      }
+
       if (filter.deferAfter !== undefined) {
         wheres.push('defer_until IS NOT NULL AND defer_until > ?');
         params.push(filter.deferAfter);
@@ -407,6 +462,15 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
       if (input.dueAt !== undefined) {
         sets.push('due_at = ?');
         params.push(input.dueAt);
+        // Moving or clearing the deadline re-arms the reminder; re-writing the
+        // same value leaves it as it was. Both sides of the CASE read the
+        // pre-update row — SQLite evaluates an UPDATE's expressions against the
+        // old values — so this compares the incoming date against the stored
+        // one in the same statement, with no read-modify-write to race against.
+        // `IS`, not `=`, so a NULL-to-NULL write reads as unchanged rather than
+        // as SQL's unknown.
+        sets.push('reminded_at = CASE WHEN due_at IS ? THEN reminded_at ELSE NULL END');
+        params.push(input.dueAt);
       }
       if (input.position !== undefined) {
         sets.push('position = ?');
@@ -442,6 +506,10 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
     restore(id, input): TaskRow | null {
       const ts = clock();
       return restoreStmt.get(input.updatedBy, ts, id) ?? null;
+    },
+
+    markReminded(id, at): boolean {
+      return markRemindedStmt.run(at, id).changes > 0;
     },
 
     cloneSubtree(rootId, input): TaskRow[] {

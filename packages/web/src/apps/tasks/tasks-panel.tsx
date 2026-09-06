@@ -17,9 +17,11 @@ import {
   $householdUsers,
   $quickAddTitle,
   $recentlyCompleted,
+  $reminderState,
   $tasksById,
   $tasksError,
   $taskFilter,
+  type ReminderState,
 } from './stores.ts';
 import {
   type Condition,
@@ -759,6 +761,49 @@ function Breadcrumb(props: { scope: number; tasksById: ReadonlyMap<number, Task>
   );
 }
 
+/**
+ * Reminders — the control that decides whether a deadline reaches the phone.
+ *
+ * It sits at the top of the panel rather than on each task, because the
+ * permission it asks for is per browser, not per task: granting it once arms
+ * every deadline the household has. It renders nothing at all on a browser with
+ * no PushManager, which is the honest answer there — no button in eal can make
+ * that browser buzz.
+ *
+ * The label is the state, not an instruction. "Reminders on" tells you where
+ * you stand and doubles as the way back off; "Remind me" is the only wording
+ * that reads as an offer rather than a setting.
+ */
+function ReminderControl({ state }: { state: ReminderState }) {
+  if (state === 'unsupported') return null;
+  return (
+    <div data-tasks-reminders data-reminder-state={state}>
+      <Cluster gap="var(--polly-space-xs)">
+        {state === 'denied' ? (
+          <Text size="sm" tone="muted">
+            Notifications are blocked for this site. Your browser&apos;s site settings are
+            the only way back.
+          </Text>
+        ) : state === 'on' ? (
+          <Button
+            tier="tertiary"
+            size="small"
+            label="Reminders on"
+            data-action="tasks:disable-reminders"
+          />
+        ) : (
+          <Button
+            tier="tertiary"
+            size="small"
+            label={state === 'working' ? 'Just a moment…' : 'Remind me'}
+            data-action="tasks:enable-reminders"
+          />
+        )}
+      </Cluster>
+    </div>
+  );
+}
+
 export function TasksPanel() {
   const filter = $taskFilter.value;
   const tasks = $tasksById.value;
@@ -768,6 +813,7 @@ export function TasksPanel() {
   const expandedIds = $expandedTaskIds.value;
   const boardLane = $boardLane.value;
   const users = $householdUsers.value;
+  const reminders = $reminderState.value;
 
   const now = new Date();
   const index = indexChildren(tasks);
@@ -828,6 +874,8 @@ export function TasksPanel() {
             ))}
           </Cluster>
         </div>
+
+        <ReminderControl state={reminders} />
 
         {filter.scope === null ? null : (
           <Breadcrumb scope={filter.scope} tasksById={tasks} />

@@ -169,6 +169,33 @@ export function applySchema(db: DatabaseClient): void {
     'sequential',
     'INTEGER NOT NULL DEFAULT 0 CHECK (sequential IN (0,1))',
   );
+  // Tasks stage 4: when did the reminder for this row's *current* `due_at` go
+  // out? NULL means "not yet"; a timestamp means the scan has been round this
+  // deadline already. That is the whole of what makes the 60-second tick
+  // idempotent across a restart — the api process can die mid-scan, or be
+  // redeployed six times an hour, and no deadline rings twice.
+  //
+  // Cleared whenever `due_at` is written to a different value
+  // (db/repos/tasks.ts:update), so moving or clearing a deadline re-arms the
+  // reminder and re-writing the same date does not.
+  //
+  // **This ensureColumn must stay AFTER rebuildTasksStatusIfLegacy**, for the
+  // same reason `sequential` above must: the rebuild copies the table through a
+  // hand-written column list, so a column added before it is silently dropped
+  // on any database still on the stage-1 shape. schema.test.ts drives that
+  // upgrade and asserts this column survives; so does
+  // scripts/e2e-task-reminder.ts, over a real file-backed database.
+  ensureColumn(db, 'tasks', 'reminded_at', 'TEXT');
+  // Partial index over exactly the rows the tick can still fire: a deadline
+  // that exists, has not been reminded, and is not in the trash. Stamping a row
+  // removes it from the index, so the index shrinks as the day is worked
+  // through rather than growing with the table. Not part of the tasks app's
+  // schema fragment because the column it filters on is added by the
+  // ensureColumn immediately above, which runs after every app fragment.
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_tasks_due_reminder ON tasks (due_at)
+       WHERE reminded_at IS NULL AND deleted_at IS NULL AND due_at IS NOT NULL`,
+  );
   promoteGrandfatheredContainers(db);
   // Phase 7D: the single user-less device row voicemails land in when
   // no household member was specifically being called. Idempotent —

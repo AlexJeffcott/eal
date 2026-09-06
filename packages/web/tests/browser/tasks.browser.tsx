@@ -8,7 +8,12 @@ import { createMockEalClient } from '@eal/client-mock';
 import type { Task } from '@eal/client';
 import { App } from '../../src/shell/app.tsx';
 import { createStores, resetStoresForTest } from '../../src/stores.ts';
-import { $boardLane, $householdUsers, $quickAddTitle } from '../../src/apps/tasks/stores.ts';
+import {
+  $boardLane,
+  $householdUsers,
+  $quickAddTitle,
+  $reminderState,
+} from '../../src/apps/tasks/stores.ts';
 import { ACTION_REGISTRY } from '../../src/actions/registry.ts';
 import { $route } from '../../src/shell/router.ts';
 
@@ -935,6 +940,81 @@ describe('the state badge on a list row', () => {
         'done',
     );
     expect(stateBadge(id)).toBeNull();
+  });
+});
+
+describe('the reminder control', () => {
+  function control(): HTMLElement | null {
+    return document.querySelector<HTMLElement>('[data-tasks-reminders]');
+  }
+
+  function buttonLabel(action: string): string | null {
+    return document.querySelector<HTMLElement>(`[data-action="${action}"]`)?.textContent ?? null;
+  }
+
+  test('offers the tap when reminders are off', async () => {
+    signedIn();
+    $reminderState.value = 'off';
+    await waitFor(() => buttonLabel('tasks:enable-reminders') !== null);
+    // "Remind me" reads as an offer. A settings-shaped label ("Notifications")
+    // would read as a place to go rather than a thing to do.
+    expect(buttonLabel('tasks:enable-reminders')).toBe('Remind me');
+  });
+
+  test('says so while the permission prompt is up', async () => {
+    signedIn();
+    $reminderState.value = 'working';
+    await waitFor(() => buttonLabel('tasks:enable-reminders') === 'Just a moment…');
+    expect(document.querySelector('[data-action="tasks:disable-reminders"]')).toBeNull();
+  });
+
+  test('when on, the label is the state and doubles as the way back off', async () => {
+    signedIn();
+    $reminderState.value = 'on';
+    await waitFor(() => buttonLabel('tasks:disable-reminders') !== null);
+    expect(buttonLabel('tasks:disable-reminders')).toBe('Reminders on');
+    expect(document.querySelector('[data-action="tasks:enable-reminders"]')).toBeNull();
+  });
+
+  test('when denied, it is a sentence and no button — eal cannot undo a site block', async () => {
+    signedIn();
+    $reminderState.value = 'denied';
+    await waitFor(() => control()?.dataset['reminderState'] === 'denied');
+    expect(document.querySelector('[data-action="tasks:enable-reminders"]')).toBeNull();
+    expect(document.querySelector('[data-action="tasks:disable-reminders"]')).toBeNull();
+    expect(control()?.textContent ?? '').toContain('site settings');
+  });
+
+  test('renders nothing at all on a browser with no push', async () => {
+    signedIn();
+    $reminderState.value = 'unsupported';
+    await waitFor(() => control() === null);
+    // Not a disabled button: a browser with no PushManager will never have one,
+    // and a permanently dead control is worse than no control.
+    expect(control()).toBeNull();
+  });
+
+  test('turning them off clears the state even when the browser has no subscription to drop', async () => {
+    signedIn();
+    $reminderState.value = 'on';
+    await waitFor(() => buttonLabel('tasks:disable-reminders') !== null);
+    clickAction('tasks:disable-reminders');
+    await waitFor(() => $reminderState.value === 'off');
+    // `dropPushSubscription` found nothing to unsubscribe, so the server was
+    // never told — and must not have been, because there is no endpoint to name.
+    expect(mock.peekPushSubscriptions()).toHaveLength(0);
+  });
+
+  test('the enable action reports honestly on a browser that cannot subscribe', async () => {
+    signedIn();
+    $reminderState.value = 'off';
+    await waitFor(() => buttonLabel('tasks:enable-reminders') !== null);
+    clickAction('tasks:enable-reminders');
+    // The test browser has no push service behind it, so this lands in one of
+    // the refusal states — never in 'on', and never stuck on 'working'.
+    await waitFor(() => $reminderState.value !== 'working');
+    expect(['off', 'denied', 'unsupported']).toContain($reminderState.value);
+    expect(mock.peekPushSubscriptions()).toHaveLength(0);
   });
 });
 

@@ -1,6 +1,12 @@
 import type { ActionRegistry } from '@fairfox/polly/actions';
 import type { Task, TaskKind, UpdateTaskInput } from '@eal/client';
 import type { AppStores } from '../../stores.ts';
+import {
+  dropPushSubscription,
+  ensurePushSubscription,
+  pushPermission,
+  requestPushPermission,
+} from '../../platform/push.ts';
 import { adjacentLane, isTaskStatus } from './board.ts';
 import {
   isConditionField,
@@ -407,4 +413,108 @@ export const TASKS_ACTIONS: ActionRegistry<AppStores> = {
       stores.$tasksError.value = friendlyTaskError(err);
     }
   },
+
+  /**
+   * Turn deadlines into something the phone does when eal is closed.
+   *
+   * This must run from a real tap and nothing else. `Notification.requestPermission()`
+   * is gesture-gated in every browser that implements it: called from a boot
+   * path, a timer or a promise resolved after the gesture has been forgotten, it
+   * resolves 'denied' without ever showing the prompt — and 'denied' is the one
+   * state eal cannot walk back from, because only the browser's own site
+   * settings can. So the whole sequence stays inside the click handler.
+   */
+  'tasks:enable-reminders': async ({ stores }) => {
+    stores.$tasksError.value = null;
+    if (pushPermission() === 'unsupported') {
+      stores.$reminderState.value = 'unsupported';
+      return;
+    }
+    stores.$reminderState.value = 'working';
+    try {
+      const granted = await requestPushPermission();
+      if (granted !== 'granted') {
+        stores.$reminderState.value = granted === 'denied' ? 'denied' : 'off';
+        return;
+      }
+      const subscription = await ensurePushSubscription();
+      if (subscription === null) {
+        // Permission is granted but no subscription came back — the server has
+        // no VAPID keypair configured, or the vendor refused. Both are real and
+        // neither is the person's fault, so say so rather than leaving a
+        // control that looks like it did nothing.
+        stores.$reminderState.value = 'off';
+        stores.$tasksError.value =
+          'Notifications are allowed, but this server cannot send them yet.';
+        return;
+      }
+      await stores.client.subscribeUserPush(subscription);
+      stores.$reminderState.value = 'on';
+    } catch (err) {
+      stores.$reminderState.value = 'off';
+      stores.$tasksError.value = friendlyTaskError(err);
+    }
+  },
+
+  /**
+   * Stop them. Both halves, in this order: the browser drops the subscription
+   * (which is what stops the buzzing) and then the server forgets the endpoint
+   * (which is what stops it trying). Reversing the order would leave a window
+   * where the server has forgotten a subscription that still delivers.
+   */
+  'tasks:disable-reminders': async ({ stores }) => {
+    stores.$tasksError.value = null;
+    stores.$reminderState.value = 'working';
+    try {
+      const endpoint = await dropPushSubscription();
+      if (endpoint !== null) await stores.client.unsubscribeUserPush(endpoint);
+      stores.$reminderState.value = 'off';
+    } catch (err) {
+      stores.$reminderState.value = 'on';
+      stores.$tasksError.value = friendlyTaskError(err);
+    }
+  },
 };
+
+/**
+ * Read this browser's reminder state at sign-in, and refresh the subscription
+ * when it is already granted.
+ *
+ * Re-registering on every boot is deliberate, and mirrors what the devices app
+ * already does on every device connect: a vendor may rotate an endpoint, and a
+ * server may be given a new VAPID keypair, and in both cases the row the server
+ * holds is dead while the browser still believes it is subscribed. Rebinding
+ * costs one round trip and closes that gap.
+ *
+ * No permission is ever *requested* here — see the gesture rule above. This
+ * only reads a grant that already exists.
+ */
+export async function bootstrapTaskReminders(stores: AppStores): Promise<void> {
+  const permission = pushPermission();
+  if (permission === 'unsupported') {
+    stores.$reminderState.value = 'unsupported';
+    return;
+  }
+  if (permission === 'denied') {
+    stores.$reminderState.value = 'denied';
+    return;
+  }
+  if (permission !== 'granted') {
+    stores.$reminderState.value = 'off';
+    return;
+  }
+  try {
+    const subscription = await ensurePushSubscription();
+    if (subscription === null) {
+      stores.$reminderState.value = 'off';
+      return;
+    }
+    await stores.client.subscribeUserPush(subscription);
+    stores.$reminderState.value = 'on';
+  } catch (err) {
+    // Non-fatal, and deliberately not surfaced in the tasks error banner: the
+    // person did not ask for this, it happened on their behalf at boot.
+    console.warn('[reminders] re-subscribe at boot failed:', err);
+    stores.$reminderState.value = 'off';
+  }
+}
