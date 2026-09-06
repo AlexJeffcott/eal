@@ -70,10 +70,18 @@ fly secrets set EAL_VAPID_PRIVATE_KEY=… EAL_VAPID_PUBLIC_KEY=… \
   EAL_VAPID_SUBJECT=mailto:you@example.com
 ```
 
-**Not done.** As of 2026-09-06 no VAPID pair has been generated and none of the
-three secrets is set on Fly, so the deployed instance accepts subscriptions and
-sends nothing. The code is built and verified locally
-(`scripts/e2e-task-reminder.ts`); this is the owner's step.
+**Set and live since release v40, 2026-09-06.** All three secrets read
+`Deployed` in `fly secrets list -a eal`, and the production log carries
+`[reminders] due-date scan every 60000ms`.
+
+They were already set before the reminder code shipped — this page said they
+were not, which was wrong and would have sent the next reader to generate a
+replacement pair. **Do not regenerate them.** A new public key invalidates every
+`PushSubscription` a browser has already bound to the old one: those endpoints
+keep accepting pushes signed by the old private key and reject the new
+signature, so every phone silently stops being reminded until it re-subscribes.
+Rotate only to revoke a leaked private key, and expect to re-tap "Remind me" on
+every device afterwards.
 
 **iOS caveat, not measured.** iOS delivers Web Push only to a PWA that has been
 added to the home screen, on iOS 16.4 and later. That has not been verified on

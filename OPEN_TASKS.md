@@ -92,19 +92,23 @@ what remains there is a machine to install it on.
       and recovers on its own, and unit templates in `deploy/`. Proved by
       `scripts/e2e-agent-offline.ts`. **Still open: pick the machine, pair it,
       install the unit, stop it sleeping.** → `docs/plans/03-always-on-agent.md`
-- [>] **04 — Due-date reminders.** Built 2026-09-06; **not deployed**. There is
-      now a `push` app owning a user-level `push_subscriptions` table, the two
-      subscribe/unsubscribe routes `push.http.ts`'s header comment has promised
+- [x] **04 — Due-date reminders. Live 2026-09-06, release v40.** A `push` app
+      owning a user-level `push_subscriptions` table, the two
+      subscribe/unsubscribe routes `push.http.ts`'s header comment had promised
       since v1, a `tasks.reminded_at` column, a 60-second scan inside the api
       process (`handlers/task-reminders.ts`), and a "Remind me" control in the
       tasks panel. Proved by `scripts/e2e-task-reminder.ts`, which stands up a
       fake push vendor over HTTPS and decrypts the payload it receives.
-      **Still open: generate a VAPID pair and set the three `EAL_VAPID_*`
-      secrets on Fly** (`docs/deploy.md` carries the table and the command),
-      **and then confirm on the owner's phone** — iOS delivers Web Push only to
-      a PWA added to the home screen, iOS 16.4+, and that has not been tested.
-      Until the secrets are set the deployed instance accepts subscriptions and
-      sends nothing, which it says at boot.
+      **The three `EAL_VAPID_*` secrets were already set** — this file and
+      `docs/deploy.md` both said they were not, which was wrong. The real
+      blocker was the deploy: v39 dated 25 August predated all six commits, so
+      the live api served the VAPID key and answered 404 at
+      `/api/v1/push/subscribe`. The production log now reads `[reminders]
+      due-date scan every 60000ms`.
+      **Still open, and not a code task: confirm on the owner's phone.** iOS
+      delivers Web Push only to a PWA added to the home screen, iOS 16.4+, and
+      that has never been tested. Tap "Remind me", set a task due in two
+      minutes, close the app, watch.
       → `docs/plans/04-due-date-reminders.md`
 - [ ] **Ordering the work inside a project.** `sequential` (stage 3) decides
       *whether* a container hands out one step at a time; which step is first is
@@ -275,12 +279,24 @@ full script path, so they work either way.
       they pin their own trunk config. Either set the real number when it is
       bought, or set `TWILIO_ENABLED=false` until then.
 - [ ] **Rotate the Twilio auth token and account SID in `.env`.** Both were
-      printed into an assistant session transcript on 2026-08-24.
-- [!] **Nothing has ever been pushed.** `git ls-remote --heads upstream`
-      returns no refs, so `https://github.com/AlexJeffcott/eal.git` is empty
-      and this disk holds the only copy of every commit. `main` has no
-      upstream configured either, so a bare `git push` fails. The first push
-      is `git push -u upstream main`.
+      printed into an assistant session transcript on 2026-08-24. **Read this
+      alongside the push-protection item above**: if the SID in those five June
+      test files is the same string as the one in `.env`, allowing the push
+      publishes it, and rotating first is the cheaper order. Nobody has
+      compared the two values.
+- [!] **Nothing has ever been pushed, and the first attempt was refused.**
+      `git ls-remote --heads upstream` still returns no refs, so
+      `https://github.com/AlexJeffcott/eal.git` is empty. This disk and the
+      deployed image are the only copies of every commit.
+      `git push upstream main` on 2026-09-06 was rejected by **GitHub push
+      protection, GH013**: it reads a Twilio Account String Identifier in five
+      commits from 1–2 June — `cf03d26`, `abe4467`, `bb642ce` (all
+      `twilio/config.test.ts:10` or `family-phone-twilio.http.test.ts:7`),
+      `3d0717c` and `682db29`. All five are test files and predate the task
+      work; the owner's reading is that they are fixtures, and the unblock URL
+      GitHub issued has to be opened before a retry will land. **See the
+      rotation item below before deciding — the real account SID is separately
+      recorded as leaked.**
 - [ ] **`EAL_INVITE_CODE` on Fly has no copy in the repo, by design.** It is
       the one string a new device needs, and `fly secrets list` shows only a
       digest. Keep it in a password manager.

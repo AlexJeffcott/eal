@@ -1,9 +1,9 @@
 # Plan 04 — Due-date reminders
 
-Status: **steps 1–6 built and verified, 2026-09-06. Step 7 (deploy) is the
-owner's and is not done.** Depended on Plan 01 — do not attach push
-subscriptions to an instance anyone can join; registration has been closed
-since 2026-08-25.
+Status: **done and live, 2026-09-06, release v40.** All seven steps. What is
+not done is the last line of this page — nobody has yet watched a phone ring.
+Depended on Plan 01 — do not attach push subscriptions to an instance anyone
+can join; registration has been closed since 2026-08-25.
 
 Two things in this plan were written before stages 2 and 3 and were stale by
 the time it was built. Both are corrected in place below.
@@ -60,9 +60,14 @@ devices; do not overload it.
 6. ✅ **Web.** A "Remind me" control at the top of the tasks panel, from a real
    tap. It renders nothing on a browser with no PushManager, and a sentence
    rather than a button when the site is blocked.
-7. ⬜ **Deploy.** Generate a VAPID pair, set the three `EAL_VAPID_*` values as
-   Fly secrets. `docs/deploy.md` now carries the table and the command. **Not
-   done — this is the owner's step.**
+7. ✅ **Deploy.** The three `EAL_VAPID_*` secrets turned out to be **already
+   set and deployed** — this page and `docs/deploy.md` both said otherwise,
+   which was wrong. What was actually missing was the deploy: the live image
+   was v39 from 25 August and predated every line of this work, so the api
+   served the VAPID key and answered 404 at `/api/v1/push/subscribe`. Shipped
+   as v40; the production log now reads `[reminders] due-date scan every
+   60000ms`. **Do not regenerate the pair** — see `docs/deploy.md` for why a
+   new public key silences every device that has already subscribed.
 
 ## Scope held back
 
@@ -88,6 +93,26 @@ No recurrence, no snooze, no lead time ("remind me 30 minutes before").
 - **No TLA+ model.** See `OPEN_TASKS.md` — one of its two transitions lives in
   a background loop polly's analyzer cannot read, and a one-sided model would
   claim coverage it does not have.
+
+## The migration, measured against production before it ran
+
+The three schema changes this branch carries (`kind`, `sequential`, the
+`status` table rebuild) were dry-run against a `VACUUM INTO` snapshot of the
+live database before the deploy, not after.
+
+| Reading | Value |
+|---|---|
+| `applySchema` on the copy | 7 ms |
+| Rows before / after | 22 / 22 |
+| Rows drifting beyond `open` → `todo` | 0 |
+| Resulting statuses | 20 `todo`, 2 `done` |
+| `kind` after the promote pass | 22 `task` — nothing promoted |
+| `foreign_key_check` / `integrity_check` | empty / ok |
+| users, sessions, credentials, messages | 2, 8, 2, 7 — all intact |
+
+**Production holds no nested tasks at all** (0 rows with a `parent_id`), which
+settles an open question stage 1 left: the tree-deeper-than-three-levels case
+that `promoteGrandfatheredContainers` cannot legalise does not exist here.
 
 ## Verification artefact
 
@@ -115,9 +140,10 @@ pushes: [...]` and exits 1.
 
 A task due in two minutes rings your phone with the app closed.
 
-**This has not happened yet, and cannot until step 7 is done.** Everything up
-to the vendor is proved; what is unproved is the leg from a real push vendor to
-a real handset, which needs the secrets set and a phone in the room.
+**This has still not happened, and nothing in the code stands in its way.**
+Everything up to the vendor is proved and the scan is running in production.
+What is unproved is the last leg — a real push vendor to a real handset — and
+it needs a person with the phone in their hand, not another commit.
 
 ## Not measured
 
