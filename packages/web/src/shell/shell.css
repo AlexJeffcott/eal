@@ -8,6 +8,26 @@
  * `@layer polly-components` Modal rules without `!important`.
  */
 
+/*
+ * Native controls follow the theme too.
+ *
+ * polly paints its own primitives from tokens but never sets the CSS
+ * `color-scheme` property, so scrollbars, date pickers, and the native select
+ * popup stay light-rendered when the rest of the page goes dark. Declare it
+ * here: `light dark` lets the system preference decide, and the two
+ * `data-polly-theme` rules keep it in step wherever a subtree forces a mode
+ * (the showcase panel's theme toggle does exactly that).
+ */
+:root {
+  color-scheme: light dark;
+}
+[data-polly-theme='light'] {
+  color-scheme: light;
+}
+[data-polly-theme='dark'] {
+  color-scheme: dark;
+}
+
 .shell-topbar {
   position: sticky;
   inset-block-start: 0;

@@ -4,6 +4,27 @@ import { resolve } from 'node:path';
 const WEB_ROOT = resolve(import.meta.dir, '../../web');
 const ENTRY_POINT = resolve(WEB_ROOT, 'src/main.tsx');
 
+/*
+ * Chrome colours.
+ *
+ * The browser toolbar and the PWA splash screen are painted from literals in
+ * markup, where a CSS custom property cannot reach. These three mirror polly
+ * tokens by value, so they must be re-read from `@fairfox/polly/ui/theme.css`
+ * whenever polly's palette moves:
+ *
+ *   TOPBAR_LIGHT  --polly-surface-raised, light   (the shell top bar)
+ *   TOPBAR_DARK   --polly-surface-raised, dark
+ *   BRAND         --polly-accent, light           (the app icon)
+ *
+ * `theme-color` matches the top bar rather than the accent, so the toolbar
+ * continues the bar instead of sitting against it as a second colour. The
+ * manifest takes one value only and has no media query, so it takes the light
+ * pair — the app's default when no preference is expressed.
+ */
+const TOPBAR_LIGHT = '#ffffff';
+const TOPBAR_DARK = '#1c2027';
+const BRAND = '#2451b5';
+
 interface SpaBundle {
   js: string;
   css: string;
@@ -36,12 +57,13 @@ async function buildBundle(): Promise<SpaBundle> {
   }
 
   const html = `<!DOCTYPE html>
-<html lang="en" data-polly-theme="light">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>eal</title>
-<meta name="theme-color" content="#1a73e8">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="${TOPBAR_LIGHT}">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="${TOPBAR_DARK}">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" type="image/svg+xml" href="/icon.svg">
 <link rel="apple-touch-icon" href="/icon.svg">
@@ -63,8 +85,8 @@ async function buildBundle(): Promise<SpaBundle> {
     scope: '/',
     display: 'standalone',
     orientation: 'portrait',
-    background_color: '#ffffff',
-    theme_color: '#1a73e8',
+    background_color: TOPBAR_LIGHT,
+    theme_color: TOPBAR_LIGHT,
     icons: [
       { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml' },
       { src: '/icon-maskable.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
@@ -74,13 +96,13 @@ async function buildBundle(): Promise<SpaBundle> {
   // The icon family. SVG for everything Chrome and modern Safari accept; an
   // apple-touch-icon PNG can be added when there's real art to ship.
   const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-<rect width="512" height="512" rx="96" fill="#1a73e8"/>
+<rect width="512" height="512" rx="96" fill="${BRAND}"/>
 <text x="256" y="356" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="280" font-weight="700" fill="#ffffff" text-anchor="middle">eal</text>
 </svg>`;
   // Maskable icons have a safe area in the centre 80%; everything beyond may
   // be cropped by the launcher. The text shrinks accordingly.
   const iconMaskable = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-<rect width="512" height="512" fill="#1a73e8"/>
+<rect width="512" height="512" fill="${BRAND}"/>
 <text x="256" y="320" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="200" font-weight="700" fill="#ffffff" text-anchor="middle">eal</text>
 </svg>`;
 

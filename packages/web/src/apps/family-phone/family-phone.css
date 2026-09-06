@@ -6,66 +6,68 @@
 
 .family-phone-device-row {
   padding: var(--polly-space-xs) var(--polly-space-sm);
-  border-radius: var(--polly-radius-sm, 0.25rem);
+  border-radius: var(--polly-radius-sm);
 }
 
 .family-phone-device-row:hover {
-  background: var(--polly-color-surface-hover, rgba(0, 0, 0, 0.04));
+  background: var(--polly-surface-sunken);
 }
 
 .family-phone-incoming {
-  border-left: 4px solid var(--polly-color-info, #2af);
+  border-left: 4px solid var(--polly-status-info-text);
   animation: family-phone-ring 1.2s ease-in-out infinite alternate;
 }
 
+/* The pulse colour is the same info token as the stripe above, thinned with
+ * color-mix so it tracks the theme instead of being a fixed blue. */
 @keyframes family-phone-ring {
   from {
-    box-shadow: 0 0 0 0 rgba(64, 128, 255, 0.4);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--polly-status-info-text) 40%, transparent);
   }
   to {
-    box-shadow: 0 0 0 6px rgba(64, 128, 255, 0);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--polly-status-info-text) 0%, transparent);
   }
 }
 
 .family-phone-active-call {
-  border-left: 4px solid var(--polly-color-success, #2c7);
+  border-left: 4px solid var(--polly-success);
 }
 
 .family-phone-note {
-  border-left: 4px solid var(--polly-color-warning, #f93);
+  border-left: 4px solid var(--polly-warning);
 }
 
 .family-phone-pair-first {
-  border-left: 4px solid var(--polly-color-warning, #f93);
+  border-left: 4px solid var(--polly-warning);
 }
 
 .family-phone-diagnostics {
-  border-left: 4px solid var(--polly-color-info, #2af);
+  border-left: 4px solid var(--polly-status-info-text);
 }
 
 .family-phone-diag-result {
   padding: var(--polly-space-sm);
-  border-radius: var(--polly-radius-sm, 0.25rem);
+  border-radius: var(--polly-radius-sm);
   /* Long result messages must wrap, never overflow the card. */
   overflow-wrap: anywhere;
   word-break: break-word;
-  background: var(--polly-color-surface-hover, rgba(0, 0, 0, 0.04));
+  background: var(--polly-surface-sunken);
 }
 
 .family-phone-diag-result--success {
-  background: var(--polly-color-success-soft, rgba(34, 197, 94, 0.12));
+  background: var(--polly-status-success-bg);
 }
 
 .family-phone-diag-result--danger {
-  background: var(--polly-color-danger-soft, rgba(239, 68, 68, 0.12));
+  background: var(--polly-status-danger-bg);
 }
 
 .family-phone-diag-result--info {
-  background: var(--polly-color-info-soft, rgba(59, 130, 246, 0.1));
+  background: var(--polly-status-info-bg);
 }
 
 .family-phone-leave-message {
-  border-left: 4px solid var(--polly-color-info, #2af);
+  border-left: 4px solid var(--polly-status-info-text);
 }
 
 .family-phone-leave-message-error {
@@ -74,7 +76,7 @@
 }
 
 .family-phone-dialpad {
-  border-left: 4px solid var(--polly-color-success, #2c7);
+  border-left: 4px solid var(--polly-success);
 }
 
 .family-phone-keypad {
@@ -110,18 +112,18 @@
 
 .family-phone-quick-dial-row {
   padding: var(--polly-space-xs) var(--polly-space-sm);
-  border-radius: var(--polly-radius-sm, 0.25rem);
+  border-radius: var(--polly-radius-sm);
 }
 
 .family-phone-quick-dial-row:hover {
-  background: var(--polly-color-surface-hover, rgba(0, 0, 0, 0.04));
+  background: var(--polly-surface-sunken);
 }
 
 .family-phone-transcript {
   margin-top: var(--polly-space-sm);
   padding: var(--polly-space-sm);
-  border-radius: var(--polly-radius-sm, 0.25rem);
-  background: var(--polly-color-surface-hover, rgba(0, 0, 0, 0.04));
+  border-radius: var(--polly-radius-sm);
+  background: var(--polly-surface-sunken);
   max-height: 12rem;
   overflow-y: auto;
 }

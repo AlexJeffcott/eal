@@ -5,7 +5,7 @@
 }
 
 .devices-code strong {
-  font-family: var(--polly-font-mono, ui-monospace, monospace);
+  font-family: var(--polly-font-mono);
   font-size: 1.1em;
   letter-spacing: 0.1em;
 }
@@ -17,18 +17,18 @@
 }
 
 .devices-paired {
-  font-family: var(--polly-font-mono, ui-monospace, monospace);
+  font-family: var(--polly-font-mono);
 }
 
 .devices-device-row {
   padding: var(--polly-space-xs) var(--polly-space-sm);
-  border-radius: var(--polly-radius-sm, 0.25rem);
+  border-radius: var(--polly-radius-sm);
 }
 
 .devices-device-row:hover {
-  background: var(--polly-color-surface-hover, rgba(0, 0, 0, 0.04));
+  background: var(--polly-surface-sunken);
 }
 
 .devices-error {
-  border-left: 4px solid var(--polly-color-danger, #e34);
+  border-left: 4px solid var(--polly-danger);
 }

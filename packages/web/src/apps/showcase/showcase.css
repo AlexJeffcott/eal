@@ -6,15 +6,24 @@
  */
 
 /* Headings — polly has no heading primitive, so the scale is set here from
- * typography tokens rather than left to the user-agent default. */
+ * typography tokens rather than left to the user-agent default.
+ *
+ * `color` is named rather than inherited. CSS inheritance passes the *computed*
+ * colour down, so a heading inside this panel would keep the value body
+ * resolved at the document root — and this panel forces its own theme with
+ * data-polly-theme. Forcing dark on a light system left both headings near-
+ * black on the dark surface. Reading the token here re-resolves it inside the
+ * forced subtree. */
 .showcase-title {
   margin: 0;
+  color: var(--polly-text);
   font-size: var(--polly-text-3xl);
   font-weight: var(--polly-weight-bold);
   line-height: var(--polly-line-height-heading);
 }
 .showcase-section-title {
   margin: 0;
+  color: var(--polly-text);
   font-size: var(--polly-text-xl);
   font-weight: var(--polly-weight-bold);
   line-height: var(--polly-line-height-heading);
