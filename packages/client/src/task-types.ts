@@ -47,6 +47,16 @@ export interface Task {
   completedAt: string | null;
   deletedAt: string | null;
   position: number;
+  /**
+   * Does this container hand out its work one step at a time (`true`) or all at
+   * once (`false`)? It governs the row's children, so it is inert on a leaf and
+   * the editor only offers the control on a container.
+   *
+   * What it means is `task-availability.ts:availableTaskIds` — the one place the
+   * rule lives, shared by the SPA's Available view and the assistant's
+   * `next_actions` tool.
+   */
+  sequential: boolean;
 }
 
 export interface CreateTaskInput {
@@ -57,6 +67,7 @@ export interface CreateTaskInput {
   notes?: string;
   deferUntil?: string | null;
   dueAt?: string | null;
+  sequential?: boolean;
 }
 
 export interface UpdateTaskInput {
@@ -68,6 +79,7 @@ export interface UpdateTaskInput {
   deferUntil?: string | null;
   dueAt?: string | null;
   position?: number;
+  sequential?: boolean;
 }
 
 export interface ListTasksInput {

@@ -218,6 +218,7 @@ describe('Tasks UI (browser)', () => {
         completedAt: null,
         deletedAt: null,
         position: 50,
+        sequential: false,
       };
       stores.$tasksById.value = new Map([...stores.$tasksById.value, [mineId, mine]]);
       // Assigned tasks aren't in the Inbox view — switch to All.
@@ -314,6 +315,7 @@ describe('Tasks UI (browser)', () => {
         completedAt: null,
         deletedAt: null,
         position: 0,
+        sequential: false,
       };
       stores.$tasksById.value = new Map([[seeded.id, seeded]]);
       await waitFor(() => rowIds().length === 1);
@@ -794,6 +796,114 @@ describe('the board', () => {
       'already removed by another device',
     );
     expect(laneTitles('todo')).toEqual(['stubborn']);
+  });
+});
+
+describe('the Next view and the order picker', () => {
+  /** Set a container's order, as the Order ActionSelect does in production. */
+  function setOrder(id: number, order: 'sequential' | 'parallel'): void {
+    commit('tasks:set-sequential', { taskId: String(id), value: order });
+  }
+
+  test('a sequential project shows one step at a time, and advances when it is done', async () => {
+    signedIn();
+    clickAction('tasks:set-view', { view: 'all' });
+    const project = await addProject('Renovate the kitchen');
+    addSubtask(project, 'Strip the wallpaper');
+    addSubtask(project, 'Paint the ceiling');
+    await waitFor(() => rowIds().length === 3);
+    const stripId = [...stores.$tasksById.value.values()].find(
+      (t) => t.title === 'Strip the wallpaper',
+    )?.id;
+    if (stripId === undefined) throw new Error('fixture: no first step');
+
+    setOrder(project, 'sequential');
+    await waitFor(() => stores.$tasksById.value.get(project)?.sequential === true);
+
+    clickAction('tasks:set-view', { view: 'next' });
+    await waitFor(() => rowTitles().join(',') === 'Strip the wallpaper');
+    // The container is not one of its own next actions while it holds work.
+    expect(rowTitles()).not.toContain('Renovate the kitchen');
+
+    clickAction('tasks:toggle', { 'task-id': String(stripId) });
+    // The finished step lingers beside the one it unlocked, so the list reads
+    // as advancing rather than jumping.
+    await waitFor(() => rowTitles().includes('Paint the ceiling'));
+    expect(stores.$tasksById.value.get(stripId)?.status).toBe('done');
+  });
+
+  test('a parallel project hands out every step at once', async () => {
+    signedIn();
+    clickAction('tasks:set-view', { view: 'all' });
+    const project = await addProject('Weekend jobs');
+    addSubtask(project, 'Mow the lawn');
+    addSubtask(project, 'Wash the car');
+    await waitFor(() => rowIds().length === 3);
+
+    clickAction('tasks:set-view', { view: 'next' });
+    await waitFor(() => rowIds().length === 2);
+    expect(rowTitles().sort()).toEqual(['Mow the lawn', 'Wash the car']);
+  });
+
+  test('the order picker is offered on a container only, and badges the flag', async () => {
+    // Same rule as "+ Add a subtask": the flag governs children, so on a leaf
+    // it is a control that does nothing.
+    signedIn();
+    const id = await addTask('Fix the gate');
+    clickAction('tasks:expand', { 'task-id': String(id) });
+    await waitFor(() => document.querySelector('[data-task-detail]') !== null);
+    expect(document.querySelector('[data-task-order-picker]')).toBeNull();
+
+    setKind(id, 'project');
+    await waitFor(() => document.querySelector('[data-task-order-picker]') !== null);
+    // Parallel is the default and wears no badge — a word on every container
+    // saying "nothing unusual" would crowd out the ones that mean something.
+    expect(document.querySelector('[data-task-sequential]')).toBeNull();
+
+    setOrder(id, 'sequential');
+    await waitFor(() => document.querySelector('[data-task-sequential]') !== null);
+    expect(document.querySelector('[data-task-sequential]')?.textContent).toContain('sequential');
+
+    setOrder(id, 'parallel');
+    await waitFor(() => document.querySelector('[data-task-sequential]') === null);
+  });
+
+  test('an order value outside the two is dropped rather than guessed at', async () => {
+    signedIn();
+    const id = await addProject('Renovate the kitchen');
+    setOrder(id, 'sequential');
+    await waitFor(() => stores.$tasksById.value.get(id)?.sequential === true);
+    commit('tasks:set-sequential', { taskId: String(id), value: 'seqential' });
+    await flushMicrotasks();
+    // Treating a typo as "parallel" would quietly reorder someone's project.
+    expect(stores.$tasksById.value.get(id)?.sequential).toBe(true);
+  });
+
+  test('Next is empty, and says which of the three reasons, when nothing can start', async () => {
+    signedIn();
+    const id = await addTask('Wait for the plasterer');
+    commit('tasks:set-status', { taskId: String(id), value: 'blocked' });
+    await waitFor(() => stores.$tasksById.value.get(id)?.status === 'blocked');
+    clickAction('tasks:set-view', { view: 'next' });
+    await waitFor(() => document.querySelector('[data-tasks-empty]') !== null);
+    expect(document.querySelector('[data-tasks-empty]')?.textContent ?? '').toContain(
+      'blocked, deferred, or waiting on a step before it',
+    );
+  });
+
+  test('Next draws as a board too — it is a view, not a second layout', async () => {
+    signedIn();
+    clickAction('tasks:set-view', { view: 'next' });
+    await addTask('Book the dentist');
+    clickAction('tasks:set-layout', { layout: 'board' });
+    await waitFor(() => document.querySelector('[data-tasks-board]') !== null);
+    expect(
+      Array.from(
+        document.querySelectorAll<HTMLElement>(
+          '[data-board-lane-column][data-lane="todo"] [data-board-card] [data-task-title]',
+        ),
+      ).map((el) => el.textContent ?? ''),
+    ).toEqual(['Book the dentist']);
   });
 });
 

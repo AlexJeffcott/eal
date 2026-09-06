@@ -152,9 +152,31 @@
  * metrics: measured 84×40 at the 350px floor, four short in the block axis. It
  * is the control that moves a card, so it is the one a mis-tap costs most.
  * Sized on the control rather than by padding, as with every other target here.
+ *
+ * The Order picker is the same ActionSelect with the same metrics and the same
+ * argument: it decides whether a project hands out one step or all of them, so
+ * a mis-tap silently changes what the Next view says.
  */
-[data-task-status-picker] button {
+[data-task-status-picker] button,
+[data-task-order-picker] button {
   min-block-size: 44px;
+}
+
+/*
+ * The preset row.
+ *
+ * Five presets, not four. The row is a wrapping Cluster rather than a grid
+ * track per view (which is what it was through stages 0-2): a grid cannot wrap,
+ * so at the 350px floor the fifth button would push the document sideways
+ * instead of dropping onto a second line. The e2e floor case measures the
+ * document's horizontal overflow with all five on screen.
+ *
+ * Each preset is thumb-sized for the same reason the checkbox is: they are the
+ * controls the phone taps most, and a miss lands on the row behind them.
+ */
+[data-tasks-view-switch] [data-action='tasks:set-view'] {
+  min-block-size: 44px;
+  min-inline-size: 44px;
 }
 
 @media (min-width: 900px) {

@@ -528,6 +528,7 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
     if (input.notes !== undefined) body['notes'] = input.notes;
     if (input.deferUntil !== undefined) body['defer_until'] = input.deferUntil;
     if (input.dueAt !== undefined) body['due_at'] = input.dueAt;
+    if (input.sequential !== undefined) body['sequential'] = input.sequential;
     return body;
   }
 
@@ -541,6 +542,7 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
     if (input.deferUntil !== undefined) body['defer_until'] = input.deferUntil;
     if (input.dueAt !== undefined) body['due_at'] = input.dueAt;
     if (input.position !== undefined) body['position'] = input.position;
+    if (input.sequential !== undefined) body['sequential'] = input.sequential;
     return body;
   }
 

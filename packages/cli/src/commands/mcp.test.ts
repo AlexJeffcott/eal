@@ -23,6 +23,7 @@ describe('eal mcp tools', () => {
       'create_task',
       'get_task',
       'list_tasks',
+      'next_actions',
       'place_call',
       'reopen_task',
       'set_task_status',
@@ -109,6 +110,75 @@ describe('eal mcp tools', () => {
     const result = await tool('update_task').run(client, { id: created.id, title: 'new' });
     expect(result).toContain('new');
     expect(client.peekTasks()[0]?.title).toBe('new');
+  });
+
+  test('create_task and update_task set the order a container hands work out in', async () => {
+    const created = await tool('create_task').run(client, {
+      title: 'Renovate the kitchen',
+      kind: 'project',
+      sequential: true,
+    });
+    // The flag is said on the line the assistant reads back, because nothing
+    // else about the row shows it and it changes what next_actions answers.
+    expect(created).toContain('[project/todo] (sequential) Renovate the kitchen');
+    const id = client.peekTasks()[0]?.id ?? 0;
+    expect(await tool('update_task').run(client, { id, sequential: false })).toContain(
+      '[project/todo] Renovate the kitchen',
+    );
+    // Parallel is the default, so it is not printed — a word on every container
+    // meaning "nothing unusual" would crowd out the ones that mean something.
+    expect(await tool('update_task').run(client, { id, sequential: false })).not.toContain(
+      'parallel',
+    );
+  });
+
+  test('a non-boolean sequential is refused rather than dropped', async () => {
+    // Dropped, it would report success having changed nothing — and "nothing
+    // changed" and "the project now hands out one step at a time" read the same
+    // in the reply.
+    await expect(
+      tool('create_task').run(client, { title: 'x', sequential: 'yes' }),
+    ).rejects.toThrow(/sequential must be true or false/);
+    const created = await client.createTask({ title: 'y' });
+    await expect(
+      tool('update_task').run(client, { id: created.id, sequential: 1 }),
+    ).rejects.toThrow(/sequential must be true or false/);
+  });
+
+  test('next_actions answers "what should I do next" across the whole tree', async () => {
+    const project = await client.createTask({
+      title: 'Renovate the kitchen',
+      kind: 'project',
+      sequential: true,
+    });
+    const one = await client.createTask({ title: 'Strip the wallpaper', parentId: project.id });
+    await client.createTask({ title: 'Paint the ceiling', parentId: project.id });
+    const loose = await client.createTask({ title: 'Book the dentist' });
+
+    // The sequential project offers its first step and nothing else; the
+    // container itself is not an action while it holds work.
+    expect(await tool('next_actions').run(client, {})).toBe(
+      `#${one.id} [task/todo] Strip the wallpaper\n#${loose.id} [task/todo] Book the dentist`,
+    );
+
+    // Finishing the first step advances the project to the second.
+    await client.completeTask(one.id);
+    const after = await tool('next_actions').run(client, {});
+    expect(after).toContain('Paint the ceiling');
+    expect(after).not.toContain('Strip the wallpaper');
+
+    // A blocked step hands out nothing, which is the honest answer.
+    await client.setTaskStatus(loose.id, 'blocked');
+    const blocked = await tool('next_actions').run(client, {});
+    expect(blocked).not.toContain('Book the dentist');
+  });
+
+  test('next_actions says so plainly when there is nothing available', async () => {
+    const t = await client.createTask({ title: 'Wait for the plasterer' });
+    await client.setTaskStatus(t.id, 'blocked');
+    expect(await tool('next_actions').run(client, {})).toBe(
+      'Nothing is available. Everything left is blocked, deferred, or waiting on a step before it.',
+    );
   });
 
   test('numeric-id tools reject a missing id', async () => {

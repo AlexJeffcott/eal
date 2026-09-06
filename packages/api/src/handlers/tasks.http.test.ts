@@ -96,6 +96,39 @@ function isErrorEnvelope(body: unknown): body is { error: string } {
   return typeof body.error === 'string';
 }
 
+/**
+ * `sequential` is read off the raw body rather than through MinimalTask: the
+ * point of these three is that the field is present and is a real boolean, so
+ * a guard that already required it would assume what is under test.
+ */
+function hasSequential(body: unknown): boolean {
+  if (typeof body !== 'object' || body === null || !('task' in body)) return false;
+  const task = body.task;
+  if (typeof task !== 'object' || task === null || !('sequential' in task)) return false;
+  return typeof task.sequential === 'boolean';
+}
+
+function readSequential(body: unknown): boolean | string {
+  if (!hasSequential(body)) return `no boolean sequential in ${JSON.stringify(body)}`;
+  if (typeof body !== 'object' || body === null || !('task' in body)) return 'unreachable';
+  const task = body.task;
+  if (typeof task !== 'object' || task === null || !('sequential' in task)) return 'unreachable';
+  return task.sequential === true;
+}
+
+function readSequentialOf(body: unknown, id: number): boolean | string {
+  if (typeof body !== 'object' || body === null || !('tasks' in body)) return 'no {tasks}';
+  const tasks = body.tasks;
+  if (!Array.isArray(tasks)) return 'tasks is not an array';
+  for (const item of tasks) {
+    if (typeof item !== 'object' || item === null) continue;
+    if (!('id' in item) || item.id !== id) continue;
+    if (!('sequential' in item) || typeof item.sequential !== 'boolean') return 'no boolean field';
+    return item.sequential;
+  }
+  return `no task ${id} in the list`;
+}
+
 function unwrapTask(body: unknown): MinimalTask {
   if (!isTaskEnvelope(body)) throw new Error(`expected {task} envelope, got ${JSON.stringify(body)}`);
   return body.task;
@@ -121,6 +154,43 @@ describe('tasks http wire contract', () => {
     if (!isTaskEnvelope(res.body)) throw new Error('unreachable');
     expect(res.body.task.title).toBe('buy milk');
     expect(res.body.task.status).toBe('todo');
+  });
+
+  test('sequential rides the wire as a boolean, on create and on PATCH', async () => {
+    // The column is an INTEGER 0/1 in SQLite; a JSON api that leaked that would
+    // make every caller — the SPA and the assistant both — convert by hand.
+    const app = await createTestApp(db, { principalOverride: alex });
+    const created = await fetch(app, 'POST', '/api/v1/tasks', {
+      title: 'kitchen',
+      kind: 'project',
+      sequential: true,
+    });
+    expect(created.status).toBe(200);
+    const createdTask = unwrapTask(created.body);
+    expect(hasSequential(created.body)).toBe(true);
+    expect(readSequential(created.body)).toBe(true);
+
+    // Omitted on create means parallel — the same default the column carries.
+    const plain = await fetch(app, 'POST', '/api/v1/tasks', { title: 'gate', kind: 'project' });
+    expect(readSequential(plain.body)).toBe(false);
+
+    const patched = await fetch(app, 'PATCH', `/api/v1/tasks/${createdTask.id}`, {
+      sequential: false,
+    });
+    expect(patched.status).toBe(200);
+    expect(readSequential(patched.body)).toBe(false);
+
+    // …and it survives an edit that says nothing about it.
+    const renamed = await fetch(app, 'PATCH', `/api/v1/tasks/${createdTask.id}`, {
+      title: 'kitchen reno',
+    });
+    expect(readSequential(renamed.body)).toBe(false);
+    const again = await fetch(app, 'PATCH', `/api/v1/tasks/${createdTask.id}`, {
+      sequential: true,
+    });
+    expect(readSequential(again.body)).toBe(true);
+    const listed = await fetch(app, 'GET', '/api/v1/tasks');
+    expect(readSequentialOf(listed.body, createdTask.id)).toBe(true);
   });
 
   test('POST /api/v1/tasks: 400 with {error} envelope when title is empty', async () => {

@@ -84,6 +84,12 @@ async function main(): Promise<number> {
     if (realTask.status !== mockTask.status) {
       throw new Error(`createTask.status mismatch: real=${realTask.status} mock=${mockTask.status}`);
     }
+    // Capture is parallel on both sides — the same default the column carries.
+    if (realTask.sequential !== false || mockTask.sequential !== false) {
+      throw new Error(
+        `createTask.sequential mismatch: real=${String(realTask.sequential)} mock=${String(mockTask.sequential)}`,
+      );
+    }
     if (realTask.createdBy !== mockTask.createdBy) {
       throw new Error(`createTask.createdBy mismatch: real=${realTask.createdBy} mock=${mockTask.createdBy}`);
     }
@@ -104,6 +110,11 @@ async function main(): Promise<number> {
       dueAt: '2026-07-01',
       deferUntil: '2026-06-15',
       assignedTo: seeded.userId,
+      // The flag the Available view and next_actions both read. It is the one
+      // field that is a boolean here and an INTEGER 0/1 in storage, so a mock
+      // that returned the raw column would look right to every browser-tier
+      // test and wrong to the real api.
+      sequential: true,
     };
     const realUpdated = await real.updateTask(realTask.id, updatePatch);
     const mockUpdated = await mock.updateTask(mockTask.id, updatePatch);
@@ -119,6 +130,11 @@ async function main(): Promise<number> {
     }
     if (realUpdated.assignedTo !== mockUpdated.assignedTo) {
       throw new Error(`updateTask.assignedTo mismatch: real=${realUpdated.assignedTo} mock=${mockUpdated.assignedTo}`);
+    }
+    if (realUpdated.sequential !== true || mockUpdated.sequential !== true) {
+      throw new Error(
+        `updateTask.sequential mismatch: real=${String(realUpdated.sequential)} mock=${String(mockUpdated.sequential)}`,
+      );
     }
 
     // ─── Step 5: getTask shape — { task, children } ────────────────────────

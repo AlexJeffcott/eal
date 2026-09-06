@@ -152,6 +152,7 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
             notes: body.notes,
             deferUntil: body.defer_until,
             dueAt: body.due_at,
+            sequential: body.sequential,
           },
           principal,
         );
@@ -167,6 +168,10 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
           notes: t.Optional(t.String()),
           defer_until: t.Optional(t.Union([t.String(), t.Null()])),
           due_at: t.Optional(t.Union([t.String(), t.Null()])),
+          // A real boolean on the wire, not 0/1: the column's INTEGER shape is
+          // SQLite's business (db/repos/tasks.ts converts), and a JSON api that
+          // made callers send 1 would leak storage into the contract.
+          sequential: t.Optional(t.Boolean()),
         }),
       },
     )
@@ -212,6 +217,7 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
             deferUntil: body.defer_until,
             dueAt: body.due_at,
             position: body.position,
+            sequential: body.sequential,
           },
           principal,
         );
@@ -228,6 +234,7 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
           defer_until: t.Optional(t.Union([t.String(), t.Null()])),
           due_at: t.Optional(t.Union([t.String(), t.Null()])),
           position: t.Optional(t.Number()),
+          sequential: t.Optional(t.Boolean()),
         }),
       },
     )

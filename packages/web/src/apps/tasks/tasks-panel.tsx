@@ -38,9 +38,21 @@ import {
 import { BOARD_LANES, type Lane, lanesFor } from './board.ts';
 import { ancestorsOf, type ChildIndex, indexChildren, progressOf } from './tree.ts';
 
+/**
+ * The presets, in the order the day runs: what came in, what is on today, what
+ * is actually startable, everything, and the bin.
+ *
+ * "Next" and not "Available": both name the same set, and "Next" is the word
+ * the question is asked in — "what do I do next". It is also four characters
+ * against nine, which is what keeps the row to two lines at the 350px floor:
+ * measured there, the five presets wrap after "All", leaving "Trash" alone on
+ * the second line. The row wraps rather than overflows because it is a Cluster
+ * (see below); the e2e floor case measures the document either way.
+ */
 const VIEW_OPTIONS: ReadonlyArray<{ value: TaskView; label: string }> = [
   { value: 'inbox', label: 'Inbox' },
   { value: 'today', label: 'Today' },
+  { value: 'next', label: 'Next' },
   { value: 'all', label: 'All' },
   { value: 'trash', label: 'Trash' },
 ];
@@ -55,6 +67,16 @@ const LEVEL_OPTIONS: ReadonlyArray<{ value: TaskKind; label: string }> = [
 const LAYOUT_OPTIONS: ReadonlyArray<{ value: TaskLayout; label: string }> = [
   { value: 'list', label: 'List' },
   { value: 'board', label: 'Board' },
+];
+
+/**
+ * How a container hands out the work filed inside it. Offered on a container
+ * only — the flag governs children and a leaf has none, the same rule stage 1
+ * applied to "+ Add a subtask" and stage 2 to the trashed card's lane picker.
+ */
+const ORDER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'parallel', label: 'Parallel' },
+  { value: 'sequential', label: 'Sequential' },
 ];
 
 /** The lane picker's options — the same four lanes, in the same order. */
@@ -195,21 +217,36 @@ function TaskDetail({ task, users }: TaskDetailProps) {
               />
             </span>
           </FilterField>
-          {/* Only a container can hold anything: a task's allowed parents are
-            * none, a project or an epic. Showing the field on a plain task
-            * would offer a move the server refuses every time — the Level
-            * picker above is the way to earn it. */}
+          {/* Both of these belong to a container and only a container: a task's
+            * allowed parents are none, a project or an epic, so a plain task can
+            * never hold anything. The subtask field would offer a move the
+            * server refuses every time, and the order picker would set a flag
+            * governing children that cannot exist. The Level picker above is
+            * the way to earn both. Sequential is what makes the Next view show
+            * one step instead of all of them. */}
           {task.kind === 'task' ? null : (
-            <FilterField label="Subtasks">
-              <ActionInput
-                value=""
-                action="tasks:add-subtask"
-                actionData={{ taskId }}
-                saveOn="enter"
-                ariaLabel="Add a subtask"
-                renderView={() => '+ Add a subtask'}
-              />
-            </FilterField>
+            <>
+              <FilterField label="Order">
+                <span data-task-order-picker>
+                  <ActionSelect
+                    value={task.sequential ? 'sequential' : 'parallel'}
+                    options={[...ORDER_OPTIONS]}
+                    action="tasks:set-sequential"
+                    actionData={{ taskId }}
+                  />
+                </span>
+              </FilterField>
+              <FilterField label="Subtasks">
+                <ActionInput
+                  value=""
+                  action="tasks:add-subtask"
+                  actionData={{ taskId }}
+                  saveOn="enter"
+                  ariaLabel="Add a subtask"
+                  renderView={() => '+ Add a subtask'}
+                />
+              </FilterField>
+            </>
           )}
         </Layout>
       </Surface>
@@ -301,6 +338,17 @@ function TaskRow({ task, tasksById, index, expandedIds, users }: TaskRowProps) {
               {container ? (
                 <span data-task-kind>
                   <Badge variant="default">{task.kind}</Badge>
+                </span>
+              ) : null}
+              {/* Why is only one step of this project in Next? Because this row
+                * says so. Without the badge the rule is invisible and the view
+                * reads as losing tasks rather than ordering them. Only shown
+                * when the flag is on — parallel is the default, and badging it
+                * would put a word on every container meaning "nothing unusual",
+                * crowding out the ones that mean something. */}
+              {container && task.sequential ? (
+                <span data-task-sequential>
+                  <Badge variant="default">sequential</Badge>
                 </span>
               ) : null}
               {/* Standing inside a container. Not offered on a trashed row —
@@ -541,6 +589,11 @@ function emptyCopy(view: TaskView, refined: boolean, scoped: boolean): string {
       return 'Nothing in the inbox. Capture a thought above.';
     case 'today':
       return "Nothing on today's list. Either everything's deferred or you're done.";
+    case 'next':
+      // Three different reasons, and the person needs to know which, because
+      // the fix differs: unblock something, wait for a defer date, or tick the
+      // step above off.
+      return 'Nothing is available. Everything left is blocked, deferred, or waiting on a step before it.';
     case 'trash':
       return 'Trash is empty.';
     case 'all':
@@ -736,23 +789,26 @@ export function TasksPanel() {
       data-tasks-panel
     >
       <Layout gap="var(--polly-space-md)">
-        {/* Preset scope — one tap, the common case */}
-        <Layout
-          columns={VIEW_OPTIONS.map(() => 'auto').join(' ')}
-          gap="var(--polly-space-xs)"
-          justifyContent="start"
-        >
-          {VIEW_OPTIONS.map((v) => (
-            <Button
-              key={v.value}
-              tier={v.value === filter.view ? 'primary' : 'tertiary'}
-              size="small"
-              label={v.label}
-              data-action="tasks:set-view"
-              data-action-view={v.value}
-            />
-          ))}
-        </Layout>
+        {/* Preset scope — one tap, the common case.
+          *
+          * A wrapping Cluster, not the fixed `auto`-per-view grid this row used
+          * to be. A grid track per view cannot wrap, so the fifth preset would
+          * push the document sideways at the 350px floor rather than dropping
+          * onto a second line; the e2e floor case measures exactly that. */}
+        <div data-tasks-view-switch>
+          <Cluster gap="var(--polly-space-xs)">
+            {VIEW_OPTIONS.map((v) => (
+              <Button
+                key={v.value}
+                tier={v.value === filter.view ? 'primary' : 'tertiary'}
+                size="small"
+                label={v.label}
+                data-action="tasks:set-view"
+                data-action-view={v.value}
+              />
+            ))}
+          </Cluster>
+        </div>
 
         {/* List or board — a second row rather than two more buttons on the
           * view row, because at 350px six buttons on one line wrap into a

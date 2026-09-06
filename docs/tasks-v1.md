@@ -2,7 +2,7 @@
 
 Status: draft, awaiting approval.
 
-> **Two later stages have moved past this document; it is kept as the v1
+> **Three later stages have moved past this document; it is kept as the v1
 > record, not as current documentation.**
 >
 > - **Stage 1** added `tasks.kind` — project → epic → task — with the pairing
@@ -13,6 +13,11 @@ Status: draft, awaiting approval.
 >   states, read five (`packages/api/src/specs/tasks-status-machine.ts` is the
 >   live model). The predictable-resurrection rule this page introduced still
 >   holds — `restore` now lands in `todo`, and so does `reopen`.
+> - **Stage 3** added `tasks.sequential` and the Available ("Next") view. The
+>   "Sequential vs parallel projects" line in the deferral list below is no
+>   longer deferred: it is built. The rule lives in
+>   `packages/client/src/task-availability.ts` — one definition, read by the
+>   SPA's Next view and by the assistant's `next_actions` tool.
 
 Replaces: the `greetings` / `say-hello` / `hello:said` demo end-to-end.
 
@@ -33,7 +38,8 @@ Out of scope for v1, deferred deliberately (each is its own design):
 - Natural-language quick-add parsing.
 - Background purge of soft-deleted rows.
 - CLI surface (read/create/complete tasks from the terminal).
-- Sequential vs parallel projects (OmniFocus-style).
+- Sequential vs parallel projects (OmniFocus-style). **Built in stage 3** — see
+  the note at the top of this page.
 - Email / Slack capture integrations.
 
 The v1 feature set is deliberately tight. Each deferred item has a known shape

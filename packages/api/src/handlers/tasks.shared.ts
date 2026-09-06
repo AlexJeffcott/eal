@@ -28,6 +28,18 @@ export interface Task {
   completedAt: string | null;
   deletedAt: string | null;
   position: number;
+  /**
+   * Does this container hand its work out one step at a time?
+   *
+   * It governs the row's *children*, so on a leaf it means nothing and no UI
+   * offers it (tasks-panel.tsx shows the control on a container only). It is
+   * still stored on every row rather than rejected on a leaf: the flag says how
+   * this row would order children if it had any, so a task promoted to a
+   * project keeps the answer it was given, and no write path gains a new way to
+   * fail. What it *does* is defined in one place —
+   * packages/client/src/task-availability.ts:availableTaskIds.
+   */
+  sequential: boolean;
 }
 
 export function toTask(row: TaskRow): Task {
@@ -48,6 +60,9 @@ export function toTask(row: TaskRow): Task {
     completedAt: row.completed_at,
     deletedAt: row.deleted_at,
     position: row.position,
+    // The column is an INTEGER 0/1 (SQLite has no boolean); this is the one
+    // place it becomes the boolean the wire and the SPA carry.
+    sequential: row.sequential === 1,
   };
 }
 
@@ -59,6 +74,7 @@ export interface CreateTaskInput {
   notes?: string | undefined;
   deferUntil?: string | null | undefined;
   dueAt?: string | null | undefined;
+  sequential?: boolean | undefined;
 }
 
 export interface UpdateTaskInput {
@@ -70,6 +86,7 @@ export interface UpdateTaskInput {
   deferUntil?: string | null | undefined;
   dueAt?: string | null | undefined;
   position?: number | undefined;
+  sequential?: boolean | undefined;
 }
 
 export interface ListTasksInput {
@@ -220,6 +237,10 @@ export function createTaskCore(
     createdBy: principal.userId,
     assignedTo,
     position: tasks.nextSiblingPosition(parentId),
+    // Capture is parallel unless someone says otherwise, which is the same
+    // default the column carries and the same "changes nothing" promise the
+    // migration makes.
+    sequential: input.sequential ?? false,
   });
   return toTask(row);
 }
@@ -310,6 +331,7 @@ export function updateTaskCore(
     patch.dueAt = input.dueAt;
   }
   if (input.position !== undefined) patch.position = input.position;
+  if (input.sequential !== undefined) patch.sequential = input.sequential;
   // Stryker restore all
 
   if (input.assignedTo !== undefined) {

@@ -36,10 +36,18 @@ export const APPS: readonly AppVerification[] = [
       'packages/api/src/handlers/tasks.http.test.ts',
       'packages/api/src/handlers/tasks.shared.test.ts',
       'packages/cli/src/commands/mcp.test.ts',
+      'packages/client/src/task-availability.test.ts',
+      'packages/client/src/task-availability.property.test.ts',
     ],
     browser: ['packages/web/tests/browser/tasks.browser.tsx'],
     e2e: ['packages/e2e-tests/tests/tasks.spec.ts'],
-    mutate: ['packages/web/src/apps/tasks/filter.ts'],
+    mutate: [
+      'packages/web/src/apps/tasks/filter.ts',
+      // The availability rule is the whole of stage 3 and lives in @eal/client
+      // so the SPA and the assistant answer "what next" identically. It is
+      // mutated with the filter it feeds.
+      'packages/client/src/task-availability.ts',
+    ],
   },
   {
     // A public, web-only app: no API, DB, or MCP layer, so no unit surface and

@@ -18,6 +18,11 @@ export type {
   TaskStatus,
   UpdateTaskInput,
 } from './task-types.ts';
+export {
+  availableTaskIds,
+  compareSiblingOrder,
+  endOfDayIso,
+} from './task-availability.ts';
 export type {
   ChatAgentReply,
   ChatAgentRequest,

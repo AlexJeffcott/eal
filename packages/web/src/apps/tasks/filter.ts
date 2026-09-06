@@ -1,5 +1,5 @@
 import Fuse from 'fuse.js';
-import type { Task } from '@eal/client';
+import { availableTaskIds, endOfDayIso, type Task } from '@eal/client';
 import { descendantIds, indexChildren, tasksInTreeOrder } from './tree.ts';
 
 /**
@@ -8,7 +8,15 @@ import { descendantIds, indexChildren, tasksInTreeOrder } from './tree.ts';
  * The whole filter serialises into the URL query string so a filtered list is
  * a shareable, reload-surviving link — see tasks/url-sync.ts.
  */
-export type TaskView = 'inbox' | 'today' | 'all' | 'trash';
+
+/**
+ * `next` is the answer to "what do I do next" rather than another way of
+ * asking it: it holds only the tasks nothing is standing in front of, which is
+ * a read over the whole tree (see @eal/client's task-availability.ts) and not a
+ * property of a row. Like every other view it composes with `scope`, `layout`
+ * and every condition — one selection path, as stages 0-2 kept it.
+ */
+export type TaskView = 'inbox' | 'today' | 'all' | 'trash' | 'next';
 /**
  * How the selected rows are drawn. Both renderers consume the output of
  * `visibleFor` — the board is a second arrangement of one query, not a second
@@ -167,6 +175,7 @@ function asView(value: string | null): TaskView {
     case 'today':
     case 'all':
     case 'trash':
+    case 'next':
     // Stryker disable next-line StringLiteral: 'inbox' is also the default fallback — equivalent mutant.
     case 'inbox':
       return value;
@@ -300,17 +309,15 @@ export function hasActiveRefinements(filter: TaskFilter): boolean {
 
 // ── Applying the filter ────────────────────────────────────────────────────
 
-function endOfDayIso(now: Date): string {
-  const eod = new Date(now);
-  eod.setHours(23, 59, 59, 999);
-  return eod.toISOString();
-}
+/** Shared empty set for the four views that never consult availability. */
+const EMPTY_IDS: ReadonlySet<number> = new Set<number>();
 
 function inView(
   task: Task,
   view: TaskView,
   todayCutoff: string,
   recentlyCompleted: ReadonlySet<number>,
+  availableIds: ReadonlySet<number>,
 ): boolean {
   if (view === 'trash') return task.deletedAt !== null;
   if (task.deletedAt !== null) return false;
@@ -326,6 +333,14 @@ function inView(
     // task lingers anyway, so ticking one off does not make it vanish.
     const statusOk = task.status !== 'done' || recentlyCompleted.has(task.id);
     return deferOk && statusOk;
+  }
+  if (view === 'next') {
+    // The linger rule the today view and the status conditions already follow:
+    // a task ticked off since the last navigation stays on screen, struck
+    // through, beside the step that has just become available. Without it the
+    // row you just completed would vanish at the same instant a new one
+    // appeared, which reads as the list jumping rather than advancing.
+    return availableIds.has(task.id) || recentlyCompleted.has(task.id);
   }
   return true; // 'all' — every live task, at every depth
 }
@@ -442,6 +457,11 @@ export function visibleFor(
   ctx: { now: Date },
 ): Task[] {
   const todayCutoff = endOfDayIso(ctx.now);
+  // Resolved once per call, and only for the view that needs it: availability
+  // walks the whole forest, which is wasted work in the four views that ask a
+  // question about a row rather than about the tree above it.
+  const availableIds =
+    filter.view === 'next' ? availableTaskIds(tasks.values(), { now: ctx.now }) : EMPTY_IDS;
   // Resolved once per call rather than per row: the subtree is a set lookup,
   // and a scope naming a container this mirror has never seen resolves to the
   // empty set, so the list is empty and the breadcrumb says where you are.
@@ -449,7 +469,7 @@ export function visibleFor(
   const out: Task[] = [];
   for (const task of tasksInTreeOrder(tasks)) {
     if (inScope !== null && !inScope.has(task.id)) continue;
-    if (!inView(task, filter.view, todayCutoff, recentlyCompleted)) continue;
+    if (!inView(task, filter.view, todayCutoff, recentlyCompleted, availableIds)) continue;
     let matched = true;
     for (const condition of filter.conditions) {
       if (!conditionMatches(task, condition, tasks, recentlyCompleted)) {

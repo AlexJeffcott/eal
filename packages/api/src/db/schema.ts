@@ -150,6 +150,25 @@ export function applySchema(db: DatabaseClient): void {
   // way to ALTER a CHECK constraint — so the table is rebuilt. Runs after every
   // ensureColumn above so the column set it copies is already the final one.
   rebuildTasksStatusIfLegacy(db);
+  // Tasks stage 3: does a container hand out its work one step at a time, or
+  // all at once? Default 0 — parallel — so every container that existed before
+  // this column behaves exactly as it did, and the Available view is the only
+  // thing the migration changes (namely: nothing, until someone flips a flag).
+  //
+  // **This ensureColumn must stay AFTER rebuildTasksStatusIfLegacy.** That
+  // rebuild copies the table through a hand-written column list
+  // (`CREATE TABLE tasks_stage2` / `INSERT … SELECT` above), so a column added
+  // before it would be silently dropped on any database still on the stage-1
+  // shape. Placed here it cannot be: a database that has `sequential` also has
+  // the 'doing' literal the rebuild detects on, so the rebuild has already
+  // returned early by the time this line can matter.
+  // schema.test.ts drives that exact upgrade and asserts the column survives.
+  ensureColumn(
+    db,
+    'tasks',
+    'sequential',
+    'INTEGER NOT NULL DEFAULT 0 CHECK (sequential IN (0,1))',
+  );
   promoteGrandfatheredContainers(db);
   // Phase 7D: the single user-less device row voicemails land in when
   // no household member was specifically being called. Idempotent —

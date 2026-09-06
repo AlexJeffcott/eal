@@ -475,6 +475,42 @@ describe('delete / restore', () => {
   });
 });
 
+describe('sequential', () => {
+  let ctx: Ctx;
+  beforeEach(() => { ctx = setup(); });
+
+  test('capture is parallel; a create may say otherwise; a patch may change its mind', () => {
+    // toTask is the one place the column's 0/1 becomes a boolean, so every one
+    // of these also pins that conversion.
+    const captured = createTaskCore(ctx.db, { title: 'gate' }, ctx.alex);
+    expect(captured.sequential).toBe(false);
+
+    const stepwise = createTaskCore(
+      ctx.db,
+      { title: 'kitchen', kind: 'project', sequential: true },
+      ctx.alex,
+    );
+    expect(stepwise.sequential).toBe(true);
+
+    expect(updateTaskCore(ctx.db, stepwise.id, { sequential: false }, ctx.alex).sequential).toBe(false);
+    expect(updateTaskCore(ctx.db, stepwise.id, { sequential: true }, ctx.alex).sequential).toBe(true);
+    // An unrelated edit leaves the flag where it was.
+    expect(updateTaskCore(ctx.db, stepwise.id, { title: 'kitchen reno' }, ctx.alex).sequential).toBe(true);
+  });
+
+  test('the flag is stored on a leaf too, and is simply inert there', () => {
+    // Deliberate: the flag says how a row would order children, so a task
+    // promoted to a project keeps the answer it was given, and no write path
+    // gains a new way to fail. The UI is where it is hidden on a leaf
+    // (tasks-panel.tsx), not the api.
+    const leaf = createTaskCore(ctx.db, { title: 'leaf', sequential: true }, ctx.alex);
+    expect(leaf.sequential).toBe(true);
+    expect(leaf.kind).toBe('task');
+    const promoted = updateTaskCore(ctx.db, leaf.id, { kind: 'project' }, ctx.alex);
+    expect(promoted.sequential).toBe(true);
+  });
+});
+
 describe('cloneTaskCore', () => {
   let ctx: Ctx;
   beforeEach(() => { ctx = setup(); });

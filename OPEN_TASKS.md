@@ -15,25 +15,30 @@ pre-commit hook runs `devctl check` and the unit tier only.
 | Command | Passing count, 2026-09-06 | Runs in the pre-push sweep |
 |---|---|---|
 | `bun devctl check` | tsc + 7 lint scripts | yes |
-| `bun devctl test unit` | 1204 tests, 101 files; coverage ok, 132 files, 27 exempt | yes |
-| `bun devctl test browser` | 90 tests | yes |
-| `bun devctl test e2e` | 48 Playwright tests, 2 projects | yes |
-| `bun devctl test multi` | 23 `scripts/e2e-*.ts`, each exiting 0 | yes |
+| `bun devctl test unit` | 1251 tests, 103 files; coverage ok, 133 files, 27 exempt | yes |
+| `bun devctl test browser` | 96 tests | yes |
+| `bun devctl test e2e` | 50 Playwright tests, 2 projects | yes |
+| `bun devctl test multi` | 24 `scripts/e2e-*.ts`, each exiting 0 | yes |
 | `bun devctl test mutation` | see below — not part of `all` | no |
-| `bun devctl verify` | TLC: `tasks` ✓ 7.0s, `pairing` ✓ 1.7s, **`auth` never finishes** — see below | no |
+| `bun devctl verify` | TLC: `tasks` ✓ 7.4s, `pairing` ✓ 1.8s, **`auth` never finishes** — see below | no |
 
 The multi tier now includes `e2e-registration-closed.ts` (the registration
 gate), `e2e-tasks-reconnect.ts` (the WS drop and resync),
 `e2e-agent-offline.ts` (the assistant-availability signal) and
 `e2e-tasks-levels-migration.ts` (the project/epic/task migration, driven over
-a real pre-migration database file) and `e2e-tasks-status-migration.ts` (the
+a real pre-migration database file), `e2e-tasks-status-migration.ts` (the
 todo/doing/blocked/done widening, driven over a real pre-migration database
-file). The offline one drops a live socket from inside the page, so it fails if
-the reconnect handler is removed. The levels one fails at the first check if the
-promote pass is removed. The status one fails at its first check with
-`"Redecorate the hall" reads status open, expected todo — the status rebuild did
-not run` when `rebuildTasksStatusIfLegacy` is taken out of `applySchema` — all
-three checked, not assumed.
+file) and `e2e-tasks-sequential-migration.ts` (the `sequential` column and the
+Available answer, driven over the same pre-stage-2 database file and then
+through the assistant's own `next_actions` tool over real HTTP). The offline one
+drops a live socket from inside the page, so it fails if the reconnect handler is
+removed. The levels one fails at the first check if the promote pass is removed.
+The status one fails at its first check with `"Redecorate the hall" reads status
+open, expected todo — the status rebuild did not run` when
+`rebuildTasksStatusIfLegacy` is taken out of `applySchema`. The sequential one
+fails with `the sequential column is not on the table after boot — the status
+rebuild ate it` when its `ensureColumn` is moved above
+`rebuildTasksStatusIfLegacy` — all four checked, not assumed.
 
 Every tier runs with the developer's own `.env` in place and needs no
 environment override. Tests take their config explicitly: `createTestApp`
@@ -89,6 +94,12 @@ what remains there is a machine to install it on.
       `push.http.ts`'s own header comment already promises, and a 60-second
       scan in the api process. → `docs/plans/04-due-date-reminders.md` ·
       ~2–3 days
+- [ ] **Ordering the work inside a project.** `sequential` (stage 3) decides
+      *whether* a container hands out one step at a time; which step is first is
+      `(position, id)`, and `position` is only ever set by insertion order —
+      there is no way to reorder the steps of a sequential project short of
+      deleting and re-adding them. Same missing coordinate space as the lane
+      drag below, and the same fix would serve both.
 - [ ] **Reordering inside a board lane.** Deliberately not built with the
       board. `position` is one integer numbered per parent
       (`nextSiblingPosition` in the tasks repo) and a lane cuts across parents,
@@ -150,11 +161,16 @@ user-facing feature works.
       root config has never finished a run. `specs`, `cli-lib` and `web-logic`
       have no current score either. Run `bun devctl test mutation`, then
       `bun mutation:report` for the redundancy and theatre signals.
-- [x] **The TLC model checker runs.** Ran 2026-09-06 with Docker up.
-      `tasks` ✓ (7 handlers, 5 ensures, 8 states, 7.0s) and `pairing` ✓
-      (2 handlers, 2 ensures, 8 states, 1.7s). Non-interference and
+- [x] **The TLC model checker runs.** Re-run 2026-09-06 with Docker up, after
+      stage 3. `tasks` ✓ (7 handlers, 5 ensures, 8 states, 7.4s) and `pairing` ✓
+      (2 handlers, 2 ensures, 8 states, 1.8s). Non-interference and
       precondition locality both verified. 93 handlers belong to no subsystem
       and are not checked, which is the documented partition, not a regression.
+      `sequential` needed no model change: it is an attribute and a derived
+      query, not a state transition, so `tasks-status-machine.ts` is correct as
+      it stands. Getting the two verdicts means dropping the `auth` block below
+      for the run — with it in place, `auth` runs first and nothing after it is
+      reached.
 - [!] **The `auth` subsystem does not finish.** Two runs, 2245s and 1580s of
       TLC wall time, neither reaching a verdict; both were killed, and the
       `✗ auth` line in the report is that kill, not a violated invariant. It

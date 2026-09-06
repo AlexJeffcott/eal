@@ -1,3 +1,4 @@
+import { availableTaskIds } from '@eal/client';
 import type {
   CreateTaskInput,
   ListTasksInput,
@@ -52,6 +53,19 @@ function requireStatus(args: Record<string, unknown>, key: string): TaskStatus {
   throw new Error(`${key} must be "todo", "doing", "blocked" or "done"`);
 }
 
+/**
+ * A boolean argument, when present. Same refusal as `optionalKind`: an
+ * unrecognised value silently dropped would report success having changed
+ * nothing, and for this flag "nothing changed" and "the project now hands out
+ * one step at a time" look identical in the reply.
+ */
+function optionalBoolean(args: Record<string, unknown>, key: string): boolean | undefined {
+  const value = args[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') throw new Error(`${key} must be true or false`);
+  return value;
+}
+
 function requireNumber(args: Record<string, unknown>, key: string): number {
   const value = args[key];
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -67,7 +81,11 @@ function requireNumber(args: Record<string, unknown>, key: string): number {
 function formatTask(task: Task): string {
   const due = task.dueAt !== null ? ` (due ${task.dueAt})` : '';
   const defer = task.deferUntil !== null ? ` (deferred to ${task.deferUntil})` : '';
-  return `#${task.id} [${task.kind}/${task.status}] ${task.title}${due}${defer}`;
+  // Only said when it is true and can bite. Parallel is the default, so
+  // printing it on every container would be a word on every line meaning
+  // "nothing unusual" — and it would crowd out the ones that do mean something.
+  const order = task.kind !== 'task' && task.sequential ? ' (sequential)' : '';
+  return `#${task.id} [${task.kind}/${task.status}]${order} ${task.title}${due}${defer}`;
 }
 
 /** Shared prose so all three schemas describe the levels the same way. */
@@ -97,6 +115,23 @@ const STATUS_PROPERTY = {
   type: 'string',
   enum: ['todo', 'doing', 'blocked', 'done'],
   description: STATUS_DESCRIPTION,
+};
+
+/**
+ * Shared prose for the order flag. Spelled out in terms of what it *does* to
+ * the answer, because the flag has no effect the assistant can see on the row
+ * it is set on — only on which of that row's descendants `next_actions`
+ * returns.
+ */
+const SEQUENTIAL_PROPERTY = {
+  type: 'boolean',
+  description:
+    'Only meaningful on a container (a project or an epic). true means the ' +
+    'container hands out its work one step at a time: only its first ' +
+    'unfinished child, and what is available inside that child, count as ' +
+    'available. false (the default) means everything inside it is available at ' +
+    'once. Nests: a sequential project holding a sequential epic exposes one ' +
+    'task overall, not one per level.',
 };
 
 const TOOLS: EalMcpTool[] = [
@@ -166,6 +201,7 @@ const TOOLS: EalMcpTool[] = [
         parent_id: { type: 'number', description: 'id of a parent task to nest this under' },
         due_at: { type: 'string', description: 'ISO date/time the task is due' },
         defer_until: { type: 'string', description: 'ISO date/time before which the task is hidden' },
+        sequential: SEQUENTIAL_PROPERTY,
       },
       required: ['title'],
     },
@@ -180,14 +216,17 @@ const TOOLS: EalMcpTool[] = [
       if (dueAt !== undefined) input.dueAt = dueAt;
       const deferUntil = optionalString(args, 'defer_until');
       if (deferUntil !== undefined) input.deferUntil = deferUntil;
+      const sequential = optionalBoolean(args, 'sequential');
+      if (sequential !== undefined) input.sequential = sequential;
       return `Created ${formatTask(await client.createTask(input))}`;
     },
   },
   {
     name: 'update_task',
     description:
-      'Update an existing task’s title, notes, level, due date, or defer date. ' +
-      'Changing the level is how a captured task becomes a project.',
+      'Update an existing task’s title, notes, level, due date, defer date, or ' +
+      'the order it hands out its work. Changing the level is how a captured ' +
+      'task becomes a project.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -197,6 +236,7 @@ const TOOLS: EalMcpTool[] = [
         kind: KIND_PROPERTY,
         due_at: { type: 'string', description: 'ISO date/time, or empty string to clear' },
         defer_until: { type: 'string', description: 'ISO date/time, or empty string to clear' },
+        sequential: SEQUENTIAL_PROPERTY,
       },
       required: ['id'],
     },
@@ -213,6 +253,8 @@ const TOOLS: EalMcpTool[] = [
       if (dueAt !== undefined) input.dueAt = dueAt.length === 0 ? null : dueAt;
       const deferUntil = optionalString(args, 'defer_until');
       if (deferUntil !== undefined) input.deferUntil = deferUntil.length === 0 ? null : deferUntil;
+      const sequential = optionalBoolean(args, 'sequential');
+      if (sequential !== undefined) input.sequential = sequential;
       return `Updated ${formatTask(await client.updateTask(id, input))}`;
     },
   },
@@ -258,6 +300,35 @@ const TOOLS: EalMcpTool[] = [
       const id = requireNumber(args, 'id');
       const status = requireStatus(args, 'status');
       return `Moved ${formatTask(await client.setTaskStatus(id, status))}`;
+    },
+  },
+  {
+    // A tool of its own, not a flag on list_tasks. Every list_tasks filter is a
+    // predicate over one row, handed to the api as a query parameter and
+    // answered in SQL; "available" is a read over the whole tree above a row
+    // and cannot be one of those without lying about what the api can do. It
+    // also has to be findable: the assistant is asked "what should I do next"
+    // in those words, and a boolean buried in another tool's schema is not what
+    // it reaches for.
+    name: 'next_actions',
+    description:
+      'Answer "what should I do next": every task that can actually be started ' +
+      'right now. Excludes anything blocked, done, deferred to a future date, ' +
+      'or still holding unfinished subtasks, and honours the sequential flag on ' +
+      'every container above a task — inside a sequential project only the ' +
+      'current step is offered. Read-only.',
+    inputSchema: { type: 'object', properties: {} },
+    run: async (client) => {
+      // The whole live set, because availability is a property of the tree, not
+      // of a row: a task's answer depends on every ancestor above it and on its
+      // siblings' states. Trashed rows are already excluded by the api's list.
+      const tasks = await client.listTasks({});
+      const availableIds = availableTaskIds(tasks, { now: new Date() });
+      const available = tasks.filter((task) => availableIds.has(task.id));
+      if (available.length === 0) {
+        return 'Nothing is available. Everything left is blocked, deferred, or waiting on a step before it.';
+      }
+      return available.map(formatTask).join('\n');
     },
   },
 ];

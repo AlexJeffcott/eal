@@ -70,7 +70,13 @@ async function commitTaskField(
 }
 
 function isTaskView(value: string): value is TaskView {
-  return value === 'inbox' || value === 'today' || value === 'all' || value === 'trash';
+  return (
+    value === 'inbox' ||
+    value === 'today' ||
+    value === 'all' ||
+    value === 'trash' ||
+    value === 'next'
+  );
 }
 
 function isTaskKind(value: string): value is TaskKind {
@@ -352,6 +358,18 @@ export const TASKS_ACTIONS: ActionRegistry<AppStores> = {
     const value = data['value'];
     if (id === null || typeof value !== 'string' || !isTaskKind(value)) return;
     void commitTaskField(stores, id, { kind: value });
+  },
+
+  'tasks:set-sequential': ({ data, stores }) => {
+    // The Order picker in the detail editor. Two values and no third, so an
+    // unrecognised one is dropped rather than guessed at: the alternative is
+    // treating "seqential" as parallel and quietly reordering someone's
+    // project. Only ever rendered on a container (tasks-panel.tsx), which is
+    // where the flag means anything.
+    const id = taskIdFromData(data);
+    const value = data['value'];
+    if (id === null || (value !== 'sequential' && value !== 'parallel')) return;
+    void commitTaskField(stores, id, { sequential: value === 'sequential' });
   },
 
   'tasks:set-status': async ({ data, stores }) => {

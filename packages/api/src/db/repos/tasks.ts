@@ -54,6 +54,12 @@ export interface TaskRow {
   completed_at: string | null;
   deleted_at: string | null;
   position: number;
+  /**
+   * 0 or 1, not a boolean: SQLite has no boolean type, so the column is an
+   * INTEGER with a CHECK. `toTask` in handlers/tasks.shared.ts is the one place
+   * it becomes a `boolean` on the wire.
+   */
+  sequential: number;
 }
 
 export interface InsertTaskInput {
@@ -66,6 +72,7 @@ export interface InsertTaskInput {
   createdBy: number;
   assignedTo: number | null;
   position: number;
+  sequential: boolean;
 }
 
 export interface UpdateTaskInput {
@@ -77,6 +84,7 @@ export interface UpdateTaskInput {
   deferUntil?: string | null;
   dueAt?: string | null;
   position?: number;
+  sequential?: boolean;
   updatedBy: number;
 }
 
@@ -120,12 +128,12 @@ export interface TasksRepo {
 }
 
 const COLS =
-  'id, parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, created_at, updated_at, completed_at, deleted_at, position';
+  'id, parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, created_at, updated_at, completed_at, deleted_at, position, sequential';
 
 // Same list, prefixed with the `tasks.` alias for queries that join recursive
 // CTEs (which themselves expose a column named `id`).
 const T_COLS =
-  'tasks.id, tasks.parent_id, tasks.title, tasks.notes, tasks.status, tasks.kind, tasks.defer_until, tasks.due_at, tasks.created_by, tasks.assigned_to, tasks.updated_by, tasks.created_at, tasks.updated_at, tasks.completed_at, tasks.deleted_at, tasks.position';
+  'tasks.id, tasks.parent_id, tasks.title, tasks.notes, tasks.status, tasks.kind, tasks.defer_until, tasks.due_at, tasks.created_by, tasks.assigned_to, tasks.updated_by, tasks.created_at, tasks.updated_at, tasks.completed_at, tasks.deleted_at, tasks.position, tasks.sequential';
 
 export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock): TasksRepo {
   const insertStmt = db.prepare<
@@ -141,13 +149,14 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
       number | null,
       number,
       number,
+      number,
       string,
       string,
     ]
   >(
     `INSERT INTO tasks
-       (parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, position, created_at, updated_at)
-       VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, position, sequential, created_at, updated_at)
+       VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING ${COLS}`,
   );
 
@@ -238,6 +247,7 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
         input.assignedTo,
         input.createdBy, // updated_by mirrors created_by at insert time
         input.position,
+        input.sequential ? 1 : 0,
         ts, // created_at
         ts, // updated_at
       );
@@ -402,6 +412,10 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
         sets.push('position = ?');
         params.push(input.position);
       }
+      if (input.sequential !== undefined) {
+        sets.push('sequential = ?');
+        params.push(input.sequential ? 1 : 0);
+      }
       sets.push('updated_at = ?');
       params.push(clock());
       sets.push('updated_by = ?');
@@ -452,6 +466,7 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
           root.assigned_to,
           input.createdBy,
           root.position,
+          root.sequential,
           ts,
           ts,
         );
@@ -498,6 +513,7 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
             child.assigned_to,
             input.createdBy,
             child.position,
+            child.sequential,
             ts,
             ts,
           );

@@ -128,6 +128,9 @@ function newTaskRow(input: CreateTaskInput, id: number, principalId: number): Ta
     completedAt: null,
     deletedAt: null,
     position: id,
+    // Same default as the column and the api core: capture is parallel until
+    // someone says otherwise.
+    sequential: input.sequential ?? false,
   };
 }
 
@@ -618,6 +621,7 @@ export function createMockEalClient(): MockEalClient {
         ...(input.deferUntil !== undefined ? { deferUntil: input.deferUntil } : {}),
         ...(input.dueAt !== undefined ? { dueAt: input.dueAt } : {}),
         ...(input.position !== undefined ? { position: input.position } : {}),
+        ...(input.sequential !== undefined ? { sequential: input.sequential } : {}),
         updatedBy: user.userId,
         updatedAt: isoNow(),
       };

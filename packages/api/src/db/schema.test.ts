@@ -67,6 +67,7 @@ describe('applySchema', () => {
       'notes',
       'parent_id',
       'position',
+      'sequential',
       'status',
       'title',
       'updated_at',
@@ -336,8 +337,8 @@ describe('applySchema', () => {
     expect(userCols).toEqual(['created_at', 'display_name', 'id', 'in_ivr_menu']);
 
     const taskCols = columns(db, 'tasks').map((c) => c.name);
-    // Same set after the second apply.
-    expect(taskCols.length).toBe(16);
+    // Same set after the second apply. 17 since stage 3 added `sequential`.
+    expect(taskCols.length).toBe(17);
   });
 
   test('schema preserves rows across repeat applySchema calls', () => {
@@ -465,6 +466,86 @@ describe('applySchema', () => {
       )
       .all();
   }
+
+  test('tasks.sequential defaults to 0, is CHECK-bounded, and survives a repeat apply', () => {
+    applySchema(db);
+    db.prepare("INSERT INTO users (display_name) VALUES ('alex')").run();
+    // Default 0 is the whole promise of this migration: every container that
+    // existed before the column is parallel, which is what it already was.
+    db.prepare(
+      "INSERT INTO tasks (title, status, kind, created_by, updated_by) VALUES ('kitchen', 'todo', 'project', 1, 1)",
+    ).run();
+    interface SeqRow { sequential: number }
+    const before = db
+      .prepare<SeqRow, []>("SELECT sequential FROM tasks WHERE title = 'kitchen'")
+      .get();
+    expect(before?.sequential).toBe(0);
+
+    // The CHECK bounds it to a real flag. SQLite has no boolean type, so
+    // without this any integer — or a string — would be storable and the SPA
+    // would read a truthy 7 as "sequential".
+    for (const bad of ['2', '-1', "'true'"]) {
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO tasks (title, status, sequential, created_by, updated_by) VALUES ('x', 'todo', ${bad}, 1, 1)`,
+          )
+          .run(),
+      ).toThrow();
+    }
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO tasks (title, status, sequential, created_by, updated_by) VALUES ('x', 'todo', 1, 1, 1)",
+        )
+        .run(),
+    ).not.toThrow();
+
+    // A flag chosen after the migration survives every later boot.
+    db.prepare("UPDATE tasks SET sequential = 1 WHERE title = 'kitchen'").run();
+    applySchema(db);
+    applySchema(db);
+    const after = db
+      .prepare<SeqRow, []>("SELECT sequential FROM tasks WHERE title = 'kitchen'")
+      .get();
+    expect(after?.sequential).toBe(1);
+  });
+
+  test('sequential survives an upgrade from the pre-stage-2 shape — the rebuild does not eat it', () => {
+    // The trap this stage most easily falls into. `rebuildTasksStatusIfLegacy`
+    // copies the table through a hand-written column list, so an ensureColumn
+    // placed *before* it would have its column silently dropped on any database
+    // still on the stage-1 shape — the exact database this test starts from.
+    // Placed after the rebuild, the column lands on the rebuilt table and the
+    // rows keep the default.
+    seedPreStatusTasks(db);
+    db.exec(`
+      INSERT INTO tasks (id, parent_id, title, status, kind, position, created_by, updated_by)
+      VALUES (1, NULL, 'project', 'open', 'project', 0, 1, 1),
+             (2, 1, 'step one', 'open', 'task', 0, 1, 1);
+    `);
+
+    applySchema(db);
+
+    const cols = columns(db, 'tasks').map((c) => c.name);
+    expect(cols).toContain('sequential');
+    interface SeqRow { id: number; sequential: number }
+    expect(
+      db.prepare<SeqRow, []>('SELECT id, sequential FROM tasks ORDER BY id').all(),
+    ).toEqual([
+      { id: 1, sequential: 0 },
+      { id: 2, sequential: 0 },
+    ]);
+    // …and the migration changed no behaviour: the status rebuild still ran,
+    // and the parent link the rebuild exists to protect is intact.
+    interface ShapeRow { status: string; parent_id: number | null }
+    expect(
+      db.prepare<ShapeRow, []>('SELECT status, parent_id FROM tasks ORDER BY id').all(),
+    ).toEqual([
+      { status: 'todo', parent_id: null },
+      { status: 'todo', parent_id: 1 },
+    ]);
+  });
 
   test("the status rebuild maps 'open' to 'todo' and carries every row across", () => {
     seedPreStatusTasks(db);

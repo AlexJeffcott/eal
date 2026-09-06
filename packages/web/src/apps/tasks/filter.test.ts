@@ -35,6 +35,7 @@ function task(overrides: Partial<Task> & { id: number; title: string }): Task {
     completedAt: null,
     deletedAt: null,
     position: 0,
+    sequential: false,
     ...overrides,
   };
 }
@@ -170,6 +171,23 @@ describe('parseFilterFromUrl', () => {
     expect(parseFilterFromUrl('?c=somefield:value').conditions).toEqual([]);
     expect(parseFilterFromUrl('?c=textX').conditions).toEqual([]);
     expect(parseFilterFromUrl('?c=text:').conditions).toEqual([]);
+  });
+});
+
+describe('parseFilterFromUrl — the next view', () => {
+  test('view=next round-trips through the URL like every other preset', () => {
+    expect(parseFilterFromUrl('?view=next').view).toBe('next');
+    expect(serializeFilterToUrl(withConds('next', []))).toBe('?view=next');
+    // And composes in the URL with everything else the filter carries.
+    const round = parseFilterFromUrl('?view=next&in=7&layout=board&c=status%3Adoing');
+    expect(round.view).toBe('next');
+    expect(round.scope).toBe(7);
+    expect(round.layout).toBe('board');
+    expect(round.conditions).toHaveLength(1);
+  });
+
+  test('a misspelt view still opens the app at the inbox', () => {
+    expect(parseFilterFromUrl('?view=nxt').view).toBe('inbox');
   });
 });
 
@@ -394,6 +412,82 @@ describe('visibleFor — view scoping', () => {
       task({ id: 2, title: 'subtask due now', parentId: 1 }),
     );
     expect(ids(visibleFor(withConds('today', []), tasks, noLinger, ctx))).toEqual([2]);
+  });
+});
+
+describe('visibleFor — the next view', () => {
+  // The rule itself lives in @eal/client (task-availability.ts) and is proved
+  // there, property-based. What is checked here is the wiring: that the fifth
+  // view consults it, and that it composes with scope, layout and conditions
+  // like every other view rather than being a second selection path.
+
+  function seqProject(): Map<number, Task> {
+    return mapOf(
+      task({ id: 1, title: 'kitchen', kind: 'project', sequential: true, position: 0 }),
+      task({ id: 2, title: 'step one', parentId: 1, position: 0 }),
+      task({ id: 3, title: 'step two', parentId: 1, position: 1 }),
+      task({ id: 4, title: 'loose', position: 1 }),
+    );
+  }
+
+  test('shows the first step of a sequential project, and never the container', () => {
+    expect(ids(visibleFor(withConds('next', []), seqProject(), noLinger, ctx))).toEqual([2, 4]);
+  });
+
+  test('a parallel project hands out both steps', () => {
+    const tasks = seqProject();
+    const project = tasks.get(1);
+    if (project === undefined) throw new Error('fixture');
+    tasks.set(1, { ...project, sequential: false });
+    expect(ids(visibleFor(withConds('next', []), tasks, noLinger, ctx))).toEqual([2, 3, 4]);
+  });
+
+  test('completing the first step advances the view to the second', () => {
+    const tasks = seqProject();
+    const first = tasks.get(2);
+    if (first === undefined) throw new Error('fixture');
+    tasks.set(2, { ...first, status: 'done', completedAt: '2026-05-20T09:00:00Z' });
+    expect(ids(visibleFor(withConds('next', []), tasks, noLinger, ctx))).toEqual([3, 4]);
+  });
+
+  test('blocked, done, deferred and trashed rows are all out', () => {
+    const tasks = mapOf(
+      task({ id: 1, title: 'ready' }),
+      task({ id: 2, title: 'stuck', status: 'blocked' }),
+      task({ id: 3, title: 'finished', status: 'done', completedAt: '2026-05-20T09:00:00Z' }),
+      task({ id: 4, title: 'later', deferUntil: '2099-01-01T00:00:00Z' }),
+      task({ id: 5, title: 'binned', deletedAt: '2026-05-20T09:00:00Z' }),
+    );
+    expect(ids(visibleFor(withConds('next', []), tasks, noLinger, ctx))).toEqual([1]);
+  });
+
+  test('it composes with a scope', () => {
+    const tasks = seqProject();
+    expect(ids(visibleFor(inScope('next', 1), tasks, noLinger, ctx))).toEqual([2]);
+  });
+
+  test('it composes with a condition', () => {
+    const tasks = seqProject();
+    expect(
+      ids(visibleFor(withConds('next', [txt('loose')]), tasks, noLinger, ctx)),
+    ).toEqual([4]);
+  });
+
+  test('a just-completed step lingers beside the one it unlocked', () => {
+    // The same beat the today view and the status conditions already keep: the
+    // list should read as advancing, not as jumping.
+    const tasks = seqProject();
+    const first = tasks.get(2);
+    if (first === undefined) throw new Error('fixture');
+    tasks.set(2, { ...first, status: 'done', completedAt: '2026-05-20T09:00:00Z' });
+    expect(
+      ids(visibleFor(withConds('next', []), tasks, new Set([2]), ctx)),
+    ).toEqual([2, 3, 4]);
+  });
+
+  test('rows come back in tree order, like every other view', () => {
+    const tasks = seqProject();
+    expect(ids(visibleFor(withConds('next', []), tasks, noLinger, ctx))).toEqual([2, 4]);
   });
 });
 

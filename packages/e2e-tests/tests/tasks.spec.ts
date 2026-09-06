@@ -660,6 +660,14 @@ test.describe('tasks at the 350px floor', () => {
       ['leave scope', '[data-action="tasks:leave-scope"]'],
       ['layout list', '[data-action="tasks:set-layout"][data-action-layout="list"]'],
       ['layout board', '[data-action="tasks:set-layout"][data-action-layout="board"]'],
+      // The five presets. They were never measured through stages 0-2; the
+      // fifth is what made the row worth measuring, and they are the controls
+      // the phone taps most.
+      ['view inbox', '[data-action="tasks:set-view"][data-action-view="inbox"]'],
+      ['view today', '[data-action="tasks:set-view"][data-action-view="today"]'],
+      ['view next', '[data-action="tasks:set-view"][data-action-view="next"]'],
+      ['view all', '[data-action="tasks:set-view"][data-action-view="all"]'],
+      ['view trash', '[data-action="tasks:set-view"][data-action-view="trash"]'],
     ];
     const measured: Array<[string, number, number]> = [];
     for (const [label, selector] of targets) {
@@ -698,6 +706,116 @@ test.describe('tasks at the 350px floor', () => {
       tooSmall,
       `touch targets below 44px: ${JSON.stringify(measured)}`,
     ).toEqual([]);
+  });
+
+  test('a sequential project hands out one step at a time — the whole of stage 3, on the phone', async ({
+    page,
+  }) => {
+    // The stage's user-facing claim, driven through the documented UI against a
+    // real api from a cold `:memory:` database at the 350px floor. A green unit
+    // tier proves the availability rule; it does not prove the owner can reach
+    // it from a phone.
+    const stamp = `x${Date.now()}`;
+    const PROJECT = `Renovate the kitchen ${stamp}`;
+    const STEP_ONE = `Strip the wallpaper ${stamp}`;
+    const STEP_TWO = `Plaster the wall ${stamp}`;
+    const STEP_THREE = `Paint the ceiling ${stamp}`;
+
+    const rowFor = (title: string) =>
+      page.locator('[data-task-row]', {
+        has: page.locator('[data-task-title]', { hasText: title }),
+      });
+
+    await test.step('capture a project and give it three steps in order', async () => {
+      await page.locator('#tasks-quick-add').fill(PROJECT);
+      await page.locator('[data-action="tasks:quick-add"]').click();
+      await expect(rowFor(PROJECT)).toBeVisible();
+      const projectId = await rowFor(PROJECT).getAttribute('data-task-id');
+      expect(projectId).not.toBeNull();
+
+      await page.locator(`[data-action="tasks:expand"][data-action-task-id="${projectId}"]`).click();
+      const level = rowFor(PROJECT).locator('[data-task-level]');
+      await level.getByRole('button').click();
+      await level.getByRole('option', { name: 'Project' }).click();
+      await expect(rowFor(PROJECT).locator('[data-task-kind]')).toContainText('project');
+
+      // "+ Add a subtask" three times: each lands at the next sibling position,
+      // which is the order the sequential rule then hands them out in.
+      for (const title of [STEP_ONE, STEP_TWO, STEP_THREE]) {
+        await rowFor(PROJECT).locator('div[aria-label="Add a subtask"]').click();
+        const input = rowFor(PROJECT).locator('input[aria-label="Add a subtask"]');
+        await input.fill(title);
+        await input.press('Enter');
+      }
+      await expect(rowFor(PROJECT).locator('[data-task-progress]')).toContainText('0/3');
+    });
+
+    await test.step('mark it sequential — the row says so', async () => {
+      // The Order picker only exists on a container, which is what the Level
+      // change above earned.
+      const order = rowFor(PROJECT).locator('[data-task-order-picker]');
+      await expect(order).toBeVisible();
+      await order.getByRole('button').click();
+      await order.getByRole('option', { name: 'Sequential', exact: true }).click();
+      await expect(rowFor(PROJECT).locator('[data-task-sequential]')).toContainText('sequential');
+      expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    });
+
+    await test.step('Next shows exactly the first step', async () => {
+      await page.locator('[data-action="tasks:set-view"][data-action-view="next"]').click();
+      await expect(rowFor(STEP_ONE)).toBeVisible();
+      // The other two are behind it, and the container is not an action while
+      // it still holds work.
+      await expect(rowFor(STEP_TWO)).toHaveCount(0);
+      await expect(rowFor(STEP_THREE)).toHaveCount(0);
+      await expect(rowFor(PROJECT)).toHaveCount(0);
+      // Five presets now share the row. A grid track per view could not wrap
+      // and would push the document sideways here.
+      await expect(page.locator('[data-tasks-view-switch] [data-action="tasks:set-view"]')).toHaveCount(5);
+      expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+
+      // The artefact: what "what do I do next" looks like on the owner's phone.
+      // Lands under packages/e2e-tests/test-results/.
+      await page.screenshot({
+        path: test.info().outputPath('tasks-350-next.png'),
+        fullPage: true,
+        // Settle the tier transitions first. Measured on the layout switch: a
+        // shot taken straight after the click caught the selected button at
+        // 0.12 alpha and the unselected one at 0.81, so the artefact showed the
+        // toggle backwards. This finishes every transition rather than waiting a
+        // fixed time for one.
+        animations: 'disabled',
+      });
+    });
+
+    await test.step('complete the first step and the view moves to the second', async () => {
+      const stepOneId = await rowFor(STEP_ONE).getAttribute('data-task-id');
+      expect(stepOneId).not.toBeNull();
+      await page.locator(`[data-action="tasks:toggle"][data-action-task-id="${stepOneId}"]`).click();
+      // The finished step lingers beside the one it unlocked, so the list reads
+      // as advancing rather than jumping.
+      await expect(rowFor(STEP_ONE)).toHaveAttribute('data-task-status', 'done');
+      await expect(rowFor(STEP_TWO)).toBeVisible();
+      await expect(rowFor(STEP_THREE)).toHaveCount(0);
+
+      // Navigating away and back clears the linger: the view now holds the
+      // second step alone, which is the state a fresh look would find.
+      await page.locator('[data-action="tasks:set-view"][data-action-view="all"]').click();
+      await expect(rowFor(PROJECT)).toBeVisible();
+      await page.locator('[data-action="tasks:set-view"][data-action-view="next"]').click();
+      await expect(rowFor(STEP_TWO)).toBeVisible();
+      await expect(rowFor(STEP_ONE)).toHaveCount(0);
+      await expect(rowFor(STEP_THREE)).toHaveCount(0);
+      expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    });
+
+    await test.step('the view is in the URL, so Next survives a reload', async () => {
+      await expect(page).toHaveURL(/view=next/);
+      await page.reload();
+      await expect(rowFor(STEP_TWO)).toBeVisible();
+    });
+
+    await expect(page.locator('[data-tasks-error]')).toHaveCount(0);
   });
 
   test('the assistant sheet fits over the tasks panel', async ({ page }) => {

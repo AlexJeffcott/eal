@@ -42,6 +42,7 @@ function defaults(overrides: Partial<Parameters<TasksRepo['insert']>[0]> & { cre
     dueAt: null,
     assignedTo: null,
     position: 0,
+    sequential: false,
     ...overrides,
   };
 }
@@ -110,6 +111,50 @@ describe('tasks repo', () => {
         defaults({ createdBy: ctx.alex, title: 'nested', parentId: plain.id }),
       );
       expect(nested.parent_id).toBe(plain.id);
+    });
+  });
+
+  describe('sequential', () => {
+    test('defaults off, stores what it is given, and reads back as 0/1', () => {
+      // The column is an INTEGER because SQLite has no boolean; the repo is the
+      // layer that speaks 0/1 and handlers/tasks.shared.ts:toTask is the one
+      // that turns it into the boolean the wire carries.
+      const parallel = ctx.tasks.insert(defaults({ createdBy: ctx.alex, kind: 'project' }));
+      expect(parallel.sequential).toBe(0);
+      const stepwise = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, kind: 'project', sequential: true }),
+      );
+      expect(stepwise.sequential).toBe(1);
+      expect(ctx.tasks.findById(stepwise.id)?.sequential).toBe(1);
+    });
+
+    test('update flips it in both directions, and leaves it alone when unset', () => {
+      const row = ctx.tasks.insert(defaults({ createdBy: ctx.alex, kind: 'project' }));
+      expect(ctx.tasks.update(row.id, { sequential: true, updatedBy: ctx.alex })?.sequential).toBe(1);
+      // No `sequential` key at all: the flag must survive an unrelated edit,
+      // or a title change would quietly reorder someone's project.
+      expect(ctx.tasks.update(row.id, { title: 'renamed', updatedBy: ctx.alex })?.sequential).toBe(1);
+      expect(ctx.tasks.update(row.id, { sequential: false, updatedBy: ctx.alex })?.sequential).toBe(0);
+    });
+
+    test('cloneSubtree carries the flag on the root and on every descendant', () => {
+      // A cloned project that came back parallel would hand out all its steps
+      // at once, which is the opposite of what was copied.
+      const p = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, title: 'reno', kind: 'project', sequential: true }),
+      );
+      const e = ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, title: 'tiling', kind: 'epic', parentId: p.id, sequential: true }),
+      );
+      ctx.tasks.insert(
+        defaults({ createdBy: ctx.alex, title: 'buy tiles', parentId: e.id }),
+      );
+      const clone = ctx.tasks.cloneSubtree(p.id, { createdBy: ctx.alex });
+      expect(clone.map((r) => [r.title, r.sequential])).toEqual([
+        ['reno', 1],
+        ['tiling', 1],
+        ['buy tiles', 0],
+      ]);
     });
   });
 

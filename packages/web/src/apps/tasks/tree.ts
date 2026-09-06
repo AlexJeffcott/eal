@@ -1,4 +1,4 @@
-import type { Task } from '@eal/client';
+import { compareSiblingOrder, type Task } from '@eal/client';
 
 /**
  * Tree reads over the SPA's local task mirror.
@@ -20,11 +20,10 @@ export interface Progress {
   total: number;
 }
 
-/** Sibling order: the per-parent `position`, then id as the tiebreak. */
-function byPositionId(a: Task, b: Task): number {
-  if (a.position !== b.position) return a.position - b.position;
-  return a.id - b.id;
-}
+// Sibling order comes from @eal/client rather than being defined here. The
+// Available view calls the same order "the first step" (task-availability.ts),
+// and the first step and the first row have to be the same row.
+const byPositionId = compareSiblingOrder;
 
 export function indexChildren(tasks: ReadonlyMap<number, Task>): ChildIndex {
   const index = new Map<number, Task[]>();
