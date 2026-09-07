@@ -28,7 +28,7 @@
     "@types/bun": "1.4.0",
     "@types/web-push": "^3.6.4",
     "fast-check": "^4.9.0",
-    "puppeteer": "^25.8.0",
+    "puppeteer": "^25.9.0",
     "stryker-mutator-bun-runner": "0.4.0",
     "typescript": "6.0.3"
   },
@@ -41,6 +41,6 @@
   },
   "dependencies": {
     "@automerge/automerge": "^3.4.1",
-    "@fairfox/polly": "0.85.1"
+    "@fairfox/polly": "0.88.1"
   }
 }

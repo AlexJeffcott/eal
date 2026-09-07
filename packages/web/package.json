@@ -7,7 +7,7 @@
   "dependencies": {
     "@eal/client": "workspace:*",
     "@eal/shared": "workspace:*",
-    "@fairfox/polly": "0.85.1",
+    "@fairfox/polly": "0.88.1",
     "@preact/signals": "2.9.0",
     "@simplewebauthn/browser": "13.3.0",
     "fuse.js": "7.5.0",

@@ -56,7 +56,10 @@
   flex-wrap: wrap;
   gap: var(--polly-space-sm);
   align-items: center;
-  min-block-size: 2.5rem;
+  /* A stage holding one control must not be shorter than that control, or a
+   * single-specimen row collapses against its caption. polly 0.88.0 gives the
+   * height a name, so this tracks the ladder instead of repeating 2.5rem. */
+  min-block-size: var(--polly-control-height-md);
   min-inline-size: 0;
 }
 .showcase-specimen--wide .showcase-stage {
@@ -71,16 +74,22 @@
 
 /* The Dropdown specimen dresses the primitive's bare trigger button so it
  * reads as a real consumer would render it. Polly's <Dropdown> sets nothing
- * but `display: inline-block` on the trigger by design — Select/ActionSelect
+ * but `display: inline-flex` on the trigger by design — Select/ActionSelect
  * supply their own chrome and caret. Applied via polly 0.75.2's
- * `triggerClassName` prop, which targets the trigger <button> directly. */
+ * `triggerClassName` prop, which targets the trigger <button> directly.
+ *
+ * The height and corner come from polly 0.88.0's control tokens rather than
+ * from padding, so this trigger matches the Select trigger beside it. Sized by
+ * padding it measured 42px against Select's 40, and cornered at
+ * --polly-radius-sm it was 4px against every other control's 8px. */
 .showcase-dropdown-trigger {
   display: inline-flex;
   gap: var(--polly-space-sm);
   align-items: center;
-  padding: var(--polly-space-sm) var(--polly-space-md);
+  min-block-size: var(--polly-control-height-md);
+  padding: 0 var(--polly-control-padding-md);
   border: var(--polly-border-width-default) solid var(--polly-border);
-  border-radius: var(--polly-radius-sm);
+  border-radius: var(--polly-control-radius);
   background-color: var(--polly-surface);
   color: var(--polly-text);
   font: inherit;
