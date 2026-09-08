@@ -93,11 +93,18 @@ function JoinCard() {
             placeholder="Name (e.g. Alex's phone)"
             ariaLabel="Device name"
           />
-          <ActionSelect
-            value={$pairCompleteKind.value}
-            action="devices:set-complete-kind"
-            options={KIND_OPTIONS}
-          />
+          {/* Named hook for `scripts/e2e-control-geometry.ts`, following the
+              `data-task-*-picker` pattern in tasks-panel.tsx. The guard has to
+              measure this trigger — its "PWA (browser)" label is long enough to
+              expose a Select that stops sizing to its own content, which a
+              catalogue specimen's short label hides. */}
+          <span data-devices-kind-picker>
+            <ActionSelect
+              value={$pairCompleteKind.value}
+              action="devices:set-complete-kind"
+              options={KIND_OPTIONS}
+            />
+          </span>
           <ActionInput
             saveOn="input"
             value={$pairCompleteCode.value}

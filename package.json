@@ -41,6 +41,6 @@
   },
   "dependencies": {
     "@automerge/automerge": "^3.4.1",
-    "@fairfox/polly": "0.88.1"
+    "@fairfox/polly": "0.89.1"
   }
 }

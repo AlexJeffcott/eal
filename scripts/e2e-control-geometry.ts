@@ -55,9 +55,8 @@ const VIEWPORTS = [
 ] as const;
 
 /**
- * One probe per control the contract covers, anchored to the showcase section
- * that renders it. `radius` is false where a square corner is the design:
- * a Tab sits on a rule and is not a boxed control.
+ * One probe per control the contract covers. `radius` is false where a square
+ * corner is the design: a Tab sits on a rule and is not a boxed control.
  */
 interface Probe {
   name: string;
@@ -68,7 +67,12 @@ interface Probe {
   radius: boolean;
 }
 
-const PROBES: readonly Probe[] = [
+/**
+ * The showcase renders every primitive with a short label, which is the
+ * friendliest case a control ever gets. It is not enough on its own — see
+ * `APP_PROBES`.
+ */
+const SHOWCASE_PROBES: readonly Probe[] = [
   // polly's own controls. If these drift, the fault is upstream.
   { name: 'Button (normal)', selector: '#button button', heightToken: '--polly-control-height-md', radius: true },
   { name: 'TextInput', selector: '#text-input input', heightToken: '--polly-control-height-md', radius: true },
@@ -78,6 +82,24 @@ const PROBES: readonly Probe[] = [
   // design — Select and ActionSelect supply their own chrome — so this one
   // opts into the ladder in `showcase.css` and nothing upstream enforces it.
   { name: 'Dropdown trigger (eal-dressed)', selector: '#dropdown button', heightToken: '--polly-control-height-md', radius: true },
+];
+
+/**
+ * The same contract on a screen the user actually opens. This exists because
+ * the showcase alone missed a real regression: polly 0.89.0 moved the Select
+ * trigger's label and caret into a `<Layout>`, and the trigger stopped taking
+ * its width from its own content. The showcase Select says "Comet" and still
+ * measured 40px; `/devices` says "PWA (browser)", and the trigger went from
+ * 152.45px wide and 40px tall to 134.83px wide and 42px tall — the caret wrapped
+ * below the label, at the 350px floor, on a screen in the app.
+ *
+ * A catalogue specimen is the easy case. Add the hard one.
+ */
+const APP_PROBES: readonly Probe[] = [
+  { name: 'devices: device-kind ActionSelect', selector: '[data-devices-kind-picker] button', heightToken: '--polly-control-height-md', radius: true },
+  { name: 'devices: invite-code field', selector: 'input[aria-label="Invite code"]', heightToken: '--polly-control-height-md', radius: true },
+  { name: 'devices: device-name field', selector: 'input[aria-label="Device name"]', heightToken: '--polly-control-height-md', radius: true },
+  { name: 'devices: Join button', selector: 'button[data-action="devices:complete-pair"]', heightToken: '--polly-control-height-md', radius: true },
 ];
 
 interface Measurement {
@@ -152,7 +174,7 @@ async function read(page: Page, probes: readonly Probe[]): Promise<Reading> {
   }, probes.map((probe) => ({ ...probe })));
 }
 
-function check(failures: string[], label: string, reading: Reading): void {
+function check(failures: string[], label: string, reading: Reading, probes: readonly Probe[], ladder: boolean): void {
   const rootFontSizePx = toPx(reading.tokens['root-font-size'] ?? '', 16) ?? 16;
 
   // A token that resolves empty means the bundle lost polly's theme.css. That
@@ -162,12 +184,12 @@ function check(failures: string[], label: string, reading: Reading): void {
   }
 
   const expectedHeights = new Map<string, number | null>();
-  for (const probe of PROBES) {
+  for (const probe of probes) {
     expectedHeights.set(probe.heightToken, toPx(reading.tokens[probe.heightToken] ?? '', rootFontSizePx));
   }
   const expectedRadius = reading.tokens['--polly-control-radius'] ?? '';
 
-  for (const probe of PROBES) {
+  for (const probe of probes) {
     const m = reading.controls.find((c) => c.name === probe.name);
     if (m === undefined || !m.found) {
       failures.push(`${label}: ${probe.name} did not render — the probe selector \`${probe.selector}\` matched nothing`);
@@ -183,6 +205,10 @@ function check(failures: string[], label: string, reading: Reading): void {
       failures.push(`${label}: ${probe.name} corner is ${m.radius}, want ${expectedRadius} from --polly-control-radius`);
     }
   }
+
+  // The size ladder and the checkbox are catalogue specimens: only the
+  // showcase renders them, so only that route asserts them.
+  if (!ladder) return;
 
   // Three sizes must land on three rungs. Measuring the set rather than each
   // button by position keeps this honest if the section gains a specimen.
@@ -239,15 +265,22 @@ async function main(): Promise<number> {
       }
     }, seed.token);
 
+    const ROUTES = [
+      { path: '/showcase', ready: '#tabs button', probes: SHOWCASE_PROBES, ladder: true },
+      { path: '/devices', ready: 'button[data-action="devices:complete-pair"]', probes: APP_PROBES, ladder: false },
+    ] as const;
+
     for (const scheme of ['light', 'dark'] as const) {
       for (const viewport of VIEWPORTS) {
         await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: scheme }]);
         await page.setViewport({ width: viewport.width, height: viewport.height });
-        await page.goto(`${api.url}/showcase`, { waitUntil: 'networkidle0', timeout: NAV_TIMEOUT_MS });
-        await page.waitForSelector('#tabs button', { timeout: NAV_TIMEOUT_MS });
-        const label = `${scheme} @ ${viewport.name}px`;
-        check(failures, label, await read(page, PROBES));
-        measured += PROBES.length;
+        for (const route of ROUTES) {
+          await page.goto(`${api.url}${route.path}`, { waitUntil: 'networkidle0', timeout: NAV_TIMEOUT_MS });
+          await page.waitForSelector(route.ready, { timeout: NAV_TIMEOUT_MS });
+          const label = `${route.path} ${scheme} @ ${viewport.name}px`;
+          check(failures, label, await read(page, route.probes), route.probes, route.ladder);
+          measured += route.probes.length;
+        }
       }
     }
 
