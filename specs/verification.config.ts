@@ -68,8 +68,8 @@ export default defineVerification({
     maxTabs: 1,
   },
   /**
-   * Subsystem partition. The combined model (7 fields × 45 handlers) estimates
-   * at ~4.8B states — infeasible. Polly runs each subsystem as its own TLC
+   * Subsystem partition. The combined model (7 fields × 182 handlers) estimates
+   * at ~54B states — infeasible. Polly runs each subsystem as its own TLC
    * job, filtered to the listed handlers and state fields, so each per-job
    * state space stays bounded.
    *
@@ -110,21 +110,8 @@ export default defineVerification({
    * `.test.ts` neighbours.
    */
   subsystems: {
-    auth: {
-      state: ['authMachine.phase', 'sessionsMachine.outstanding'],
-      handlers: [
-        'POST /register/options',
-        'POST /register/verify',
-        'POST /login/options',
-        'POST /login/verify',
-        'POST /logout',
-        'GET /me',
-        'POST /cli-pair/start',
-        'POST /cli-pair/claim',
-        'POST /cli-pair/poll',
-      ],
-      bounds: { maxInFlight: 2 },
-    },
+    // Order matters: polly runs subsystems in declaration order and stops at the
+    // first failure, so the two cheap ones report before the expensive one.
     tasks: {
       state: ['taskStatusMachine.status'],
       handlers: [
@@ -143,7 +130,64 @@ export default defineVerification({
       handlers: ['POST /start', 'POST /complete'],
       bounds: { maxInFlight: 1 },
     },
+    /**
+     * Sized to terminate. Two handlers and one bound were cut here; each cut is
+     * measured against what the generated TLA+ actually explores, which is not
+     * what `--estimate` reports (polly#183).
+     *
+     * The generated `UserNext` sends a message by choosing, at every state:
+     *
+     *     \E src \in Contexts               3   (hardcoded background/content/popup)
+     *     \E targetSet \in SUBSET Contexts   7   (non-empty subsets)
+     *     \E tab \in Tabs                   2
+     *     \E msgType \in UserMessageTypes    one per handler
+     *
+     * so the send branching factor is 42 x handlerCount, and `MaxMessages` is
+     * the exponent on it. At maxInFlight 2 with 9 handlers that is 378^2 =
+     * 142,884 message configurations, times 9^3 = 729 for the per-context copy
+     * of the app state. TLC reached 9.6M distinct states in three minutes,
+     * still at depth 6 with 8M queued, and the run was killed for memory.
+     *
+     * Cut 1 — `POST /cli-pair/start` and `POST /cli-pair/poll` are dropped.
+     * Both generate `HandleX(ctx) == UNCHANGED contextStates` with no
+     * precondition: they carry no `requires`/`ensures` and touch no declared
+     * field, so they add a message type and prove nothing. Coverage lost: none.
+     *
+     * Cut 2 — `maxInFlight` drops from 2 to 1, which removes the squared term.
+     * What that does NOT lose: a read-modify-write race on
+     * `sessionsMachine.outstanding`. Each generated handler is a single atomic
+     * TLA+ action whose guard and assignment are one step, so two messages in
+     * flight never interleave between the `< 2` check and the increment. Two
+     * in flight buys router-level interleaving (a send while another is
+     * pending, a timeout, a port dropping mid-route) — MessageRouter
+     * properties, not properties of these handlers.
+     *
+     * `GET /me` is kept. It is also `UNCHANGED contextStates`, but its
+     * `requires(phase = 'authenticated')` is a real precondition and the
+     * precondition-locality pass checks it.
+     */
+    auth: {
+      state: ['authMachine.phase', 'sessionsMachine.outstanding'],
+      handlers: [
+        'POST /register/options',
+        'POST /register/verify',
+        'POST /login/options',
+        'POST /login/verify',
+        'POST /logout',
+        'GET /me',
+        'POST /cli-pair/claim',
+      ],
+      bounds: { maxInFlight: 1 },
+    },
   },
+  /**
+   * The container reports 6 cores and polly defaults to 1 worker, so five
+   * sixths of the CPU sat idle. TLC's fingerprint set grows with throughput
+   * and the image sets no `-Xmx` and `docker run` no `--memory`
+   * (polly#181), so raising this reaches any memory ceiling sooner.
+   * It is set after the auth model was sized to terminate, not before.
+   */
+  verification: { workers: 6 },
   onBuild: 'warn',
   onRelease: 'error',
 });
