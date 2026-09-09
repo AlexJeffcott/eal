@@ -1,0 +1,32 @@
+diff --git a/dist/src/sandbox/ts-config-preprocessor.js b/dist/src/sandbox/ts-config-preprocessor.js
+index d17257e928054c73b1e8a041564a6515430fb418..54972a3038590f3dd0286999c3f216d10bed2cce 100644
+--- a/dist/src/sandbox/ts-config-preprocessor.js
++++ b/dist/src/sandbox/ts-config-preprocessor.js
+@@ -1,3 +1,9 @@
++// PATCHED (eal): TypeScript 7 ships the native compiler and its npm package
++// exports only `version` and `versionMajorMinor`, so every call below into the
++// old JS API throws. This repo runs `tsc` on 7.x and pins a 6.x copy under the
++// `typescript-legacy-api` alias for exactly this call site. The import throws
++// loudly if the alias is missing. Drop the patch when Stryker stops using the
++// TypeScript JS API here. See OPEN_TASKS.md, "Dependencies on hold".
+ import path from 'path';
+ import { tokens, commonTokens } from '@stryker-mutator/api/plugin';
+ /**
+@@ -42,7 +48,7 @@ export class TSConfigPreprocessor {
+             const tsconfigFile = project.files.get(tsconfigFileName);
+             if (tsconfigFile) {
+                 this.log.debug('Rewriting file %s', tsconfigFile);
+-                const { default: ts } = await import('typescript');
++                const { default: ts } = await import('typescript-legacy-api');
+                 const { config } = ts.parseConfigFileTextToJson(tsconfigFileName, await tsconfigFile.readContent());
+                 if (config) {
+                     await this.rewriteExtends(project, config, tsconfigFileName);
+@@ -82,7 +88,7 @@ export class TSConfigPreprocessor {
+         }
+     }
+     async rewriteProjectReferences(project, config, originTSConfigFileName) {
+-        const { default: ts } = await import('typescript');
++        const { default: ts } = await import('typescript-legacy-api');
+         if (Array.isArray(config.references)) {
+             for (const reference of config.references) {
+                 const referencePath = ts.resolveProjectReferencePath(reference);

@@ -30,10 +30,13 @@
     "fast-check": "^4.9.0",
     "puppeteer": "^25.10.0",
     "stryker-mutator-bun-runner": "0.4.0",
-    "typescript": "6.0.3"
+    "typescript": "7.0.2",
+    "typescript-legacy-api": "npm:typescript@6.0.3"
   },
+  "//patchedDependencies": "@stryker-mutator/core is patched to import the TypeScript JS API from the typescript-legacy-api alias (typescript@6.0.3). TS 7 ships the native compiler and exports only version/versionMajorMinor, so Stryker's TSConfigPreprocessor throws without it. tsc on the CLI stays on 7.x. See OPEN_TASKS.md, Dependencies on hold.",
   "patchedDependencies": {
-    "stryker-mutator-bun-runner@0.4.0": "patches/stryker-mutator-bun-runner@0.4.0.patch"
+    "stryker-mutator-bun-runner@0.4.0": "patches/stryker-mutator-bun-runner@0.4.0.patch",
+    "@stryker-mutator/core@10.0.0": "patches/@stryker-mutator%2Fcore@10.0.0.patch"
   },
   "//overrides": "@fairfox/polly declares preact, @preact/signals and @preact/signals-core as both exact hard dependencies and peer dependencies. Without these overrides a newer version here installs a second copy and preact hooks break. Drop this block when polly stops hard-pinning them. See OPEN_TASKS.md, Dependencies on hold.",
   "overrides": {
@@ -42,7 +45,7 @@
     "@preact/signals-core": "1.14.4"
   },
   "catalog": {
-    "typescript": "6.0.3",
+    "typescript": "7.0.2",
     "@types/bun": "1.4.2"
   },
   "dependencies": {

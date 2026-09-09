@@ -241,13 +241,32 @@ committed; none of it has met a real trunk. See `docs/family-phone.md`.
 
 ## Dependencies on hold
 
-One package cannot move. The blocker is measured, not assumed.
+Nothing is on hold. All four packages listed here came off it on 2026-09-09.
 
-| Package | Held at | Unblocks when |
-|---|---|---|
-| `typescript` | 6.0.3 | Stryker stops calling `ts.parseConfigFileTextToJson`. TS 7 ships the native compiler: `import ts from 'typescript'` now exports two names, `version` and `versionMajorMinor`, so every call into the old JS API throws. A mutation run dies in `TSConfigPreprocessor` before the dry run, at both Stryker 9.6.1 and 10.0.0 — `dist/src/sandbox/ts-config-preprocessor.js:46` is identical in the two. `tsc --noEmit` itself is clean under 7.0.2 and 4.4× faster (2185ms → 497ms), which is the whole of what moving would buy. |
+**`typescript` 7.0.2** needs a second patch, in `patches/`. TS 7 ships the
+native compiler, and its npm package exports two names — `version` and
+`versionMajorMinor` — so every call into the old JS API throws. Stryker's
+`TSConfigPreprocessor` makes two of those calls
+(`dist/src/sandbox/ts-config-preprocessor.js`, identical code in 9.6.1 and
+10.0.0), and an unpatched mutation run dies there before the dry run. The patch
+points both call sites at `typescript-legacy-api`, a devDependency alias for
+`typescript@6.0.3` that exists for this one purpose. `tsc` on the CLI stays on
+7.0.2. If the alias is ever dropped the import throws `ERR_MODULE_NOT_FOUND`
+naming it, which is the intended failure — it does not fall back.
 
-The other three came off hold on 2026-09-09.
+Two readings say the patch changes no behaviour. `cli-lib` under TS 6 and under
+TS 7 returned the same numbers to the digit: 436 mutants, 89.12%, 324 killed,
+12 timeout, 38 survived, 3 no-coverage, 0 errors. `bun mutation:verify` passes
+all six kill-matrix checks under both. Debug logging confirms the preprocessor
+runs and parses `tsconfig.json` rather than being skipped.
+
+`tsc --noEmit` is 4.4× faster: 2185ms on 6.0.3, 497ms on 7.0.2.
+
+**Drop the patch when Stryker stops using the TypeScript JS API**, and drop the
+`typescript-legacy-api` alias with it. `cosmiconfig@9.0.1` is the only other
+package in the tree that reaches for that API, at `dist/loaders.js:76` and
+`:105`, and it does so only to load a `.ts` config file. This repo has none, so
+the path is never taken. Check that again if one is ever added.
 
 **`preact` 10.29.8 and `@preact/signals` 2.11.2** move behind an `overrides`
 block in the root `package.json`. `@fairfox/polly` declares `preact`,
