@@ -38,18 +38,12 @@
     "stryker-mutator-bun-runner@0.4.0": "patches/stryker-mutator-bun-runner@0.4.0.patch",
     "@stryker-mutator/core@10.0.0": "patches/@stryker-mutator%2Fcore@10.0.0.patch"
   },
-  "//overrides": "@fairfox/polly declares preact, @preact/signals and @preact/signals-core as both exact hard dependencies and peer dependencies. Without these overrides a newer version here installs a second copy and preact hooks break. Drop this block when polly stops hard-pinning them. See OPEN_TASKS.md, Dependencies on hold.",
-  "overrides": {
-    "preact": "10.29.8",
-    "@preact/signals": "2.11.2",
-    "@preact/signals-core": "1.14.4"
-  },
   "catalog": {
     "typescript": "7.0.2",
     "@types/bun": "1.4.2"
   },
   "dependencies": {
     "@automerge/automerge": "^3.4.1",
-    "@fairfox/polly": "0.90.0"
+    "@fairfox/polly": "0.91.0"
   }
 }

@@ -268,15 +268,20 @@ package in the tree that reaches for that API, at `dist/loaders.js:76` and
 `:105`, and it does so only to load a `.ts` config file. This repo has none, so
 the path is never taken. Check that again if one is ever added.
 
-**`preact` 10.29.8 and `@preact/signals` 2.11.2** move behind an `overrides`
-block in the root `package.json`. `@fairfox/polly` declares `preact`,
-`@preact/signals` and `@preact/signals-core` as *both* exact hard dependencies
-and peer dependencies, so raising either package in this repo installs a second
-copy — the `__H` hook fault recorded here before. The override collapses all
-three to one copy each, which is what the peer declaration asks for anyway.
-Measured after the change: browser 103/103, e2e 52/52, multi 27/27. **Drop the
-override the day polly stops hard-pinning them**, and re-run the browser tier to
-confirm a single copy survives without it.
+**`preact` 10.29.8 and `@preact/signals` 2.11.2** needed no workaround in the
+end. They first went in behind an `overrides` block, because `@fairfox/polly`
+up to 0.90.0 declared `preact`, `@preact/signals` and `@preact/signals-core` as
+*both* exact hard dependencies and peer dependencies — two fields that mean
+opposite things, so a package manager honours both and this repo got polly's
+copy nested under polly and its own at the root. That second copy is the `__H`
+hook fault recorded here before. polly 0.91.0 fixes it at the source: the three
+are devDependencies for polly's own build and peers for consumers, and
+`@preact/signals-core` joined the peer list because three shipped files import
+it directly. The `overrides` block is gone.
+
+Measured after removing it: the lockfile resolves one version of each, every
+symlink under `packages/web` and under polly points at the same store entry,
+`tsc` is clean, unit 1316, browser 103/103 with zero `__H` errors.
 
 **`@stryker-mutator/core` 10.0.0** runs against the patched
 `stryker-mutator-bun-runner@0.4.0` even though the runner's peer still reads
