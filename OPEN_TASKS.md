@@ -12,15 +12,15 @@ rather than a commit belongs in `~/projects/TODO.md`.
 failure. The pre-push hook runs `devctl check` and then that command; the
 pre-commit hook runs `devctl check` and the unit tier only.
 
-| Command | Passing count, 2026-09-06 | Runs in the pre-push sweep |
+| Command | Passing count, 2026-09-09 | Runs in the pre-push sweep |
 |---|---|---|
 | `bun devctl check` | tsc + 7 lint scripts | yes |
 | `bun devctl test unit` | 1316 tests, 106 files; coverage ok, 138 files, 28 exempt | yes |
 | `bun devctl test browser` | 103 tests | yes |
 | `bun devctl test e2e` | 52 Playwright tests, 2 projects | yes |
-| `bun devctl test multi` | 25 `scripts/e2e-*.ts`, each exiting 0 | yes |
+| `bun devctl test multi` | 27 `scripts/e2e-*.ts`, each exiting 0 | yes |
 | `bun devctl test mutation` | see below — not part of `all` | no |
-| `bun devctl verify` | TLC: `tasks` ✓ 7.4s, `pairing` ✓ 1.8s, **`auth` never finishes** — see below | no |
+| `bun devctl verify` | TLC: `tasks` ✓ 6.7s, `pairing` ✓ 2.5s, `auth` ✓ 4.5s — compositional PASS | no |
 
 The multi tier now includes `e2e-registration-closed.ts` (the registration
 gate), `e2e-tasks-reconnect.ts` (the WS drop and resync),
@@ -241,17 +241,35 @@ committed; none of it has met a real trunk. See `docs/family-phone.md`.
 
 ## Dependencies on hold
 
-Four packages cannot move yet. Each blocker is measured, not assumed.
+One package cannot move. The blocker is measured, not assumed.
 
 | Package | Held at | Unblocks when |
 |---|---|---|
-| `typescript` | 6.0.3 | Stryker stops calling `ts.parseConfigFileTextToJson`, which TS 7 removed. A mutation run dies at once under 7.0.2, at both Stryker 9.6.1 and 10.0.0. `tsc` itself is clean under 7. |
-| `@stryker-mutator/core` | 9.6.1 | The same TS 7 fix lands, and `stryker-mutator-bun-runner` publishes a version whose peer is not `^9.0.0`. |
-| `preact` | 10.29.1 | polly stops pinning exact `preact@10.29.1`. A second copy breaks hooks: the browser tier fell to 2 passed / 64 failed with `Cannot read properties of undefined (reading '__H')`. |
-| `@preact/signals` | 2.9.0 | polly stops pinning exact `@preact/signals@2.9.0`. Same fault. |
+| `typescript` | 6.0.3 | Stryker stops calling `ts.parseConfigFileTextToJson`. TS 7 ships the native compiler: `import ts from 'typescript'` now exports two names, `version` and `versionMajorMinor`, so every call into the old JS API throws. A mutation run dies in `TSConfigPreprocessor` before the dry run, at both Stryker 9.6.1 and 10.0.0 — `dist/src/sandbox/ts-config-preprocessor.js:46` is identical in the two. `tsc --noEmit` itself is clean under 7.0.2 and 4.4× faster (2185ms → 497ms), which is the whole of what moving would buy. |
+
+The other three came off hold on 2026-09-09.
+
+**`preact` 10.29.8 and `@preact/signals` 2.11.2** move behind an `overrides`
+block in the root `package.json`. `@fairfox/polly` declares `preact`,
+`@preact/signals` and `@preact/signals-core` as *both* exact hard dependencies
+and peer dependencies, so raising either package in this repo installs a second
+copy — the `__H` hook fault recorded here before. The override collapses all
+three to one copy each, which is what the peer declaration asks for anyway.
+Measured after the change: browser 103/103, e2e 52/52, multi 27/27. **Drop the
+override the day polly stops hard-pinning them**, and re-run the browser tier to
+confirm a single copy survives without it.
+
+**`@stryker-mutator/core` 10.0.0** runs against the patched
+`stryker-mutator-bun-runner@0.4.0` even though the runner's peer still reads
+`^9.0.0` and it pulls its own `@stryker-mutator/api@9.6.1` alongside core's 10.
+Two API copies, and the plugin still loads. Measured under 10.0.0: `cli-lib`
+436 mutants, 89.12%, 0 errors, 3m25s; `shared` 43 mutants, 90.70%, 0 errors;
+`bun mutation:verify` passes all six kill-matrix checks. Scores are a few points
+below the Stryker 9 figures recorded above because 10's instrumenter emits more
+mutants — `shared` went 38 → 43 — not because kills were lost.
 
 The `stryker-mutator-bun-runner` patch in `patches/` is pinned to Bun 1.3.x for
-its JUnit parsing. It still holds on Bun 1.4.0 — `bun mutation:verify` passes
+its JUnit parsing. It still holds on Bun 1.4.2 — `bun mutation:verify` passes
 all six kill-matrix checks — but re-run that after any Bun bump, or the
 redundancy signal dies silently.
 

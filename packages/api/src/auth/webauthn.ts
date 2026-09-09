@@ -5,7 +5,6 @@ import {
   verifyRegistrationResponse as realVerifyRegistrationResponse,
 } from '@simplewebauthn/server';
 import type {
-  AuthenticatorTransportFuture,
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
 } from '@simplewebauthn/server';
@@ -79,11 +78,16 @@ export function isCounterRollback(storedCounter: number, newCounter: number): bo
   return newCounter <= storedCounter;
 }
 
+// @simplewebauthn/server v14 types `transports` as plain `string[]`, so this
+// allow-list is ours to enforce: it keeps anything the credentials table did
+// not get from a real authenticator out of the verification call. It stays
+// wider than the WebAuthn `AuthenticatorTransport` union because rows
+// registered by older clients can still carry 'cable' and 'smart-card'.
 const ALLOWED_TRANSPORTS = new Set<string>([
   'ble', 'cable', 'hybrid', 'internal', 'nfc', 'smart-card', 'usb',
 ]);
 
-function isAuthenticatorTransport(value: string): value is AuthenticatorTransportFuture {
+function isAuthenticatorTransport(value: string): boolean {
   return ALLOWED_TRANSPORTS.has(value);
 }
 
@@ -230,7 +234,7 @@ export function createWebAuthnAdapter(
       const user = usersRepo.findById(credentialRow.user_id);
       if (!user) throw new Error('webauthn: user row missing for credential (db inconsistency)');
 
-      const transports: AuthenticatorTransportFuture[] | undefined = credentialRow.transports
+      const transports: string[] | undefined = credentialRow.transports
         ? credentialRow.transports.split(',').map((t) => t.trim()).filter(isAuthenticatorTransport)
         : undefined;
 

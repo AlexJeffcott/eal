@@ -7,11 +7,11 @@
   "dependencies": {
     "@eal/client": "workspace:*",
     "@eal/shared": "workspace:*",
-    "@fairfox/polly": "0.89.1",
-    "@preact/signals": "2.9.0",
-    "@simplewebauthn/browser": "13.3.0",
+    "@fairfox/polly": "0.90.0",
+    "@preact/signals": "2.11.2",
+    "@simplewebauthn/browser": "14.0.0",
     "fuse.js": "7.5.0",
-    "preact": "10.29.1"
+    "preact": "10.29.8"
   },
   "devDependencies": {
     "@eal/client-mock": "workspace:*"
