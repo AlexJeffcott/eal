@@ -1,9 +1,9 @@
 # fly.toml — eal on Fly.io.
 #
 # `app` and `primary_region` are placeholders; `fly launch` sets them, or edit
-# here. The container is the shared deploy/Dockerfile. No [mounts]: the disk is
-# ephemeral by design — Litestream restores the DB on cold start and replicates
-# it continuously (deploy/entrypoint.sh).
+# here. The container is the shared deploy/Dockerfile. Storage is both the
+# [mounts] volume below and Litestream replication (deploy/entrypoint.sh) — see
+# the section at [mounts] for which one covers what.
 #
 # Secrets (LITESTREAM_*) go via `fly secrets set` — see docs/deploy.md.
 
@@ -45,7 +45,9 @@ primary_region = "cdg"  # closest Fly region to Italy
 
 # Persistent SQLite data on a Fly volume. Survives redeploys and machine
 # restarts; doesn't survive the machine being deleted (region migration,
-# manual destroy). Sufficient until we wire Litestream — see docs/deploy.md.
+# manual destroy). Litestream is wired and covers exactly that gap: the
+# entrypoint restores from object storage when /data/eal.db is absent, and
+# replicates continuously either way — see docs/deploy.md.
 [mounts]
   source = "eal_data"
   destination = "/data"

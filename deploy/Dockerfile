@@ -5,7 +5,7 @@
 # image carries the Litestream binary so the entrypoint can restore-on-boot and
 # replicate continuously — see deploy/entrypoint.sh.
 
-FROM oven/bun:1.3
+FROM oven/bun:1.4.2
 
 WORKDIR /app
 

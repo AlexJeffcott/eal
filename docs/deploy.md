@@ -7,10 +7,15 @@ eal ships as one container, deployed to **Fly.io** via `fly.toml`, building
 
 - **One container.** `deploy/Dockerfile` — `oven/bun` base, with the Litestream
   binary copied in.
-- **Ephemeral disk, durable data.** There is no volume. `deploy/entrypoint.sh`
-  runs `litestream restore` on every cold start (rehydrating the SQLite file
-  from object storage) and then `litestream replicate -exec` (streaming changes
-  out while the server runs). A redeploy or a crash loses nothing.
+- **A volume, and Litestream on top of it.** Both, not one. `fly.toml`
+  `[mounts]` attaches the 1GB volume `eal_data` at `/data`, which survives
+  redeploys and machine restarts but not the machine being deleted (region
+  migration, manual destroy). `deploy/entrypoint.sh` then runs `litestream
+  restore` **only when the SQLite file is absent** — it logs `/data/eal.db
+  present — skipping restore` otherwise — and always runs `litestream replicate
+  -exec`, streaming changes to object storage while the server runs. So a
+  redeploy is served by the volume, and the object-storage replica is what
+  covers the case the volume cannot: a machine that no longer exists.
 - **TLS at the edge.** Fly terminates HTTPS at its proxy and forwards plain HTTP
   to the container, so the container runs `SKIP_TLS=1`. The public endpoint is
   still HTTPS/WSS.
@@ -18,7 +23,9 @@ eal ships as one container, deployed to **Fly.io** via `fly.toml`, building
   against a local file replica — the cold-start restore path is exercised in
   development, not first discovered in production. `scripts/e2e-litestream-restore.ts`
   proves it: it boots, writes, deletes the DB, reboots, and asserts the data
-  came back.
+  came back. This matters more than it looks: with the volume in place the
+  restore path almost never runs in production, so development is the only
+  place it is routinely exercised.
 
 ## Required configuration
 

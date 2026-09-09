@@ -287,10 +287,16 @@ Two API copies, and the plugin still loads. Measured under 10.0.0: `cli-lib`
 below the Stryker 9 figures recorded above because 10's instrumenter emits more
 mutants — `shared` went 38 → 43 — not because kills were lost.
 
-The `stryker-mutator-bun-runner` patch in `patches/` is pinned to Bun 1.3.x for
-its JUnit parsing. It still holds on Bun 1.4.2 — `bun mutation:verify` passes
-all six kill-matrix checks — but re-run that after any Bun bump, or the
+The `stryker-mutator-bun-runner` patch in `patches/` was written against Bun
+1.3.x for its JUnit parsing. It holds on Bun 1.4.2 — `bun mutation:verify`
+passes all six kill-matrix checks — but re-run that after any Bun bump, or the
 redundancy signal dies silently.
+
+Bun 1.4.2 is the floor everywhere as of 2026-09-09: `engines.bun` in
+`package.json`, and the `oven/bun:1.4.2` base in `deploy/Dockerfile`. The two
+move together — the lockfile is written by the local Bun, and the image installs
+it with `--frozen-lockfile`, so an image on an older Bun can fail to read a
+lockfile the developer just wrote.
 
 ## Running the CLI
 
