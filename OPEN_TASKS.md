@@ -155,8 +155,10 @@ what remains there is a machine to install it on.
       Deferred deliberately at v1 (`docs/tasks-v1.md`). A small fixed rule set
       with a `basis: 'due' | 'completed'` anchor, not RFC 5545. →
       `docs/plans/05-recurring-tasks.md` · ~2–4 days
-- [>] **06 — Offline shell and capture.** **Both parts are built on branch
-      `offline-shell-capture`, 2026-09-19. Not merged, not deployed.**
+- [>] **06 — Offline shell and capture.** **Both parts are live, release v46,
+      2026-09-19T16:23Z.** Read from the deployment: `/sw.js` line 1 is
+      `eal-sw-v2-shell`, `/public/sw-kill` answers `0` with `no-store`, the
+      machine passes its check, and the boot log shows no migration error.
       Part A, the shell: the worker caches it network-first, `EAL_SW_KILL=1`
       removes it (`docs/deploy.md`), and an offline cold boot opens signed in,
       reads `reconnecting`, and seeds when the server returns —
@@ -169,13 +171,15 @@ what remains there is a machine to install it on.
       has committed and reads every count from the database. The spec is
       hand-written TLA+ (`specs/tla/tasks-convergence/`), now part of
       `bun devctl verify`. The plan lists what it got wrong.
-      **Still open:** merge and deploy — the deploy carries a migration
-      (`client_id`, additive, NULL for every existing row). Only quick-add works
-      offline; complete, edit, move and delete still need the server. Sign-out
-      discards unsent captures without asking.
-      **Also open, not a code task: confirm on the owner's phone.** iOS evicts
-      a home-screen PWA's caches and IndexedDB on its own schedule, and that
-      has never been measured. → `docs/plans/06-offline-capture.md`
+      **Still open:** only quick-add works offline; complete, edit, move and
+      delete still need the server. Sign-out discards unsent captures without
+      asking. No signed-in request has been made against the live deployment
+      since v46 — the phone check below is that reading.
+      **Also open, not a code task: confirm on the owner's phone.** Open the
+      app once online, set aeroplane mode, close and reopen it, add a task, turn
+      the network back on, and count the rows on the laptop. iOS evicts a
+      home-screen PWA's caches and IndexedDB on its own schedule, and that has
+      never been measured. → `docs/plans/06-offline-capture.md`
 - [x] **07 — Prove the tasks surface at 350px.** Done 2026-08-25. The tasks
       panel, the expanded detail, the filter builder and the assistant sheet
       each have a 350px case, and a second Playwright project (`mobile-350`,
@@ -348,6 +352,15 @@ committed; none of it has met a real trunk. See `docs/family-phone.md`.
       | Machine | 44, 2026-09-09 | 45, 2026-09-19T14:40:15Z |
       | `/voice` unsigned | 404 — not mounted | 403 — mounted, verifying |
       | `/voice` signed over the public origin | unknown | 400 — verified |
+
+      **The signed probe cannot be repeated from this machine.** Re-run after
+      v46, it answers 403. The probe signs with `TWILIO_AUTH_TOKEN` from the
+      local environment, and `.env` holds the trial account's token while Fly
+      holds the random placeholder below, which has no copy on this disk. A 403
+      to a signature under a different token is the correct answer (the
+      script's own case 5), so this is not a regression reading — but it is
+      not a pass either. The probe works again when one real token is in both
+      places.
 
       **The three `TWILIO_*` secrets on Fly are random placeholders, not a
       real account.** The SID is `AC` + 16 random bytes, the token 32 random
