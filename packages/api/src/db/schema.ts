@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   expires_at TEXT NOT NULL,
   last_used_at TEXT NOT NULL DEFAULT (datetime('now')),
-  label TEXT
+  label TEXT,
+  ttl_ms INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
@@ -103,6 +104,17 @@ export function applySchema(db: DatabaseClient): void {
   for (const app of API_APPS) {
     db.exec(app.schema);
   }
+  // sessions.ttl_ms: the lifetime a session was minted with, so `verify` can
+  // move `expires_at` forward by that much on use. Before this column a
+  // session ended a fixed 30 days after sign-in however often it was used. A
+  // row minted before the column has never been moved, so its lifetime is
+  // still `expires_at - created_at`, to the second.
+  ensureColumn(db, 'sessions', 'ttl_ms', 'INTEGER');
+  db.exec(
+    `UPDATE sessions
+        SET ttl_ms = CAST(round((julianday(expires_at) - julianday(created_at)) * 86400) AS INTEGER) * 1000
+      WHERE ttl_ms IS NULL`,
+  );
   // conversations.cleared_before_id was added after the table first shipped.
   ensureColumn(db, 'conversations', 'cleared_before_id', 'INTEGER NOT NULL DEFAULT 0');
   // Phase 7D: opt-in flag for the DTMF IVR menu. Default 0 so adding the

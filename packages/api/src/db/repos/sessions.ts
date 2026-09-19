@@ -7,6 +7,8 @@ export interface SessionRow {
   expires_at: string;
   last_used_at: string;
   label: string | null;
+  /** The lifetime the session was minted with. NULL only on a row no migration has reached. */
+  ttl_ms: number | null;
 }
 
 export interface SessionsRepoLow {
@@ -14,6 +16,7 @@ export interface SessionsRepoLow {
     tokenHash: Uint8Array;
     userId: number;
     expiresAt: string;
+    ttlMs: number;
     label?: string | null;
     /** Override `last_used_at` (defaults to sqlite's `datetime('now')`). */
     lastUsedAt?: string;
@@ -23,16 +26,18 @@ export interface SessionsRepoLow {
   deleteAllForUser(userId: number): number;
   deleteExpired(now: string): number;
   updateLastUsed(tokenHash: Uint8Array, now: string): void;
+  /** Record a use and move the expiry in one statement. */
+  updateLastUsedAndExpiry(tokenHash: Uint8Array, now: string, expiresAt: string): void;
 }
 
 export function createSessionsRepoFromDb(db: DatabaseClient): SessionsRepoLow {
-  const insertStmt = db.prepare<SessionRow, [Uint8Array, number, string, string | null, string | null]>(
-    `INSERT INTO sessions (token_hash, user_id, expires_at, last_used_at, label)
-     VALUES (?, ?, ?, coalesce(?, datetime('now')), ?)
-     RETURNING token_hash, user_id, created_at, expires_at, last_used_at, label`,
+  const insertStmt = db.prepare<SessionRow, [Uint8Array, number, string, string | null, string | null, number]>(
+    `INSERT INTO sessions (token_hash, user_id, expires_at, last_used_at, label, ttl_ms)
+     VALUES (?, ?, ?, coalesce(?, datetime('now')), ?, ?)
+     RETURNING token_hash, user_id, created_at, expires_at, last_used_at, label, ttl_ms`,
   );
   const findByTokenHashStmt = db.prepare<SessionRow, [Uint8Array]>(
-    `SELECT token_hash, user_id, created_at, expires_at, last_used_at, label
+    `SELECT token_hash, user_id, created_at, expires_at, last_used_at, label, ttl_ms
      FROM sessions WHERE token_hash = ?`,
   );
   const deleteByTokenHashStmt = db.prepare<unknown, [Uint8Array]>(
@@ -48,6 +53,10 @@ export function createSessionsRepoFromDb(db: DatabaseClient): SessionsRepoLow {
     'UPDATE sessions SET last_used_at = ? WHERE token_hash = ?',
   );
 
+  const updateLastUsedAndExpiryStmt = db.prepare<unknown, [string, string, Uint8Array]>(
+    'UPDATE sessions SET last_used_at = ?, expires_at = ? WHERE token_hash = ?',
+  );
+
   return {
     insert(input): SessionRow {
       const row = insertStmt.get(
@@ -56,6 +65,7 @@ export function createSessionsRepoFromDb(db: DatabaseClient): SessionsRepoLow {
         input.expiresAt,
         input.lastUsedAt ?? null,
         input.label ?? null,
+        input.ttlMs,
       );
       if (!row) throw new Error('sessions.insert: RETURNING gave no row');
       return row;
@@ -77,6 +87,9 @@ export function createSessionsRepoFromDb(db: DatabaseClient): SessionsRepoLow {
     },
     updateLastUsed(tokenHash, now): void {
       updateLastUsedStmt.run(now, tokenHash);
+    },
+    updateLastUsedAndExpiry(tokenHash, now, expiresAt): void {
+      updateLastUsedAndExpiryStmt.run(now, expiresAt, tokenHash);
     },
   };
 }

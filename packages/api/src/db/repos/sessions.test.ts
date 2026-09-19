@@ -34,7 +34,7 @@ describe('SessionsRepoLow', () => {
 
   test('insert persists hash + user + expiry', () => {
     const repo = createSessionsRepoFromDb(db);
-    const row = repo.insert({ tokenHash: hashA, userId, expiresAt: inTheFuture(), label: 'spa' });
+    const row = repo.insert({ tokenHash: hashA, userId, expiresAt: inTheFuture(), ttlMs: 60_000, label: 'spa' });
     expect(Array.from(row.token_hash)).toEqual(Array.from(hashA));
     expect(row.user_id).toBe(userId);
     expect(row.expires_at).toBe(inTheFuture());
@@ -43,20 +43,20 @@ describe('SessionsRepoLow', () => {
 
   test('insert with no label stores NULL', () => {
     const repo = createSessionsRepoFromDb(db);
-    const row = repo.insert({ tokenHash: hashA, userId, expiresAt: inTheFuture() });
+    const row = repo.insert({ tokenHash: hashA, userId, expiresAt: inTheFuture() , ttlMs: 60_000});
     expect(row.label).toBeNull();
   });
 
   test('findByTokenHash returns the row or null', () => {
     const repo = createSessionsRepoFromDb(db);
-    repo.insert({ tokenHash: hashA, userId, expiresAt: inTheFuture() });
+    repo.insert({ tokenHash: hashA, userId, expiresAt: inTheFuture() , ttlMs: 60_000});
     expect(repo.findByTokenHash(hashA)?.user_id).toBe(userId);
     expect(repo.findByTokenHash(hashB)).toBeNull();
   });
 
   test('deleteByTokenHash returns true for a hit, false for a miss', () => {
     const repo = createSessionsRepoFromDb(db);
-    repo.insert({ tokenHash: hashA, userId, expiresAt: inTheFuture() });
+    repo.insert({ tokenHash: hashA, userId, expiresAt: inTheFuture() , ttlMs: 60_000});
     expect(repo.deleteByTokenHash(hashA)).toBe(true);
     expect(repo.findByTokenHash(hashA)).toBeNull();
     expect(repo.deleteByTokenHash(hashA)).toBe(false);
@@ -65,9 +65,9 @@ describe('SessionsRepoLow', () => {
   test('deleteAllForUser removes only that user’s rows and returns the count', () => {
     const repo = createSessionsRepoFromDb(db);
     const otherUserId = seedUser(db, 'leo');
-    repo.insert({ tokenHash: hashA, userId, expiresAt: inTheFuture() });
-    repo.insert({ tokenHash: hashB, userId, expiresAt: inTheFuture() });
-    repo.insert({ tokenHash: hashC, userId: otherUserId, expiresAt: inTheFuture() });
+    repo.insert({ tokenHash: hashA, userId, expiresAt: inTheFuture() , ttlMs: 60_000});
+    repo.insert({ tokenHash: hashB, userId, expiresAt: inTheFuture() , ttlMs: 60_000});
+    repo.insert({ tokenHash: hashC, userId: otherUserId, expiresAt: inTheFuture() , ttlMs: 60_000});
     expect(repo.deleteAllForUser(userId)).toBe(2);
     expect(repo.findByTokenHash(hashA)).toBeNull();
     expect(repo.findByTokenHash(hashB)).toBeNull();
@@ -76,8 +76,8 @@ describe('SessionsRepoLow', () => {
 
   test('deleteExpired removes only rows whose expires_at < now', () => {
     const repo = createSessionsRepoFromDb(db);
-    repo.insert({ tokenHash: hashA, userId, expiresAt: inThePast() });
-    repo.insert({ tokenHash: hashB, userId, expiresAt: inTheFuture() });
+    repo.insert({ tokenHash: hashA, userId, expiresAt: inThePast() , ttlMs: 60_000});
+    repo.insert({ tokenHash: hashB, userId, expiresAt: inTheFuture() , ttlMs: 60_000});
     expect(repo.deleteExpired(now())).toBe(1);
     expect(repo.findByTokenHash(hashA)).toBeNull();
     expect(repo.findByTokenHash(hashB)).not.toBeNull();
@@ -85,7 +85,7 @@ describe('SessionsRepoLow', () => {
 
   test('updateLastUsed bumps the timestamp', () => {
     const repo = createSessionsRepoFromDb(db);
-    repo.insert({ tokenHash: hashA, userId, expiresAt: inTheFuture() });
+    repo.insert({ tokenHash: hashA, userId, expiresAt: inTheFuture() , ttlMs: 60_000});
     const stamp = '2099-12-31 23:59:59';
     repo.updateLastUsed(hashA, stamp);
     expect(repo.findByTokenHash(hashA)?.last_used_at).toBe(stamp);

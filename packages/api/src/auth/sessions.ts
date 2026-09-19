@@ -5,6 +5,12 @@ import { sha256 } from './hash.ts';
 import { formatSqliteDateTime, parseSqliteDateTime } from './datetime.ts';
 
 const LAST_USED_COALESCE_MS = 60_000;
+/**
+ * How much lifetime a session must have used up before a use moves its expiry
+ * forward again. A day: a session used daily never ends, and the expiry is
+ * written at most once a day rather than on every request.
+ */
+const SLIDE_STEP_MS = 24 * 60 * 60_000;
 const TOKEN_PREFIX = 'eal_v1_';
 
 export interface MintedSession {
@@ -47,7 +53,7 @@ export function createSessionsRepo(
       const current = now();
       const expiresAt = formatSqliteDateTime(new Date(current.getTime() + ttlMs));
       const lastUsedAt = formatSqliteDateTime(current);
-      const row = repo.insert({ tokenHash, userId, expiresAt, label: label ?? null, lastUsedAt });
+      const row = repo.insert({ tokenHash, userId, expiresAt, ttlMs, label: label ?? null, lastUsedAt });
       return { token, row };
     },
 
@@ -60,9 +66,19 @@ export function createSessionsRepo(
       if (expiresAt.getTime() <= current.getTime()) return null;
 
       const lastUsedAt = parseSqliteDateTime(row.last_used_at);
-      if (current.getTime() - lastUsedAt.getTime() > coalesceMs) {
-        repo.updateLastUsed(tokenHash, formatSqliteDateTime(current));
+      if (current.getTime() - lastUsedAt.getTime() <= coalesceMs) return row;
+
+      // The expiry slides: a use moves it to `ttl_ms` from now, so a session
+      // ends that long after its LAST use, not after sign-in. A lost device
+      // still ends by itself; a device in daily use never signs its owner out.
+      const remainingMs = expiresAt.getTime() - current.getTime();
+      const usedAt = formatSqliteDateTime(current);
+      if (row.ttl_ms !== null && remainingMs < row.ttl_ms - SLIDE_STEP_MS) {
+        const slidTo = formatSqliteDateTime(new Date(current.getTime() + row.ttl_ms));
+        repo.updateLastUsedAndExpiry(tokenHash, usedAt, slidTo);
+        return { ...row, last_used_at: usedAt, expires_at: slidTo };
       }
+      repo.updateLastUsed(tokenHash, usedAt);
       return row;
     },
 
