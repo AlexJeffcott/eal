@@ -1,7 +1,7 @@
 # Plan 06 — Offline shell and capture
 
-Status: part A built on branch `offline-shell-capture`, 2026-09-19, not
-deployed. Part B not started. Plan 02 is done, which this plan required — an
+Status: parts A and B built on branch `offline-shell-capture`, 2026-09-19.
+Not merged, not deployed, not yet tried on a phone. Plan 02 is done, which this plan required — an
 outbox on top of a socket that never reconnects hides the wrong bug.
 
 ## Part A as built
@@ -37,14 +37,73 @@ Differences from the decision below:
 
 Known and not fixed in part A:
 
-- **The task list is empty offline.** Nothing caches it. Part B has to keep a
-  copy of the list in IndexedDB beside the outbox, or an offline capture lands
-  in a list that looks deleted.
+- ~~The task list is empty offline.~~ Fixed in part B: the list copy.
 - The HTML, the bundle and the stylesheet are cached one entry each. A
   connection that dies between them leaves entries from two deploys. Each
   online load fetches all three, so the window is one page load wide.
 - A token revoked while the device is offline: the WS retry loop then runs
   with no end, as it already did for a token revoked during a drop.
+
+## Part B as built
+
+Proved by `scripts/e2e-offline-capture.ts`: a real browser, a cold profile, a
+database file from before the `client_id` column, a server process that is
+killed and restarted, and a create whose response is failed at the response
+stage over CDP — the server has committed and the device never hears. Every
+count is read from the database, not the DOM. Falsified two ways — with the
+server's client-id lookup disabled the replay is a 500, and with the IndexedDB
+write removed the capture does not survive the reload.
+
+| Piece | Where |
+|---|---|
+| The spec, hand-written TLA+, 5,991 distinct states, run by `bun devctl verify` | `specs/tla/tasks-convergence/TasksConvergence.tla` |
+| Its TypeScript twin: explored exhaustively in the unit tier, asserts TLC's state count, and breaks the model once per invariant | `packages/api/src/specs/tasks-convergence-machine.ts` |
+| `tasks.client_id`, unique per creator through a partial index; a replayed create returns the first row, 200, the same bytes, and is not broadcast again | `db/schema.ts`, `handlers/tasks.shared.ts:createTaskOnce` |
+| `ServerRefusedError` carries the status; a `TypeError` still means no response arrived | `packages/client/src/eal-client.ts` |
+| The outbox and the list copy — logic, with storage injected | `packages/web/src/apps/tasks/outbox.ts` |
+| IndexedDB, Web Locks, `crypto.randomUUID` | `packages/web/src/apps/tasks/outbox-idb.ts` |
+| The pending row: no controls, `data-task-pending`, fits 350px (asserted by the script) | `tasks-panel.tsx`, `tasks.css` |
+
+What the plan got wrong, or did not name:
+
+| The plan said | What is true |
+|---|---|
+| "Extend `tasks-convergence-machine`" | It did not exist. `docs/tasks-v1.md` named it and nothing had written it. polly's generator cannot express it — no sets, no sequences, no second device — and `polly verify` lists a `customTLAPaths` spec and SKIPS it. So the spec is hand-written and `packages/devctl/commands/verify.ts` runs TLC over it. |
+| "On success the temp id is replaced by the server id" | There are three roads back, not one. A create whose response is lost still broadcasts, so the row reaches the device that still holds the entry — by broadcast if the socket is up, by seed if it was not. Each road must settle the entry by its client id or the capture shows twice. Found by the model (`NoDoubleDisplay`) before any code existed. `clientId` is on the `Task` wire shape for this reason. |
+| "Have `createTaskCore` reject a duplicate" | A rejection is wrong. The device treats a failing status as "drop the entry and tell the user", so the replay must be a 200 carrying the first row. |
+| Outbox store `{ tempId, title, createdAt }` | `{ clientId, userId, title, parentId, createdAt }`. `parentId` because capture lands where the user is standing. `userId` because if the sign-out clear ever fails, the next member's session must not send the last member's captures as its own. |
+| Nothing about the list | Part A left the list empty offline. The copy is written after every change once a seed has succeeded, and read on ONE path: a seed that failed with no response, into an empty list. Reading it before every connect would let the server's list replace rows under the user a second later (lingua, PR #419). |
+
+More found while building it:
+
+- The replay lookup must run BEFORE the parent and level checks. A parent
+  binned between the two sends otherwise turns the replay into a 404 for a row
+  that exists, and the device drops a capture the server has.
+- The replay lookup reads the trash. A capture binned before its replay
+  arrives is still that capture.
+- 401 and 403 are "send it again", not refusals. An expired session is a
+  reason to sign in, not a reason to discard what the user wrote.
+- The stored entry is deleted a moment after the signal forgets it. A flush
+  that lists IndexedDB in that moment would put the entry back on the screen;
+  the outbox keeps the ids it has seen finished.
+- `e2e-offline-shell.ts` guarded against a cached list, which part B adds on
+  purpose. Its seed proof is now a row written into the database file while the
+  server is dead, which no broadcast and no copy can hold.
+
+Known and not fixed in part B:
+
+- **Only quick-add goes through the outbox.** Complete, edit, move and delete
+  still need the server, and fail with the raw fetch error offline. The list is
+  readable offline; it is not editable.
+- **Sign-out discards unsent captures.** It logs the count to the console and
+  does not ask first.
+- A capture made inside a container that is deleted before the flush is
+  refused (404). The title goes back to the input; the entry is gone.
+- The subscribe-to-seed gap is not modelled: `Seed` is one atomic step in the
+  spec. A broadcast that lands between the socket opening and the list
+  response arriving can be overwritten by an older list. Plan 02's territory.
+- Not tried on a phone. iOS evicts a home-screen PWA's IndexedDB on the same
+  schedule as its caches, and that has never been measured.
 
 ## The reading
 

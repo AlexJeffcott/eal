@@ -356,8 +356,12 @@ Each new layer is named with the file path that will contain it.
 
 - `packages/api/src/specs/tasks-status-machine.ts` — TLC-checked status
   transitions.
-- `packages/api/src/specs/tasks-convergence-machine.ts` — TLC-checked
-  convergence + no-phantom + no-lost-delete.
+- `specs/tla/tasks-convergence/TasksConvergence.tla` — hand-written, TLC-checked
+  convergence + no-phantom + no-lost-delete, plus the capture outbox's
+  at-most-one-row, no-double-display and no-lost-capture. Its TypeScript twin,
+  `packages/api/src/specs/tasks-convergence-machine.ts`, is explored
+  exhaustively in the unit tier. Written 2026-09-19 for Plan 06 part B; until
+  then this line named a file that did not exist.
 
 ### Coverage policy
 

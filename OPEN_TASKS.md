@@ -15,16 +15,18 @@ pre-commit hook runs `devctl check` and the unit tier only.
 | Command | Passing count, 2026-09-19 | Runs in the pre-push sweep |
 |---|---|---|
 | `bun devctl check` | tsc + 7 lint scripts | yes |
-| `bun devctl test unit` | 1331 tests, 107 files; coverage ok, 138 files, 28 exempt | yes |
-| `bun devctl test browser` | 103 tests | yes |
+| `bun devctl test unit` | 1390 tests, 109 files; coverage ok, 143 files, 29 exempt | yes |
+| `bun devctl test browser` | 105 tests | yes |
 | `bun devctl test e2e` | 52 Playwright tests, 2 projects | yes |
-| `bun devctl test multi` | 29 `scripts/e2e-*.ts`, each exiting 0 | yes |
+| `bun devctl test multi` | 30 `scripts/e2e-*.ts`, each exiting 0 | yes |
 | `bun devctl test mutation` | see below — not part of `all` | no |
-| `bun devctl verify` | TLC: `tasks` ✓ 2.7s, `pairing` ✓ 1.2s, `auth` ✓ 2.3s — compositional PASS | yes |
+| `bun devctl verify` | TLC: `tasks` ✓ 2.4s, `pairing` ✓ 1.3s, `auth` ✓ 2.3s — compositional PASS; then the hand-written `TasksConvergence` ✓ 5,991 distinct states, 0 on queue, 1.0s | yes |
 
 All five rows above the mutation row were read in one `bun devctl test all`
 sweep on 2026-09-19, on branch `offline-shell-capture`. The multi tier gained
-`e2e-offline-shell.ts` (the offline shell and the worker kill switch).
+`e2e-offline-shell.ts` (the offline shell and the worker kill switch) and
+`e2e-offline-capture.ts` (the capture outbox, over a pre-`client_id` database
+file).
 
 The multi tier now includes `e2e-registration-closed.ts` (the registration
 gate), `e2e-tasks-reconnect.ts` (the WS drop and resync),
@@ -153,19 +155,27 @@ what remains there is a machine to install it on.
       Deferred deliberately at v1 (`docs/tasks-v1.md`). A small fixed rule set
       with a `basis: 'due' | 'completed'` anchor, not RFC 5545. →
       `docs/plans/05-recurring-tasks.md` · ~2–4 days
-- [>] **06 — Offline shell and capture.** **Part A, the shell, is built on
-      branch `offline-shell-capture`, 2026-09-19. Not merged, not deployed.** The
-      worker caches the shell network-first, `EAL_SW_KILL=1` removes it
-      (`docs/deploy.md`), and an offline cold boot opens signed in, reads
-      `reconnecting`, and seeds the list when the server returns. Proved by
-      `scripts/e2e-offline-shell.ts`, which kills and restarts the server
-      process and is falsified two ways. The cold boot reached three defects
-      the plan had not named; the plan now lists them.
-      **Still open: part B, the capture outbox** — and with it a copy of the
-      task list in IndexedDB, because offline the list is empty today.
+- [>] **06 — Offline shell and capture.** **Both parts are built on branch
+      `offline-shell-capture`, 2026-09-19. Not merged, not deployed.**
+      Part A, the shell: the worker caches it network-first, `EAL_SW_KILL=1`
+      removes it (`docs/deploy.md`), and an offline cold boot opens signed in,
+      reads `reconnecting`, and seeds when the server returns —
+      `scripts/e2e-offline-shell.ts`.
+      Part B, capture: quick-add goes through an IndexedDB outbox, shows as a
+      pending row, and is sent until the server's row comes back;
+      `tasks.client_id` makes a create that is sent twice one task; a copy of
+      the list stands in when the seed gets no response —
+      `scripts/e2e-offline-capture.ts`, which fails a response after the server
+      has committed and reads every count from the database. The spec is
+      hand-written TLA+ (`specs/tla/tasks-convergence/`), now part of
+      `bun devctl verify`. The plan lists what it got wrong.
+      **Still open:** merge and deploy — the deploy carries a migration
+      (`client_id`, additive, NULL for every existing row). Only quick-add works
+      offline; complete, edit, move and delete still need the server. Sign-out
+      discards unsent captures without asking.
       **Also open, not a code task: confirm on the owner's phone.** iOS evicts
-      a home-screen PWA's caches on its own schedule, and that has never been
-      measured. → `docs/plans/06-offline-capture.md`
+      a home-screen PWA's caches and IndexedDB on its own schedule, and that
+      has never been measured. → `docs/plans/06-offline-capture.md`
 - [x] **07 — Prove the tasks surface at 350px.** Done 2026-08-25. The tasks
       panel, the expanded detail, the filter builder and the assistant sheet
       each have a 350px case, and a second Playwright project (`mobile-350`,
