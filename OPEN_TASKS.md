@@ -18,7 +18,7 @@ pre-commit hook runs `devctl check` and the unit tier only.
 | `bun devctl test unit` | 1319 tests, 106 files; coverage ok, 138 files, 28 exempt | yes |
 | `bun devctl test browser` | 103 tests | yes |
 | `bun devctl test e2e` | 52 Playwright tests, 2 projects | yes |
-| `bun devctl test multi` | 27 `scripts/e2e-*.ts`, each exiting 0 | yes |
+| `bun devctl test multi` | 28 `scripts/e2e-*.ts`, each exiting 0 | yes |
 | `bun devctl test mutation` | see below — not part of `all` | no |
 | `bun devctl verify` | TLC: `tasks` ✓ 2.7s, `pairing` ✓ 1.2s, `auth` ✓ 2.3s — compositional PASS | yes |
 
@@ -48,6 +48,26 @@ against a local HTTPS server impersonating a push vendor, with the payload
 decrypted). With the `reminded_at` stamp removed from the scan it fails with
 `the first deadline was announced 2 times across 3 pushes: [...]` — checked,
 not assumed.
+
+And `e2e-pstn-live.ts` (the Twilio webhook signature boundary, 6 checks). It
+boots the api with `SKIP_TLS=1` and `EAL_ORIGIN` set to a name that is *not*
+the address it binds, which is the production shape — the container listens on
+a private port and the world reaches it under another name. Its falsifier was
+measured on 2026-09-19 by rewriting `publicUrl`
+(`handlers/family-phone-twilio.http.ts:97`) to read the request's own host,
+which is the defect that would 403 every real inbound call behind Fly:
+
+| Tier, against the broken `publicUrl` | Reading |
+|---|---|
+| `family-phone-twilio.http.test.ts` | 21 pass, 0 fail |
+| `e2e-pstn-inbound.ts` | exit 0 |
+| `e2e-pstn-routed.ts` | exit 0 |
+| `e2e-pstn-live.ts` | **exit 1** — `signed over the public URL: expected 200, got 403` |
+
+Nothing else in the repo catches it. The mocked PSTN scripts sign over
+`api.url`, which `bootApi` also pins `EAL_ORIGIN` to, so both spellings agree
+and the check passes for the wrong reason. This is the `~/projects/CLAUDE.md`
+failure mode exactly: green across tiers, broken for the user.
 
 Every tier runs with the developer's own `.env` in place and needs no
 environment override. Tests take their config explicitly: `createTestApp`
@@ -223,9 +243,16 @@ user-facing feature works.
       29,248 states, 1.2s; `auth` ✓ 7 handlers, 7 ensures, 97,600 states,
       2.3s. Non-interference verified, compositional PASS. `devctl verify` is
       the third stage of the pre-push hook and it passed there.
-- [ ] **Commit `scripts/e2e-pstn-live.ts`.** Every other user-facing path has a
-      committed verification artefact that runs in one command. The live Twilio
-      trunk does not — see Phase 7E below.
+- [x] **`scripts/e2e-pstn-live.ts` is committed.** Written 2026-09-19 and
+      green: 6 of 6 checks locally, and the multi tier reads 28 scripts at
+      exit 0. The script has two modes. With no arguments it runs in the multi tier against a locally
+      booted api. With `--target https://eal.fly.dev` and `TWILIO_AUTH_TOKEN`
+      in the environment it probes the deployment, sending no `CallSid`,
+      `From` or `To` so a verified signature stops at the field check before
+      the rate limiter and the IVR — the probe writes no row. It names three
+      statuses: 400 the signature verified, 403 it did not, 404 the trunk is
+      not mounted. Live mode has not been run; the deployment has no `TWILIO_*`
+      secrets and `fly.toml` has no `TWILIO_ENABLED`.
 
 ## Phase 7E — the real PSTN trunk
 
@@ -237,10 +264,27 @@ committed; none of it has met a real trunk. See `docs/family-phone.md`.
 - [ ] Point the Twilio console webhook at the public URL, and set `EAL_ORIGIN`
       to exactly that URL. Twilio signs the URL it was configured with; the api
       rebuilds it from `EAL_ORIGIN` to verify the signature.
-- [ ] **Watch a real inbound call for a 403 on `/voice`.** This is the one
-      failure the mocks cannot catch: whether the chosen proxy (Fly, or the
-      Tailscale Funnel) forwards the original `Host` header, so the
-      reconstructed URL matches what Twilio hashed.
+- [x] **The `Host` header is not the risk. Corrected 2026-09-19.** This line
+      used to say a real inbound call was the only way to learn whether the
+      proxy forwards the original `Host`. The api never reads that header:
+      `publicUrl` (`handlers/family-phone-twilio.http.ts:97`) rebuilds the
+      signed URL from `EAL_ORIGIN` plus the request's own path and query, so a
+      proxy that rewrites `Host` cannot break the signature.
+      `scripts/e2e-pstn-live.ts` measures it, locally and against the
+      deployment. What it does require is that `EAL_ORIGIN` equals the webhook
+      URL's origin exactly — `fly.toml:22` reads `https://eal.fly.dev`, and
+      the Twilio console must be pointed at that same host.
+- [ ] **Run `e2e-pstn-live.ts --target https://eal.fly.dev`.** Needs the three
+      `TWILIO_*` secrets on Fly, `TWILIO_ENABLED = "true"` in `fly.toml`
+      `[env]`, and a redeploy. The secrets may be invented for this — the SID
+      only has to match `/^AC[0-9a-f]{32}$/i` and the number E.164, and
+      nothing calls Twilio at boot. A real number is not needed to answer the
+      signature question.
+- [ ] **Watch a real inbound call.** What a real call still proves, and the
+      script cannot: Twilio's own `CallSid`/`From`/`To` fields, the
+      `wss://` media WebSocket opening against the public origin, and audio
+      crossing it. `e2e-pstn-inbound.ts` covers that path against a mocked
+      Twilio.
 - [ ] Set `TWILIO_CALLER_ID` to a non-Italian number if the DID is Italian.
       AGCOM drops internationally-routed calls presenting an Italian caller ID,
       with no whitelist. Inbound is unaffected.
