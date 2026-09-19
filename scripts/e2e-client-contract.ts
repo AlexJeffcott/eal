@@ -155,21 +155,27 @@ async function main(): Promise<number> {
     assertShape('listUsers[0]', realUsers[0], mockUsers[0]);
 
     // ─── Step 7: completeTask shape — status flip on the same row ──────────
-    const realDone = await real.completeTask(realTask.id);
-    const mockDone = await mock.completeTask(mockTask.id);
-    assertShape('completeTask', realDone, mockDone);
+    const realDoneChange = await real.completeTask(realTask.id);
+    const mockDoneChange = await mock.completeTask(mockTask.id);
+    assertShape('completeTask', realDoneChange, mockDoneChange);
+    const realDone = realDoneChange.task;
+    const mockDone = mockDoneChange.task;
+    assertShape('completeTask.task', realDone, mockDone);
     if (realDone.status !== 'done' || mockDone.status !== 'done') {
       throw new Error('completeTask did not flip status to done');
     }
     if (realDone.completedAt === null || mockDone.completedAt === null) {
       throw new Error('completeTask did not set completedAt');
     }
+    if (realDoneChange.spawned.length !== 0 || mockDoneChange.spawned.length !== 0) {
+      throw new Error('completeTask spawned a successor for a task that does not repeat');
+    }
 
     // ─── Step 7b: setTaskStatus shape — the board's lane move ──────────────
     // The mock is what the browser tier drives, so a lane it moves cards into
     // differently from the api is a green tier that proves nothing.
-    const realBlocked = await real.setTaskStatus(realTask.id, 'blocked');
-    const mockBlocked = await mock.setTaskStatus(mockTask.id, 'blocked');
+    const realBlocked = (await real.setTaskStatus(realTask.id, 'blocked')).task;
+    const mockBlocked = (await mock.setTaskStatus(mockTask.id, 'blocked')).task;
     assertShape('setTaskStatus', realBlocked, mockBlocked);
     if (realBlocked.status !== 'blocked' || mockBlocked.status !== 'blocked') {
       throw new Error(
@@ -182,6 +188,51 @@ async function main(): Promise<number> {
       throw new Error(
         `setTaskStatus left a completedAt behind: real=${realBlocked.completedAt} mock=${mockBlocked.completedAt}`,
       );
+    }
+
+    // ─── Step 7c: a recurring task — the successor, and the accidental tick ─
+    // The mock computes the date with the same `@eal/shared` function the api
+    // does, so what this pins is everything around it: that both move the rule
+    // onto the successor, and that both take an untouched successor back.
+    const today = new Date().toISOString().slice(0, 10);
+    const weekly = {
+      title: 'bins',
+      dueAt: today,
+      recurrence: { every: 'days', interval: 7, basis: 'due' },
+    } as const;
+    const realBins = await real.createTask(weekly);
+    const mockBins = await mock.createTask(weekly);
+    assertShape('createTask (recurring)', realBins, mockBins);
+    const realSpawn = await real.completeTask(realBins.id, { today });
+    const mockSpawn = await mock.completeTask(mockBins.id, { today });
+    assertShape('completeTask (recurring)', realSpawn, mockSpawn);
+    const realNext = realSpawn.spawned[0];
+    const mockNext = mockSpawn.spawned[0];
+    if (realSpawn.spawned.length !== 1 || mockSpawn.spawned.length !== 1 || !realNext || !mockNext) {
+      throw new Error(
+        `a recurring completion should spawn one row: real=${realSpawn.spawned.length} mock=${mockSpawn.spawned.length}`,
+      );
+    }
+    assertShape('completeTask.spawned[0]', realNext, mockNext);
+    if (realNext.dueAt !== mockNext.dueAt) {
+      throw new Error(`successor dueAt mismatch: real=${realNext.dueAt} mock=${mockNext.dueAt}`);
+    }
+    if (realNext.recurrence === null || mockNext.recurrence === null) {
+      throw new Error('the successor does not carry the rule');
+    }
+    if (realSpawn.task.recurrence !== null || mockSpawn.task.recurrence !== null) {
+      throw new Error('the completed occurrence still carries the rule');
+    }
+    const realUndo = await real.reopenTask(realBins.id);
+    const mockUndo = await mock.reopenTask(mockBins.id);
+    assertShape('reopenTask (recurring)', realUndo, mockUndo);
+    if (realUndo.removed.length !== 1 || mockUndo.removed.length !== 1) {
+      throw new Error(
+        `reopen should take back one untouched successor: real=${realUndo.removed.length} mock=${mockUndo.removed.length}`,
+      );
+    }
+    if (realUndo.task.recurrence === null || mockUndo.task.recurrence === null) {
+      throw new Error('reopen did not return the rule to the reopened row');
     }
 
     // ─── Step 8: deleteTask shape — soft delete, row stays ─────────────────
