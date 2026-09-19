@@ -44,6 +44,7 @@ function defaults(overrides: Partial<Parameters<TasksRepo['insert']>[0]> & { cre
     position: 0,
     sequential: false,
     clientId: null,
+    recurrence: null,
     ...overrides,
   };
 }

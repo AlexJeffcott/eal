@@ -86,6 +86,7 @@ function setup(): SetupContext {
         position: 0,
         sequential: false,
         clientId: null,
+        recurrence: null,
       });
     },
   };

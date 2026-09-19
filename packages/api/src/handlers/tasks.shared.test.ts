@@ -455,7 +455,7 @@ describe('complete / reopen', () => {
 
   test('complete sets status=done + completed_at', () => {
     const t = createTaskCore(ctx.db, { title: 'x' }, ctx.alex);
-    const done = completeTaskCore(ctx.db, t.id, ctx.elisa);
+    const { task: done } = completeTaskCore(ctx.db, t.id, ctx.elisa);
     expect(done.status).toBe('done');
     expect(done.completedAt).not.toBeNull();
     expect(done.updatedBy).toBe(ctx.elisa.userId);
@@ -463,8 +463,8 @@ describe('complete / reopen', () => {
 
   test('completing an already-done task is a no-op (returns current row, no error)', () => {
     const t = createTaskCore(ctx.db, { title: 'x' }, ctx.alex);
-    const first = completeTaskCore(ctx.db, t.id, ctx.alex);
-    const second = completeTaskCore(ctx.db, t.id, ctx.elisa);
+    const { task: first } = completeTaskCore(ctx.db, t.id, ctx.alex);
+    const { task: second } = completeTaskCore(ctx.db, t.id, ctx.elisa);
     expect(second.id).toBe(first.id);
     expect(second.completedAt).toBe(first.completedAt);
     // updated_by stayed alex because the no-op skipped the write
@@ -474,11 +474,11 @@ describe('complete / reopen', () => {
   test('reopen clears completed_at and lands in todo; reopening a live task is a no-op', () => {
     const t = createTaskCore(ctx.db, { title: 'x' }, ctx.alex);
     completeTaskCore(ctx.db, t.id, ctx.alex);
-    const reopened = reopenTaskCore(ctx.db, t.id, ctx.alex);
+    const { task: reopened } = reopenTaskCore(ctx.db, t.id, ctx.alex);
     expect(reopened.status).toBe('todo');
     expect(reopened.completedAt).toBeNull();
 
-    const second = reopenTaskCore(ctx.db, t.id, ctx.elisa);
+    const { task: second } = reopenTaskCore(ctx.db, t.id, ctx.elisa);
     expect(second.updatedBy).toBe(ctx.alex.userId); // no-op
   });
 
@@ -486,7 +486,7 @@ describe('complete / reopen', () => {
     for (const from of ['todo', 'doing', 'blocked'] as const) {
       const t = createTaskCore(ctx.db, { title: from }, ctx.alex);
       setTaskStatusCore(ctx.db, t.id, from, ctx.alex);
-      const done = completeTaskCore(ctx.db, t.id, ctx.alex);
+      const { task: done } = completeTaskCore(ctx.db, t.id, ctx.alex);
       expect(done.status).toBe('done');
       expect(done.completedAt).not.toBeNull();
     }
@@ -495,7 +495,7 @@ describe('complete / reopen', () => {
   test('reopen from a lane that is not done is a no-op, not a reset to todo', () => {
     const t = createTaskCore(ctx.db, { title: 'x' }, ctx.alex);
     setTaskStatusCore(ctx.db, t.id, 'blocked', ctx.alex);
-    const same = reopenTaskCore(ctx.db, t.id, ctx.elisa);
+    const { task: same } = reopenTaskCore(ctx.db, t.id, ctx.elisa);
     expect(same.status).toBe('blocked');
     // No write happened, so the row still belongs to whoever last moved it.
     expect(same.updatedBy).toBe(ctx.alex.userId);
@@ -519,7 +519,7 @@ describe('setTaskStatus', () => {
       for (const to of lanes) {
         const t = createTaskCore(ctx.db, { title: `${from}->${to}` }, ctx.alex);
         setTaskStatusCore(ctx.db, t.id, from, ctx.alex);
-        const moved = setTaskStatusCore(ctx.db, t.id, to, ctx.alex);
+        const { task: moved } = setTaskStatusCore(ctx.db, t.id, to, ctx.alex);
         expect(moved.status).toBe(to);
         // The tie the storage CHECK enforces, checked on every landing.
         expect(moved.completedAt === null).toBe(to !== 'done');
@@ -529,8 +529,8 @@ describe('setTaskStatus', () => {
 
   test('moving a card to the lane it is already in is a no-op', () => {
     const t = createTaskCore(ctx.db, { title: 'x' }, ctx.alex);
-    const first = setTaskStatusCore(ctx.db, t.id, 'doing', ctx.alex);
-    const second = setTaskStatusCore(ctx.db, t.id, 'doing', ctx.elisa);
+    const { task: first } = setTaskStatusCore(ctx.db, t.id, 'doing', ctx.alex);
+    const { task: second } = setTaskStatusCore(ctx.db, t.id, 'doing', ctx.elisa);
     expect(second.updatedAt).toBe(first.updatedAt);
     expect(second.updatedBy).toBe(ctx.alex.userId);
   });

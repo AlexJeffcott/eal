@@ -214,6 +214,47 @@ export function applySchema(db: DatabaseClient): void {
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_client_id ON tasks (created_by, client_id)
        WHERE client_id IS NOT NULL`,
   );
+  // Tasks stage 6: recurring tasks — docs/plans/05-recurring-tasks.md. Three
+  // nullable columns, NULL on every row that existed before them, so the
+  // migration changes nothing until someone sets a rule.
+  //
+  //   recurrence    the rule, as the canonical JSON `@eal/shared`
+  //                 serialiseRecurrence writes. It sits on the ONE live row of
+  //                 a series: completing that row moves it to the successor.
+  //   spawned_from  lineage, and permanent: the id of the completed row this
+  //                 one succeeded. It is how a recurring container knows a done
+  //                 child has already been succeeded and must not be copied
+  //                 into the next occurrence a second time.
+  //   spawn_group   the accidental tick. Every row of a freshly spawned
+  //                 successor tree holds the completed row's id here, and ANY
+  //                 write to ANY of them clears it on all of them
+  //                 (db/repos/tasks.ts:touchSpawnGroup). So "is the successor
+  //                 untouched?" is "does a row still hold this id?", and
+  //                 reopening the completed row may take the successor back
+  //                 only then. A comparison of `updated_at` with `created_at`
+  //                 cannot answer that: both are whole seconds, and an edit in
+  //                 the second a row was made would read as no edit at all.
+  //
+  // No foreign key on either id: the only rows ever hard-deleted are an
+  // untouched successor tree, and nothing can point at one — a row is only
+  // pointed at once it has been completed, which is a touch.
+  //
+  // **These must stay AFTER rebuildTasksStatusIfLegacy**, for the same reason
+  // `sequential`, `reminded_at` and `client_id` above must.
+  // scripts/e2e-tasks-recurrence-migration.ts drives it over a real
+  // pre-migration file.
+  ensureColumn(db, 'tasks', 'recurrence', 'TEXT');
+  ensureColumn(db, 'tasks', 'spawned_from', 'INTEGER');
+  ensureColumn(db, 'tasks', 'spawn_group', 'INTEGER');
+  // Both lookups are by one of these ids, and nearly every row holds NULL.
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_tasks_spawn_group ON tasks (spawn_group)
+       WHERE spawn_group IS NOT NULL`,
+  );
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_tasks_spawned_from ON tasks (spawned_from)
+       WHERE spawned_from IS NOT NULL`,
+  );
   promoteGrandfatheredContainers(db);
   // Phase 7D: the single user-less device row voicemails land in when
   // no household member was specifically being called. Idempotent —

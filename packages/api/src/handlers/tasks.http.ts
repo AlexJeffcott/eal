@@ -17,6 +17,7 @@ import {
   restoreTaskCore,
   setTaskStatusCore,
   updateTaskCore,
+  type StatusChange,
   type Task,
   type TaskKind,
   type TaskStatus,
@@ -26,7 +27,14 @@ export type TaskEvent =
   | { type: 'task:created'; topic: 'tasks'; payload: Task }
   | { type: 'task:updated'; topic: 'tasks'; payload: Task }
   | { type: 'task:deleted'; topic: 'tasks'; payload: Task }
-  | { type: 'task:tree-cloned'; topic: 'tasks'; payload: { rootId: number; tasks: Task[] } };
+  | { type: 'task:tree-cloned'; topic: 'tasks'; payload: { rootId: number; tasks: Task[] } }
+  /**
+   * Rows that no longer exist — not binned, gone. The one way that happens is
+   * a reopen taking back an untouched successor (tasks.shared.ts:moveStatus):
+   * it was never anything but the shadow of a tick, and a trash full of them
+   * would be a list of mistakes.
+   */
+  | { type: 'task:removed'; topic: 'tasks'; payload: { ids: number[] } };
 
 /** The level vocabulary, as Elysia sees it on a create or update body. */
 const TASK_KIND = t.Union([t.Literal('project'), t.Literal('epic'), t.Literal('task')]);
@@ -123,6 +131,38 @@ function requirePrincipal(
   return p;
 }
 
+/**
+ * Say what a status move did, in the order a second device must hear it: the
+ * row the person touched first, then what that did to the series. A leaf
+ * successor is an ordinary `task:created`; a container's is the same event a
+ * clone sends, because it is the same thing — a new subtree, root first.
+ */
+function broadcastStatusChange(ctx: TasksRoutesContext, change: StatusChange): void {
+  ctx.broadcastTask({ type: 'task:updated', topic: 'tasks', payload: change.task });
+  const [root, ...rest] = change.spawned;
+  if (root !== undefined) {
+    if (rest.length === 0) {
+      ctx.broadcastTask({ type: 'task:created', topic: 'tasks', payload: root });
+    } else {
+      ctx.broadcastTask({
+        type: 'task:tree-cloned',
+        topic: 'tasks',
+        payload: { rootId: root.id, tasks: change.spawned },
+      });
+    }
+  }
+  if (change.removed.length > 0) {
+    ctx.broadcastTask({ type: 'task:removed', topic: 'tasks', payload: { ids: change.removed } });
+  }
+}
+
+/**
+ * The body of a status move. `today` is the calendar date on the device —
+ * `YYYY-MM-DD`, checked in tasks.shared.ts:resolveToday — and is optional, so a
+ * caller that sends no body at all (the CLI, an older page) still completes.
+ */
+const TODAY_BODY = t.Optional(t.Object({ today: t.Optional(t.String()) }));
+
 export function tasksHttpRoutes(ctx: TasksRoutesContext) {
   // Reuses the same `{ error: string }` envelope the rest of the api uses,
   // already pinned by handlers/auth.http.test.ts and depended on by
@@ -154,6 +194,7 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
             dueAt: body.due_at,
             sequential: body.sequential,
             clientId: body.client_id,
+            recurrence: body.recurrence,
           },
           principal,
         );
@@ -179,6 +220,10 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
           // A UUID the device minted; the shape is checked in createTaskOnce
           // so a bad one gets the api's own `{ error }` envelope.
           client_id: t.Optional(t.String()),
+          // Any JSON: the rule is checked in tasks.shared.ts:admitRecurrence,
+          // for the same reason — a schema rejection here is flattened to a
+          // 500, and "the server broke" is the wrong answer to a bad rule.
+          recurrence: t.Optional(t.Any()),
         }),
       },
     )
@@ -225,6 +270,7 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
             dueAt: body.due_at,
             position: body.position,
             sequential: body.sequential,
+            recurrence: body.recurrence,
           },
           principal,
         );
@@ -242,10 +288,12 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
           due_at: t.Optional(t.Union([t.String(), t.Null()])),
           position: t.Optional(t.Number()),
           sequential: t.Optional(t.Boolean()),
+          // A rule to set, or null to end the series. See POST above.
+          recurrence: t.Optional(t.Any()),
         }),
       },
     )
-    .post('/:id/complete', ({ params, request }) => {
+    .post('/:id/complete', ({ params, body, request }) => {
       requires(
         taskStatusMachine.value.status === 'todo' ||
           taskStatusMachine.value.status === 'doing' ||
@@ -253,20 +301,22 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
         'complete: must be live and unfinished',
       );
       const principal = requirePrincipal(ctx, request);
-      const task = completeTaskCore(ctx.db, Number(params.id), principal);
-      ctx.broadcastTask({ type: 'task:updated', topic: 'tasks', payload: task });
+      const change = completeTaskCore(ctx.db, Number(params.id), principal, {
+        today: body?.today,
+      });
+      broadcastStatusChange(ctx, change);
       if (POLLY_ANCHOR) taskStatusMachine.value = { status: 'done' };
       ensures(taskStatusMachine.value.status === 'done', 'complete: end in done');
-      return { task };
-    })
+      return change;
+    }, { body: TODAY_BODY })
     .post('/:id/reopen', ({ params, request }) => {
       requires(taskStatusMachine.value.status === 'done', 'reopen: must be done');
       const principal = requirePrincipal(ctx, request);
-      const task = reopenTaskCore(ctx.db, Number(params.id), principal);
-      ctx.broadcastTask({ type: 'task:updated', topic: 'tasks', payload: task });
+      const change = reopenTaskCore(ctx.db, Number(params.id), principal);
+      broadcastStatusChange(ctx, change);
       if (POLLY_ANCHOR) taskStatusMachine.value = { status: 'todo' };
       ensures(taskStatusMachine.value.status === 'todo', 'reopen: end in todo');
-      return { task };
+      return change;
     })
     /**
      * The board's lane move. Its own verb rather than a field on PATCH: the
@@ -287,8 +337,11 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
         );
         const principal = requirePrincipal(ctx, request);
         const next = requireStatus(body.status);
-        const task = setTaskStatusCore(ctx.db, Number(params.id), next, principal);
-        ctx.broadcastTask({ type: 'task:updated', topic: 'tasks', payload: task });
+        const change = setTaskStatusCore(ctx.db, Number(params.id), next, principal, {
+          today: body.today,
+        });
+        const { task } = change;
+        broadcastStatusChange(ctx, change);
         // Written as four literal assignments rather than one on `body.status`
         // so polly's static extractor records every landing state: the model
         // then explores all four and proves the ensures below on each. A single
@@ -307,9 +360,9 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
             taskStatusMachine.value.status === 'done',
           'setStatus: ends live — the workflow axis never reaches the trash',
         );
-        return { task };
+        return change;
       },
-      { body: t.Object({ status: t.String() }) },
+      { body: t.Object({ status: t.String(), today: t.Optional(t.String()) }) },
     )
     .post('/:id/clone', ({ params, request }) => {
       const principal = requirePrincipal(ctx, request);

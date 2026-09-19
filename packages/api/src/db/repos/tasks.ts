@@ -74,6 +74,20 @@ export interface TaskRow {
    * response to the first was lost — finds this row instead of making another.
    */
   client_id: string | null;
+  /**
+   * The recurrence rule as canonical JSON (`@eal/shared` serialiseRecurrence),
+   * or NULL. It sits on the one live row of a series; completing that row moves
+   * it to the successor.
+   */
+  recurrence: string | null;
+  /** The completed row this one succeeded. Lineage; never cleared. */
+  spawned_from: number | null;
+  /**
+   * The completed row whose successor tree this row belongs to, for as long as
+   * NOBODY HAS TOUCHED that tree. Any write to any row of the tree clears it on
+   * all of them — see `touchSpawnGroup`. Server bookkeeping, not on the wire.
+   */
+  spawn_group: number | null;
 }
 
 export interface InsertTaskInput {
@@ -88,6 +102,18 @@ export interface InsertTaskInput {
   position: number;
   sequential: boolean;
   clientId: string | null;
+  recurrence: string | null;
+}
+
+/** What `spawnSuccessor` needs to know that the completed row does not say. */
+export interface SpawnSuccessorInput {
+  updatedBy: number;
+  /** The successor's `due_at`, already computed. */
+  dueAt: string;
+  /** How many calendar days every other date in the tree moves by. */
+  shiftDays: number;
+  /** Move a date, or the date part of a timestamp, by whole days. */
+  shift: (value: string, days: number) => string;
 }
 
 export interface UpdateTaskInput {
@@ -100,6 +126,7 @@ export interface UpdateTaskInput {
   dueAt?: string | null;
   position?: number;
   sequential?: boolean;
+  recurrence?: string | null;
   updatedBy: number;
 }
 
@@ -169,15 +196,29 @@ export interface TasksRepo {
    * stamp once.
    */
   markReminded(id: number, at: string): boolean;
+  /**
+   * Make the next occurrence of a completed recurring row: a copy of the row
+   * and of every live descendant, all `todo`, dates moved on, with the rule on
+   * the new root and cleared from the completed one. Returns the new tree, root
+   * first. Call it inside the transaction that completed the row.
+   */
+  spawnSuccessor(completedId: number, input: SpawnSuccessorInput): TaskRow[];
+  /**
+   * Take back the successor of a completed row that is being reopened — only
+   * if nobody has touched it. Removes the tree, returns the rule to the
+   * reopened row, and reports the ids that went. An empty list means there was
+   * no untouched successor and nothing changed.
+   */
+  reclaimUntouchedSuccessor(completedId: number): number[];
 }
 
 const COLS =
-  'id, parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, created_at, updated_at, completed_at, deleted_at, position, sequential, reminded_at, client_id';
+  'id, parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, created_at, updated_at, completed_at, deleted_at, position, sequential, reminded_at, client_id, recurrence, spawned_from, spawn_group';
 
 // Same list, prefixed with the `tasks.` alias for queries that join recursive
 // CTEs (which themselves expose a column named `id`).
 const T_COLS =
-  'tasks.id, tasks.parent_id, tasks.title, tasks.notes, tasks.status, tasks.kind, tasks.defer_until, tasks.due_at, tasks.created_by, tasks.assigned_to, tasks.updated_by, tasks.created_at, tasks.updated_at, tasks.completed_at, tasks.deleted_at, tasks.position, tasks.sequential, tasks.reminded_at, tasks.client_id';
+  'tasks.id, tasks.parent_id, tasks.title, tasks.notes, tasks.status, tasks.kind, tasks.defer_until, tasks.due_at, tasks.created_by, tasks.assigned_to, tasks.updated_by, tasks.created_at, tasks.updated_at, tasks.completed_at, tasks.deleted_at, tasks.position, tasks.sequential, tasks.reminded_at, tasks.client_id, tasks.recurrence, tasks.spawned_from, tasks.spawn_group';
 
 export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock): TasksRepo {
   const insertStmt = db.prepare<
@@ -195,14 +236,64 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
       number,
       number,
       string | null,
+      string | null,
+      number | null,
+      number | null,
       string,
       string,
     ]
   >(
     `INSERT INTO tasks
-       (parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, position, sequential, client_id, created_at, updated_at)
-       VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, position, sequential, client_id, recurrence, spawned_from, spawn_group, created_at, updated_at)
+       VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING ${COLS}`,
+  );
+
+  // The accidental tick — see the `spawn_group` column in db/schema.ts. One
+  // statement, keyed on the touched row: it reads that row's group and clears
+  // it on every row that shares it. A row in no group has NULL there, and
+  // `spawn_group = NULL` matches nothing, so this is a no-op for nearly every
+  // write the table ever sees.
+  const touchSpawnGroupStmt = db.prepare<unknown, [number]>(
+    `UPDATE tasks
+        SET spawn_group = NULL
+      WHERE spawn_group = (SELECT spawn_group FROM tasks WHERE id = ?)`,
+  );
+  /**
+   * Every write a person makes goes through here first, with the id of each
+   * row the write lands on or under: the row itself, and the parent a row is
+   * created in or moved into. `markReminded` does not — the reminder scan is
+   * not a person, and a deadline ringing must not turn an untouched successor
+   * into a touched one.
+   */
+  function touchSpawnGroup(id: number | null): void {
+    if (id !== null) touchSpawnGroupStmt.run(id);
+  }
+
+  // Binning the FINISHED row settles the question the group exists to keep
+  // open. The successor can only be taken back by reopening that row, and a
+  // binned row cannot be reopened — it can only be restored, which lands it in
+  // `todo` by a different road. So its successor stops being provisional here,
+  // rather than vanishing at some later untick nobody would connect to it.
+  const releaseSpawnGroupStmt = db.prepare<unknown, [number]>(
+    `UPDATE tasks SET spawn_group = NULL WHERE spawn_group = ?`,
+  );
+  const setRecurrenceStmt = db.prepare<TaskRow, [string | null, number]>(
+    `UPDATE tasks SET recurrence = ? WHERE id = ? RETURNING ${COLS}`,
+  );
+  const spawnGroupRootStmt = db.prepare<TaskRow, [number, number]>(
+    `SELECT ${COLS} FROM tasks WHERE spawn_group = ? AND spawned_from = ?`,
+  );
+  const spawnGroupIdsStmt = db.prepare<{ id: number }, [number]>(
+    `SELECT id FROM tasks WHERE spawn_group = ? ORDER BY id ASC`,
+  );
+  const deleteSpawnGroupStmt = db.prepare<unknown, [number]>(
+    `DELETE FROM tasks WHERE spawn_group = ?`,
+  );
+  // Has this row already been succeeded? Reads through the trash: a series
+  // that was ended by binning its live row is still ended.
+  const hasSuccessorStmt = db.prepare<{ id: number }, [number]>(
+    `SELECT id FROM tasks WHERE spawned_from = ? LIMIT 1`,
   );
 
   // Trash included: a capture that was binned before its retry arrived is
@@ -294,6 +385,26 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
       SELECT anc_id FROM ancestors WHERE anc_id = ?`,
   );
 
+  function descendantsOf(id: number, includeDeleted: boolean): TaskRow[] {
+    const cond = includeDeleted ? '' : 'AND t.deleted_at IS NULL';
+    const sql = `
+      WITH RECURSIVE sub(sub_id, depth) AS (
+        SELECT id, 0 FROM tasks WHERE id = ?
+        UNION ALL
+        SELECT t.id, sub.depth + 1
+          FROM tasks t
+          JOIN sub ON t.parent_id = sub.sub_id
+         WHERE 1=1 ${cond}
+         LIMIT 10000
+      )
+      SELECT ${T_COLS}
+        FROM tasks
+        JOIN sub ON sub.sub_id = tasks.id
+       WHERE sub.depth > 0
+       ORDER BY sub.depth ASC, tasks.position ASC, tasks.id ASC`;
+    return db.prepare<TaskRow, [number]>(sql).all(id);
+  }
+
   return {
     insert(input): TaskRow {
       const ts = clock();
@@ -310,10 +421,15 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
         input.position,
         input.sequential ? 1 : 0,
         input.clientId,
+        input.recurrence,
+        null, // spawned_from: only `spawnSuccessor` makes a successor
+        null, // spawn_group
         ts, // created_at
         ts, // updated_at
       );
       if (!row) throw new Error('tasks.insert: RETURNING gave no row');
+      // Filing something new inside an untouched successor is a touch.
+      touchSpawnGroup(input.parentId);
       return row;
     },
 
@@ -430,23 +546,7 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
     },
 
     descendants(id, opts): TaskRow[] {
-      const cond = opts?.includeDeleted ? '' : 'AND t.deleted_at IS NULL';
-      const sql = `
-        WITH RECURSIVE sub(sub_id, depth) AS (
-          SELECT id, 0 FROM tasks WHERE id = ?
-          UNION ALL
-          SELECT t.id, sub.depth + 1
-            FROM tasks t
-            JOIN sub ON t.parent_id = sub.sub_id
-           WHERE 1=1 ${cond}
-           LIMIT 10000
-        )
-        SELECT ${T_COLS}
-          FROM tasks
-          JOIN sub ON sub.sub_id = tasks.id
-         WHERE sub.depth > 0
-         ORDER BY sub.depth ASC, tasks.position ASC, tasks.id ASC`;
-      return db.prepare<TaskRow, [number]>(sql).all(id);
+      return descendantsOf(id, opts?.includeDeleted === true);
     },
 
     wouldCycle(id, candidateAncestor): boolean {
@@ -502,17 +602,25 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
         sets.push('sequential = ?');
         params.push(input.sequential ? 1 : 0);
       }
+      if (input.recurrence !== undefined) {
+        sets.push('recurrence = ?');
+        params.push(input.recurrence);
+      }
       sets.push('updated_at = ?');
       params.push(clock());
       sets.push('updated_by = ?');
       params.push(input.updatedBy);
       params.push(id);
 
+      touchSpawnGroup(id);
+      // Moving a row INTO an untouched successor touches that one too.
+      if (input.parentId !== undefined) touchSpawnGroup(input.parentId);
       const sql = `UPDATE tasks SET ${sets.join(', ')} WHERE id = ? AND deleted_at IS NULL RETURNING ${COLS}`;
       return db.prepare<TaskRow, typeof params>(sql).get(...params) ?? null;
     },
 
     setStatus(id, input): TaskRow | null {
+      touchSpawnGroup(id);
       const ts = clock();
       if (input.status === 'done') {
         return setStatusDoneStmt.get(ts, input.updatedBy, ts, id) ?? null;
@@ -521,11 +629,14 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
     },
 
     softDelete(id, input): TaskRow | null {
+      touchSpawnGroup(id);
+      releaseSpawnGroupStmt.run(id);
       const ts = clock();
       return softDeleteStmt.get(ts, input.updatedBy, ts, id) ?? null;
     },
 
     restore(id, input): TaskRow | null {
+      touchSpawnGroup(id);
       const ts = clock();
       return restoreStmt.get(input.updatedBy, ts, id) ?? null;
     },
@@ -558,10 +669,22 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
           root.position,
           root.sequential,
           null, // client_id: a clone is a new row, never the capture it copies
+          // A copy of a recurring task recurs: the person asked for a second
+          // one of these, and a second series is what that is. It is a new
+          // series, so it succeeds nothing.
+          root.recurrence,
+          null,
+          null,
           ts,
           ts,
         );
         if (!newRoot) throw new Error('tasks.cloneSubtree: root insert returned no row');
+        // The copy lands beside its source; if that is inside an untouched
+        // successor, the successor now holds something nobody spawned. And
+        // copying a successor is using it: a reopen must not then remove the
+        // row the person has just made a copy of.
+        touchSpawnGroup(root.parent_id);
+        touchSpawnGroup(root.id);
         oldToNew.set(root.id, newRoot.id);
         cloned.push(newRoot);
 
@@ -606,6 +729,9 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
             child.position,
             child.sequential,
             null, // client_id — see the root above
+            child.recurrence,
+            null,
+            null,
             ts,
             ts,
           );
@@ -618,6 +744,97 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
       });
 
       return clone();
+    },
+
+    spawnSuccessor(completedId, input): TaskRow[] {
+      const source = findByIdStmt.get(completedId);
+      if (!source) return [];
+      const ts = clock();
+      const oldToNew = new Map<number, number>();
+      const spawned: TaskRow[] = [];
+      const shifted = (value: string | null): string | null =>
+        value === null ? null : input.shift(value, input.shiftDays);
+
+      // These inserts go straight to the statement, never through `insert()`:
+      // that would read each new child as "something filed inside an untouched
+      // successor" and clear the group it is in the middle of building.
+      const root = insertStmt.get(
+        source.parent_id,
+        source.title,
+        source.notes,
+        source.kind,
+        shifted(source.defer_until),
+        input.dueAt,
+        // The successor is the same task continuing, so it keeps its author.
+        // Who ticked the last one is `updated_by`.
+        source.created_by,
+        source.assigned_to,
+        input.updatedBy,
+        source.position,
+        source.sequential,
+        null, // client_id: no device captured this row
+        source.recurrence,
+        source.id, // spawned_from
+        source.id, // spawn_group
+        ts,
+        ts,
+      );
+      if (!root) throw new Error('tasks.spawnSuccessor: root insert returned no row');
+      oldToNew.set(source.id, root.id);
+      spawned.push(root);
+
+      for (const child of descendantsOf(source.id, false)) {
+        const newParent = child.parent_id === null ? undefined : oldToNew.get(child.parent_id);
+        // Its parent was not copied — binned, or skipped just below — so
+        // neither is it.
+        if (newParent === undefined) continue;
+        // A done child that already has a successor is a finished occurrence of
+        // a series living inside this container. Its successor is the live one
+        // and is copied in its own right; copying this too would put the same
+        // chore in the next occurrence twice.
+        if (child.status === 'done' && hasSuccessorStmt.get(child.id) !== null) continue;
+        const copy = insertStmt.get(
+          newParent,
+          child.title,
+          child.notes,
+          child.kind,
+          shifted(child.defer_until),
+          shifted(child.due_at),
+          child.created_by,
+          child.assigned_to,
+          input.updatedBy,
+          child.position,
+          child.sequential,
+          null,
+          child.recurrence,
+          null, // spawned_from: a copied child succeeds nothing
+          source.id, // spawn_group: but it is part of the tree that can be taken back
+          ts,
+          ts,
+        );
+        if (!copy) throw new Error('tasks.spawnSuccessor: child insert returned no row');
+        oldToNew.set(child.id, copy.id);
+        spawned.push(copy);
+      }
+
+      // The series has moved on: one live row carries the rule, and it is the
+      // new one.
+      setRecurrenceStmt.get(null, source.id);
+      return spawned;
+    },
+
+    reclaimUntouchedSuccessor(completedId): number[] {
+      const root = spawnGroupRootStmt.get(completedId, completedId);
+      if (!root) return [];
+      const ids = spawnGroupIdsStmt.all(completedId).map((r) => r.id);
+      deleteSpawnGroupStmt.run(completedId);
+      // A rule set on the completed row since it was ticked is the newer
+      // answer, and it wins; otherwise the series comes back where it was.
+      const reopened = findByIdStmt.get(completedId);
+      if (reopened && reopened.recurrence === null) {
+        setRecurrenceStmt.get(root.recurrence, completedId);
+      }
+      return ids;
     },
   };
 }

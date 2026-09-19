@@ -48,6 +48,36 @@
  * the storage on every write, and a shadow model of a single abstract field
  * cannot say anything the constraint does not already guarantee.
  *
+ * Not modelled here, and not for want of trying: RECURRENCE
+ * (docs/plans/05-recurring-tasks.md). The property worth proving is "at most
+ * one live row of a series carries its rule, whatever order ticks, unticks and
+ * edits arrive in". This machine cannot state it, for three reasons:
+ *
+ *   1. It is a property of a SERIES — the finished row, its successor, the
+ *      successor's successor — and this machine is one enum for one task.
+ *      polly's generator has no sets, no sequences and no second entity (the
+ *      same wall `TasksConvergence.tla` was hand-written to get round).
+ *   2. Whether an untick takes the successor back depends on whether anyone
+ *      has written to a DIFFERENT row since, through a different route. From
+ *      inside one task's machine a PATCH to the successor and a PATCH to this
+ *      row are the same transition.
+ *   3. Whether `complete` spawns anything depends on a column's value. The
+ *      extractor reads literal assignments; a branch on data extracts as both
+ *      branches or neither. A `successor: none | untouched | touched` field
+ *      could be added and anchored, but every transition on it would be one I
+ *      typed to mirror the code, and TLC would prove my typing.
+ *
+ * What stands in its place is handlers/tasks.recurrence.property.test.ts:
+ * fast-check drives arbitrary complete / reopen / lane-move / edit / bin /
+ * restore sequences, from two people, against the real cores and a real SQLite
+ * file, and checks four laws after every step. It is a search, not a proof. It
+ * is falsified: three broken repos each fail it.
+ *
+ * What DOES hold here unchanged: the status axis. A recurring completion is
+ * still `live → done`, the untick is still `done → todo`, and the successor is
+ * a new task that starts its own life in `todo`. The routes kept their
+ * `requires` / `ensures`, and `bun devctl verify` passes over them.
+ *
  * ╔════════════════════════ ANCHORING ════════════════════════════════╗
  * ║ The HTTP route handlers in handlers/tasks.http.ts carry inline    ║
  * ║ `requires` / `ensures` and guarded                                ║

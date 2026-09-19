@@ -69,8 +69,11 @@ describe('applySchema', () => {
       'notes',
       'parent_id',
       'position',
+      'recurrence',
       'reminded_at',
       'sequential',
+      'spawn_group',
+      'spawned_from',
       'status',
       'title',
       'updated_at',
@@ -340,8 +343,9 @@ describe('applySchema', () => {
     expect(userCols).toEqual(['created_at', 'display_name', 'id', 'in_ivr_menu']);
 
     const taskCols = columns(db, 'tasks').map((c) => c.name);
-    // Same set after the second apply. 19 since stage 5 added `client_id`.
-    expect(taskCols.length).toBe(19);
+    // Same set after the second apply. 22 since stage 6 added `recurrence`,
+    // `spawned_from` and `spawn_group`.
+    expect(taskCols.length).toBe(22);
   });
 
   test('schema preserves rows across repeat applySchema calls', () => {
@@ -622,6 +626,30 @@ describe('applySchema', () => {
     expect(() => db.exec("UPDATE tasks SET client_id = 'c-1' WHERE id = 2")).toThrow(/UNIQUE/);
   });
 
+  test('the recurrence columns survive an upgrade from the pre-stage-2 shape and start NULL', () => {
+    // The same trap again: three ensureColumns that must stay below
+    // `rebuildTasksStatusIfLegacy`, or the rebuild's hand-written column list
+    // drops them on exactly this database.
+    seedPreStatusTasks(db);
+    db.exec(`
+      INSERT INTO tasks (id, parent_id, title, status, kind, position, created_by, updated_by)
+      VALUES (1, NULL, 'Bins out', 'open', 'task', 0, 1, 1);
+    `);
+
+    applySchema(db);
+
+    interface RecurrenceRow {
+      recurrence: string | null;
+      spawned_from: number | null;
+      spawn_group: number | null;
+    }
+    expect(
+      db
+        .prepare<RecurrenceRow, []>('SELECT recurrence, spawned_from, spawn_group FROM tasks')
+        .all(),
+    ).toEqual([{ recurrence: null, spawned_from: null, spawn_group: null }]);
+  });
+
   test('reminded_at set by hand survives a repeat apply', () => {
     applySchema(db);
     db.prepare("INSERT INTO users (display_name) VALUES ('alex')").run();
@@ -703,6 +731,8 @@ describe('applySchema', () => {
       'idx_tasks_due_reminder',
       'idx_tasks_kind',
       'idx_tasks_parent_position',
+      'idx_tasks_spawn_group',
+      'idx_tasks_spawned_from',
       'idx_tasks_status',
     ]);
   });
@@ -781,6 +811,8 @@ describe('applySchema', () => {
       'idx_tasks_due_reminder',
       'idx_tasks_kind',
       'idx_tasks_parent_position',
+      'idx_tasks_spawn_group',
+      'idx_tasks_spawned_from',
       'idx_tasks_status',
     ]);
   });

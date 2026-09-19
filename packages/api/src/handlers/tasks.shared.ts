@@ -3,6 +3,18 @@ import type { Principal } from '../auth/principals.ts';
 import type { TaskRow, TasksRepo, ListFilter, TaskKind, TaskStatus } from '../db/repos/tasks.ts';
 import { createTasksRepo } from '../db/repos/tasks.ts';
 import { createUsersRepo } from '../db/repos/users.ts';
+import {
+  dayNumber,
+  deserialiseRecurrence,
+  nextOccurrence,
+  parseRecurrence,
+  type Recurrence,
+  RecurrenceError,
+  serialiseRecurrence,
+  shiftDate,
+  utcDateOf,
+  validateToday,
+} from '@eal/shared';
 import { AuthError } from './auth.shared.ts';
 
 export type { TaskKind, TaskStatus };
@@ -47,6 +59,13 @@ export interface Task {
    * where the create landed and its response did not.
    */
   clientId: string | null;
+  /**
+   * The rule this task repeats by, or null. It sits on the one live row of a
+   * series: completing that row makes the next occurrence and moves the rule
+   * onto it, so a finished occurrence reads as an ordinary done task.
+   * `@eal/shared` recurrence.ts is the rule's whole definition.
+   */
+  recurrence: Recurrence | null;
 }
 
 export function toTask(row: TaskRow): Task {
@@ -71,6 +90,9 @@ export function toTask(row: TaskRow): Task {
     // place it becomes the boolean the wire and the SPA carry.
     sequential: row.sequential === 1,
     clientId: row.client_id,
+    // Stored as the canonical JSON the boundary wrote. A row that does not
+    // parse was not written by this code, and that is a 500, not a null.
+    recurrence: row.recurrence === null ? null : deserialiseRecurrence(row.recurrence),
   };
 }
 
@@ -85,6 +107,11 @@ export interface CreateTaskInput {
   sequential?: boolean | undefined;
   /** See `Task.clientId`. A UUID; anything else is refused. */
   clientId?: string | undefined;
+  /**
+   * `unknown`, because this is the boundary: it arrives as JSON from a browser
+   * or from the assistant, and `parseRecurrence` is what makes it a rule.
+   */
+  recurrence?: unknown;
 }
 
 export interface UpdateTaskInput {
@@ -97,6 +124,28 @@ export interface UpdateTaskInput {
   dueAt?: string | null | undefined;
   position?: number | undefined;
   sequential?: boolean | undefined;
+  /** A rule to set, `null` to end the series, `undefined` to leave it alone. */
+  recurrence?: unknown;
+}
+
+/**
+ * What a move along the status axis did. `task` is the row that was asked
+ * about. `spawned` is the next occurrence a completion made — root first, and
+ * more than one row when the task was a container — and `removed` is the ids
+ * of an untouched successor a reopen took back. Both are empty for a task that
+ * does not recur, which is nearly all of them.
+ */
+export interface StatusChange {
+  task: Task;
+  spawned: Task[];
+  removed: number[];
+}
+
+/** What a completion may be told, and what a test may pin. */
+export interface StatusChangeOptions {
+  /** The calendar date where the person is standing. See `validateToday`. */
+  today?: string | undefined;
+  now?: Date | undefined;
 }
 
 export interface ListTasksInput {
@@ -213,6 +262,36 @@ function defaultTodayCutoff(now: Date): string {
   return eod.toISOString();
 }
 
+/**
+ * Admit a rule at the boundary and return its stored form. `null` and
+ * `undefined` pass through: "end the series" and "say nothing" are both legal.
+ */
+function admitRecurrence(value: unknown): string | null | undefined {
+  if (value === undefined || value === null) return value;
+  try {
+    return serialiseRecurrence(parseRecurrence(value));
+  } catch (err) {
+    if (err instanceof RecurrenceError) throw new AuthError(400, err.message);
+    throw err;
+  }
+}
+
+/**
+ * What day is it, for the purposes of "the first occurrence strictly after
+ * today"? The device's answer when it gave one, checked; UTC's otherwise — the
+ * CLI and the assistant run on the household's own machine and send none.
+ */
+function resolveToday(opts: StatusChangeOptions): string {
+  const serverDate = utcDateOf(opts.now ?? new Date());
+  if (opts.today === undefined) return serverDate;
+  try {
+    return validateToday(opts.today, serverDate);
+  } catch (err) {
+    if (err instanceof RecurrenceError) throw new AuthError(400, err.message);
+    throw err;
+  }
+}
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function validateClientId(raw: string | undefined): string | null {
@@ -304,6 +383,7 @@ function insertTask(
     // migration makes.
     sequential: input.sequential ?? false,
     clientId,
+    recurrence: admitRecurrence(input.recurrence) ?? null,
   });
   return toTask(row);
 }
@@ -396,6 +476,8 @@ export function updateTaskCore(
   if (input.position !== undefined) patch.position = input.position;
   if (input.sequential !== undefined) patch.sequential = input.sequential;
   // Stryker restore all
+  const recurrence = admitRecurrence(input.recurrence);
+  if (recurrence !== undefined) patch.recurrence = recurrence;
 
   if (input.assignedTo !== undefined) {
     if (input.assignedTo !== null) requireUserExists(users, input.assignedTo, 'assigned_to');
@@ -448,6 +530,107 @@ export function updateTaskCore(
 }
 
 /**
+ * The recurring half of a completion: make the next occurrence.
+ *
+ * Runs inside the transaction that marked `completed` done. The successor's
+ * due date is the first occurrence STRICTLY AFTER `today` — a weekly task
+ * finished three weeks late comes back once, next week, never as three rows to
+ * tick through. Where the count starts is the rule's `basis`:
+ *
+ *   due        the previous `due_at` — or `today`, when the task never had one,
+ *              because "every Tuesday" on an undated task still has to start
+ *              somewhere and the day it was done is the only date there is.
+ *   completed  `today`, carrying whatever time the previous `due_at` had.
+ *
+ * Every other date in the tree — the root's `defer_until`, and a container's
+ * children — moves by the same number of calendar days as the root's due date,
+ * so a project whose steps were spread over its week keeps that spread.
+ */
+function spawnNextOccurrence(
+  tasks: TasksRepo,
+  completed: TaskRow,
+  rule: Recurrence,
+  today: string,
+  principal: Principal,
+): Task[] {
+  const previousDue = completed.due_at;
+  const timeOfDay = previousDue === null ? '' : previousDue.slice(10);
+  const anchor = rule.basis === 'due' && previousDue !== null ? previousDue : today + timeOfDay;
+  const dueAt = nextOccurrence(rule, anchor, today);
+  const movedFrom = previousDue === null ? today : previousDue.slice(0, 10);
+  const shiftDays = dayNumber(dueAt.slice(0, 10)) - dayNumber(movedFrom);
+  return tasks
+    .spawnSuccessor(completed.id, { updatedBy: principal.userId, dueAt, shiftDays, shift: shiftDate })
+    .map(toTask);
+}
+
+/**
+ * The one place a task's status moves, whichever route asked: the tick box,
+ * the untick, and the board's lane move all land here, because recurrence
+ * hangs off two edges of the status axis and every one of those routes can
+ * cross them.
+ *
+ *   into `done`    a recurring row spawns its next occurrence and hands it the
+ *                  rule — `spawnNextOccurrence`.
+ *   out of `done`  THE ACCIDENTAL TICK. If the occurrence that completion
+ *                  spawned is still untouched, it is removed and the rule
+ *                  comes back to this row: the tick is undone, whole. If
+ *                  anyone has touched the successor since — edited it, moved
+ *                  it, started it, binned it, filed something in it — it
+ *                  stays, it keeps the rule, and this row comes back as an
+ *                  ordinary task. "Untouched" is the `spawn_group` column
+ *                  (db/schema.ts), not a comparison of timestamps.
+ *
+ * Either way at most one live row of a series carries its rule, so no order of
+ * ticks and unticks can make the bins come round twice:
+ * tasks.recurrence.property.test.ts.
+ *
+ * A container completes the way it always has — its own row only, children
+ * left as they are — and its successor copies the live subtree with every row
+ * back at `todo`.
+ */
+function moveStatus(
+  db: DatabaseClient,
+  id: number,
+  target: TaskStatus,
+  principal: Principal,
+  opts: StatusChangeOptions,
+): StatusChange {
+  const tasks = createTasksRepo(db);
+  const existing = tasks.findById(id);
+  if (existing === null) throw new AuthError(404, `task ${id} not found or in trash`);
+  // Already there is a no-op returning the row — two devices ticking the same
+  // box, or dropping the same card in the same lane, must both succeed, and
+  // the second must not spawn a second successor.
+  if (existing.status === target) return { task: toTask(existing), spawned: [], removed: [] };
+
+  const rule =
+    target === 'done' && existing.recurrence !== null
+      ? deserialiseRecurrence(existing.recurrence)
+      : null;
+  // Resolved before the write, so a bad `today` refuses the whole request.
+  const today = rule === null ? null : resolveToday(opts);
+
+  return db.transaction((): StatusChange => {
+    const moved = tasks.setStatus(id, { status: target, updatedBy: principal.userId });
+    // Stryker disable next-line all -- defensive: existence was verified above; this branch is unreachable in practice
+    if (moved === null) throw new AuthError(404, `task ${id} not found or in trash`);
+
+    const spawned =
+      rule !== null && today !== null
+        ? spawnNextOccurrence(tasks, moved, rule, today, principal)
+        : [];
+    const removed = existing.status === 'done' ? tasks.reclaimUntouchedSuccessor(id) : [];
+
+    // Both of those may have rewritten this row's rule after `setStatus` read it.
+    const settled = spawned.length > 0 || removed.length > 0 ? tasks.findById(id) : moved;
+    // Stryker disable next-line all -- defensive: the row was written a statement ago, inside this transaction
+    if (settled === null) throw new AuthError(404, `task ${id} not found or in trash`);
+    return { task: toTask(settled), spawned, removed };
+  })();
+}
+
+/**
  * Ticking the box. With four states, "complete" means the same thing from all
  * three live ones: a task you had merely written down, one you had started, and
  * one you were stuck on are all finished the same way, so there is no reason to
@@ -460,15 +643,9 @@ export function completeTaskCore(
   db: DatabaseClient,
   id: number,
   principal: Principal,
-): Task {
-  const tasks = createTasksRepo(db);
-  const existing = tasks.findById(id);
-  if (existing === null) throw new AuthError(404, `task ${id} not found or in trash`);
-  if (existing.status === 'done') return toTask(existing);
-  const done = tasks.setStatus(id, { status: 'done', updatedBy: principal.userId });
-  // Stryker disable next-line all -- defensive: existence was verified above; this branch is unreachable in practice
-  if (done === null) throw new AuthError(404, `task ${id} not found or in trash`);
-  return toTask(done);
+  opts: StatusChangeOptions = {},
+): StatusChange {
+  return moveStatus(db, id, 'done', principal, opts);
 }
 
 /**
@@ -485,15 +662,12 @@ export function reopenTaskCore(
   db: DatabaseClient,
   id: number,
   principal: Principal,
-): Task {
+): StatusChange {
   const tasks = createTasksRepo(db);
   const existing = tasks.findById(id);
   if (existing === null) throw new AuthError(404, `task ${id} not found or in trash`);
-  if (existing.status !== 'done') return toTask(existing);
-  const reopened = tasks.setStatus(id, { status: 'todo', updatedBy: principal.userId });
-  // Stryker disable next-line all -- defensive: existence was verified above; this branch is unreachable in practice
-  if (reopened === null) throw new AuthError(404, `task ${id} not found or in trash`);
-  return toTask(reopened);
+  if (existing.status !== 'done') return { task: toTask(existing), spawned: [], removed: [] };
+  return moveStatus(db, id, 'todo', principal, {});
 }
 
 /**
@@ -503,21 +677,19 @@ export function reopenTaskCore(
  *
  * A task already in the target lane is a no-op returning the row. Two devices
  * dropping the same card into `doing` must both succeed.
+ *
+ * Dropping a card into Done is a completion and dragging one out is a reopen,
+ * recurrence included — the board must not be a way to finish the bins without
+ * them coming round again.
  */
 export function setTaskStatusCore(
   db: DatabaseClient,
   id: number,
   status: TaskStatus,
   principal: Principal,
-): Task {
-  const tasks = createTasksRepo(db);
-  const existing = tasks.findById(id);
-  if (existing === null) throw new AuthError(404, `task ${id} not found or in trash`);
-  if (existing.status === status) return toTask(existing);
-  const moved = tasks.setStatus(id, { status, updatedBy: principal.userId });
-  // Stryker disable next-line all -- defensive: existence was verified above; this branch is unreachable in practice
-  if (moved === null) throw new AuthError(404, `task ${id} not found or in trash`);
-  return toTask(moved);
+  opts: StatusChangeOptions = {},
+): StatusChange {
+  return moveStatus(db, id, status, principal, opts);
 }
 
 export function deleteTaskCore(
