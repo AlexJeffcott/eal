@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import type { Message } from '@eal/client';
+import { log } from '../lib/process.ts';
 import { EAL_TOOLS } from './mcp.ts';
 
 /**
@@ -173,6 +174,34 @@ export function parseStreamJsonLine(line: string): ParsedStreamLine | null {
 }
 
 /**
+ * The variables that make the `claude` CLI authenticate with a key instead of
+ * this machine's own login. The agent is defined to reuse that login — no
+ * separate API key — so an inherited key changes which account answers a
+ * household turn, and a stale one spends the whole 150s budget on 401 retries
+ * before the turn fails. They are removed from the child environment, and the
+ * removal is announced rather than done quietly.
+ */
+export const KEY_AUTH_VARS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] as const;
+
+/** The child environment: this process's, minus the key-auth variables. */
+export function claudeChildEnv(parent: Record<string, string | undefined>): {
+  env: Record<string, string | undefined>;
+  removed: string[];
+} {
+  const env = { ...parent };
+  const removed: string[] = [];
+  for (const name of KEY_AUTH_VARS) {
+    if (env[name] === undefined) continue;
+    delete env[name];
+    removed.push(name);
+  }
+  return { env, removed };
+}
+
+/** The announcement belongs to the process, not to every turn. */
+let announcedKeyAuthStrip = false;
+
+/**
  * Spawn one `claude` invocation, stream its text out through `emit`, and
  * resolve with the full reply text (empty string if it produced none — which
  * the runner reads as a lost session on a resume attempt).
@@ -184,7 +213,12 @@ function spawnClaude(
   emit: (delta: string) => void,
 ): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    const child = spawn('claude', args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    const { env, removed } = claudeChildEnv(process.env);
+    if (removed.length > 0 && !announcedKeyAuthStrip) {
+      announcedKeyAuthStrip = true;
+      log(`eal agent: ignoring ${removed.join(' and ')} — a turn runs on this machine's claude login.`);
+    }
+    const child = spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
 
     let stdoutBuffer = '';
     let stderr = '';

@@ -3,6 +3,7 @@ import type { Message } from '@eal/client';
 import {
   buildClaudeArgs,
   buildPrompt,
+  claudeChildEnv,
   latestUserMessage,
   parseStreamJsonLine,
 } from './claude-runner.ts';
@@ -106,5 +107,31 @@ describe('parseStreamJsonLine', () => {
     expect(parseStreamJsonLine(JSON.stringify({ type: 'system', subtype: 'init' }))).toBeNull();
     expect(parseStreamJsonLine('')).toBeNull();
     expect(parseStreamJsonLine('{not json')).toBeNull();
+  });
+});
+
+describe('claudeChildEnv', () => {
+  test('removes the key-auth variables and names each one it removed', () => {
+    const { env, removed } = claudeChildEnv({
+      PATH: '/usr/bin',
+      ANTHROPIC_API_KEY: 'from-the-shell',
+      ANTHROPIC_AUTH_TOKEN: 'also-from-the-shell',
+    });
+    expect(env['ANTHROPIC_API_KEY']).toBeUndefined();
+    expect(env['ANTHROPIC_AUTH_TOKEN']).toBeUndefined();
+    expect(env['PATH']).toBe('/usr/bin');
+    expect(removed).toEqual(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
+  });
+
+  test('leaves an environment that carries neither of them alone', () => {
+    const { env, removed } = claudeChildEnv({ PATH: '/usr/bin' });
+    expect(removed).toEqual([]);
+    expect(env).toEqual({ PATH: '/usr/bin' });
+  });
+
+  test('does not mutate the environment it was given', () => {
+    const parent = { ANTHROPIC_API_KEY: 'from-the-shell' };
+    claudeChildEnv(parent);
+    expect(parent['ANTHROPIC_API_KEY']).toBe('from-the-shell');
   });
 });
