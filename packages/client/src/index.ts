@@ -1,4 +1,4 @@
-export { createEalClient, extractServerError } from './eal-client.ts';
+export { createEalClient, extractServerError, ServerRefusedError } from './eal-client.ts';
 export type { EalClient, EalClientOptions, WsConnectionState } from './eal-client.ts';
 export type {
   CliPairClaimInput,

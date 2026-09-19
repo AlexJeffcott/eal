@@ -8,6 +8,7 @@ import {
   completeTaskCore,
   cloneTaskCore,
   createTaskCore,
+  createTaskOnce,
   deleteTaskCore,
   getTaskCore,
   listTasksCore,
@@ -147,6 +148,123 @@ describe('createTaskCore', () => {
     const c2 = createTaskCore(ctx.db, { title: 'c2', parentId: p.id }, ctx.alex);
     expect(c1.position).toBe(0);
     expect(c2.position).toBe(1);
+  });
+});
+
+describe('createTaskOnce — a create sent twice makes one task', () => {
+  const CLIENT_ID = '6f1c2a90-5b3e-4d7a-9c21-0e8f4a7b1d35';
+
+  function countRows(ctx: Ctx): number {
+    const row = ctx.db.prepare<{ n: number }, []>('SELECT COUNT(*) AS n FROM tasks').get();
+    return row?.n ?? -1;
+  }
+
+  test('the first send creates and says so', () => {
+    const ctx = setup();
+    const first = createTaskOnce(ctx.db, { title: 'buy milk', clientId: CLIENT_ID }, ctx.alex);
+    expect(first.created).toBe(true);
+    expect(first.task.clientId).toBe(CLIENT_ID);
+    expect(countRows(ctx)).toBe(1);
+  });
+
+  test('the replay returns the first row, byte for byte, and creates nothing', () => {
+    const ctx = setup();
+    const first = createTaskOnce(ctx.db, { title: 'buy milk', clientId: CLIENT_ID }, ctx.alex);
+    const replay = createTaskOnce(ctx.db, { title: 'buy milk', clientId: CLIENT_ID }, ctx.alex);
+    expect(replay.created).toBe(false);
+    expect(JSON.stringify(replay.task)).toBe(JSON.stringify(first.task));
+    expect(countRows(ctx)).toBe(1);
+  });
+
+  test('the replay answers with the row as it is now, not as it was captured', () => {
+    const ctx = setup();
+    const first = createTaskOnce(ctx.db, { title: 'buy milk', clientId: CLIENT_ID }, ctx.alex);
+    updateTaskCore(ctx.db, first.task.id, { title: 'buy oat milk' }, ctx.alex);
+    const replay = createTaskOnce(ctx.db, { title: 'buy milk', clientId: CLIENT_ID }, ctx.alex);
+    expect(replay.task.title).toBe('buy oat milk');
+  });
+
+  test('a capture binned before its replay arrives is found in the trash, not made again', () => {
+    const ctx = setup();
+    const first = createTaskOnce(ctx.db, { title: 'buy milk', clientId: CLIENT_ID }, ctx.alex);
+    deleteTaskCore(ctx.db, first.task.id, ctx.alex);
+    const replay = createTaskOnce(ctx.db, { title: 'buy milk', clientId: CLIENT_ID }, ctx.alex);
+    expect(replay.created).toBe(false);
+    expect(replay.task.id).toBe(first.task.id);
+    expect(replay.task.deletedAt).not.toBeNull();
+    expect(countRows(ctx)).toBe(1);
+  });
+
+  test('a parent binned between the two sends does not turn the replay into a 404', () => {
+    const ctx = setup();
+    const project = createTaskCore(ctx.db, { title: 'kitchen', kind: 'project' }, ctx.alex);
+    const input = { title: 'order tiles', parentId: project.id, clientId: CLIENT_ID };
+    const first = createTaskOnce(ctx.db, input, ctx.alex);
+    deleteTaskCore(ctx.db, project.id, ctx.alex);
+    const replay = createTaskOnce(ctx.db, input, ctx.alex);
+    expect(replay.created).toBe(false);
+    expect(replay.task.id).toBe(first.task.id);
+  });
+
+  test('the id is unique per creator: another member may hold the same one', () => {
+    const ctx = setup();
+    const mine = createTaskOnce(ctx.db, { title: 'mine', clientId: CLIENT_ID }, ctx.alex);
+    const theirs = createTaskOnce(ctx.db, { title: 'theirs', clientId: CLIENT_ID }, ctx.elisa);
+    expect(theirs.created).toBe(true);
+    expect(theirs.task.id).not.toBe(mine.task.id);
+    expect(countRows(ctx)).toBe(2);
+  });
+
+  test('the storage refuses a second row even if the lookup were skipped', () => {
+    const ctx = setup();
+    createTaskOnce(ctx.db, { title: 'buy milk', clientId: CLIENT_ID }, ctx.alex);
+    expect(() =>
+      ctx.db.exec(
+        `INSERT INTO tasks (title, status, created_by, updated_by, client_id)
+           VALUES ('twin', 'todo', ${ctx.alex.userId}, ${ctx.alex.userId}, '${CLIENT_ID}')`,
+      ),
+    ).toThrow(/UNIQUE/);
+  });
+
+  test('an upper-case id is the same id', () => {
+    const ctx = setup();
+    const first = createTaskOnce(ctx.db, { title: 'a', clientId: CLIENT_ID }, ctx.alex);
+    const replay = createTaskOnce(ctx.db, { title: 'a', clientId: CLIENT_ID.toUpperCase() }, ctx.alex);
+    expect(replay.created).toBe(false);
+    expect(replay.task.id).toBe(first.task.id);
+  });
+
+  test('anything but a UUID is a 400', () => {
+    const ctx = setup();
+    for (const bad of ['', 'abc', `${CLIENT_ID}x`, `x${CLIENT_ID}`, CLIENT_ID.replace(/-/g, '')]) {
+      let caught: unknown;
+      try {
+        createTaskOnce(ctx.db, { title: 'a', clientId: bad }, ctx.alex);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(AuthError);
+      if (!(caught instanceof AuthError)) return;
+      expect(caught.status).toBe(400);
+      expect(caught.message).toBe('client_id must be a UUID');
+    }
+    expect(countRows(ctx)).toBe(0);
+  });
+
+  test('without an id nothing is deduplicated, and the row carries null', () => {
+    const ctx = setup();
+    const a = createTaskOnce(ctx.db, { title: 'same' }, ctx.alex);
+    const b = createTaskOnce(ctx.db, { title: 'same' }, ctx.alex);
+    expect(a.created && b.created).toBe(true);
+    expect(a.task.clientId).toBeNull();
+    expect(countRows(ctx)).toBe(2);
+  });
+
+  test('a clone does not inherit the id of the capture it copies', () => {
+    const ctx = setup();
+    const first = createTaskOnce(ctx.db, { title: 'buy milk', clientId: CLIENT_ID }, ctx.alex);
+    const clone = cloneTaskCore(ctx.db, first.task.id, ctx.alex);
+    expect(clone.tasks.every((t) => t.clientId === null)).toBe(true);
   });
 });
 

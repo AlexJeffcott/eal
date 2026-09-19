@@ -138,6 +138,7 @@ function newTaskRow(input: CreateTaskInput, id: number, principalId: number): Ta
     // Same default as the column and the api core: capture is parallel until
     // someone says otherwise.
     sequential: input.sequential ?? false,
+    clientId: input.clientId ?? null,
   };
 }
 
@@ -593,6 +594,17 @@ export function createMockEalClient(): MockEalClient {
       const user = requireSignedIn();
       if (input.title.trim().length === 0) {
         throw new Error('title is required');
+      }
+      // The one server rule the mock does copy: a create sent twice under one
+      // client id finds the first row and is not announced again. The outbox
+      // is built on it, so a mock without it would let the outbox's tests pass
+      // against a server that does not exist.
+      if (input.clientId !== undefined) {
+        for (const existing of store.byId.values()) {
+          if (existing.clientId === input.clientId && existing.createdBy === user.userId) {
+            return snapshot(existing);
+          }
+        }
       }
       const id = store.nextId++;
       const row = newTaskRow(input, id, user.userId);

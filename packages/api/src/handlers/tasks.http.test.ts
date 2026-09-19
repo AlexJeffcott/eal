@@ -4,6 +4,7 @@ import { applySchema } from '../db/schema.ts';
 import { createUsersRepo } from '../db/repos/users.ts';
 import { createTestApp } from '../test-helpers/create-test-app.ts';
 import type { Principal } from '../auth/principals.ts';
+import { tasksHttpRoutes, type TaskEvent } from './tasks.http.ts';
 
 /**
  * Wire contract for /api/v1/tasks/*. The web client (extractServerError) and
@@ -191,6 +192,48 @@ describe('tasks http wire contract', () => {
     expect(readSequential(again.body)).toBe(true);
     const listed = await fetch(app, 'GET', '/api/v1/tasks');
     expect(readSequentialOf(listed.body, createdTask.id)).toBe(true);
+  });
+
+  test('client_id: the replay is a 200 with the first row, and is broadcast once', async () => {
+    // Driven through the routes directly, with a recording broadcaster:
+    // createTestApp owns its own, and what matters here is what it was told.
+    const events: TaskEvent[] = [];
+    const routes = tasksHttpRoutes({
+      db,
+      getPrincipal: () => alex,
+      broadcastTask: (event) => events.push(event),
+    });
+    const send = async (): Promise<{ status: number; text: string }> => {
+      const res = await routes.handle(
+        new Request('https://localhost:3000/api/v1/tasks', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            title: 'written in the tunnel',
+            client_id: '6f1c2a90-5b3e-4d7a-9c21-0e8f4a7b1d35',
+          }),
+        }),
+      );
+      return { status: res.status, text: await res.text() };
+    };
+
+    const first = await send();
+    const replay = await send();
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(200);
+    // Byte-identical: the device swaps this in for its pending entry whichever
+    // of the two answers is the one that reaches it.
+    expect(replay.text).toBe(first.text);
+    expect(events.map((e) => e.type)).toEqual(['task:created']);
+    const n = db.prepare<{ n: number }, []>('SELECT COUNT(*) AS n FROM tasks').get();
+    expect(n?.n).toBe(1);
+  });
+
+  test('client_id: a malformed id is a 400 in the {error} envelope', async () => {
+    const app = await createTestApp(db, { principalOverride: alex });
+    const res = await fetch(app, 'POST', '/api/v1/tasks', { title: 'x', client_id: 'nope' });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'client_id must be a UUID' });
   });
 
   test('POST /api/v1/tasks: 400 with {error} envelope when title is empty', async () => {

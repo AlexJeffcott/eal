@@ -57,6 +57,7 @@ describe('applySchema', () => {
     const cols = columns(db, 'tasks').map((c) => c.name).sort();
     expect(cols).toEqual([
       'assigned_to',
+      'client_id',
       'completed_at',
       'created_at',
       'created_by',
@@ -339,8 +340,8 @@ describe('applySchema', () => {
     expect(userCols).toEqual(['created_at', 'display_name', 'id', 'in_ivr_menu']);
 
     const taskCols = columns(db, 'tasks').map((c) => c.name);
-    // Same set after the second apply. 18 since stage 4 added `reminded_at`.
-    expect(taskCols.length).toBe(18);
+    // Same set after the second apply. 19 since stage 5 added `client_id`.
+    expect(taskCols.length).toBe(19);
   });
 
   test('schema preserves rows across repeat applySchema calls', () => {
@@ -594,6 +595,33 @@ describe('applySchema', () => {
     expect(index?.sql).toContain('reminded_at IS NULL');
   });
 
+  test('client_id survives an upgrade from the pre-stage-2 shape, starts NULL, and is unique per creator', () => {
+    // The same trap as `sequential` and `reminded_at`: the ensureColumn must
+    // stay below `rebuildTasksStatusIfLegacy`, or the rebuild's hand-written
+    // column list drops it on exactly this database.
+    seedPreStatusTasks(db);
+    db.exec(`
+      INSERT INTO tasks (id, parent_id, title, status, kind, position, created_by, updated_by)
+      VALUES (1, NULL, 'Bins out', 'open', 'task', 0, 1, 1),
+             (2, NULL, 'Post letter', 'open', 'task', 1, 1, 1);
+    `);
+
+    applySchema(db);
+
+    interface ClientIdRow { id: number; client_id: string | null }
+    expect(
+      db.prepare<ClientIdRow, []>('SELECT id, client_id FROM tasks ORDER BY id').all(),
+    ).toEqual([
+      // Two NULLs side by side: the index is partial, so the rows that existed
+      // before the column do not collide with each other.
+      { id: 1, client_id: null },
+      { id: 2, client_id: null },
+    ]);
+
+    db.exec("UPDATE tasks SET client_id = 'c-1' WHERE id = 1");
+    expect(() => db.exec("UPDATE tasks SET client_id = 'c-1' WHERE id = 2")).toThrow(/UNIQUE/);
+  });
+
   test('reminded_at set by hand survives a repeat apply', () => {
     applySchema(db);
     db.prepare("INSERT INTO users (display_name) VALUES ('alex')").run();
@@ -666,6 +694,7 @@ describe('applySchema', () => {
       .sort();
     expect(indexes).toEqual([
       'idx_tasks_assigned_to',
+      'idx_tasks_client_id',
       'idx_tasks_defer_until',
       'idx_tasks_deleted_at',
       // Created after the rebuild, not replayed by it: it filters on
@@ -746,6 +775,7 @@ describe('applySchema', () => {
       'idx_sessions_expires_at',
       'idx_sessions_user_id',
       'idx_tasks_assigned_to',
+      'idx_tasks_client_id',
       'idx_tasks_defer_until',
       'idx_tasks_deleted_at',
       'idx_tasks_due_reminder',

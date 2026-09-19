@@ -29,6 +29,7 @@ function task(overrides: Partial<Task> & { id: number }): Task {
     deletedAt: null,
     position: seq,
     sequential: false,
+    clientId: null,
     ...overrides,
   };
 }

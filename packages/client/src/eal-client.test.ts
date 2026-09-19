@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { delay, pollUntil } from '@eal/shared';
-import { createEalClient, extractServerError, type EalClient } from './eal-client.ts';
+import {
+  createEalClient,
+  extractServerError,
+  ServerRefusedError,
+  type EalClient,
+} from './eal-client.ts';
 
 /**
  * Pure-function coverage for the http error-envelope unwrap. The web UI's
@@ -373,5 +378,63 @@ describe('getCurrentUser with no network', () => {
     stored.set('eal-user', '{"userId":"7"}');
     answerWith(unreachable);
     await expect(newClient().getCurrentUser()).rejects.toThrow('fetch failed');
+  });
+});
+
+/**
+ * What the capture outbox turns on. A create carries the device's client id,
+ * and the two ways it can fail are told apart by class: nothing came back
+ * (send it again) against the server said no (drop it and tell the user).
+ */
+describe('createTask and the capture outbox', () => {
+  const realFetch = globalThis.fetch;
+  const CLIENT_ID = '6f1c2a90-5b3e-4d7a-9c21-0e8f4a7b1d35';
+
+  afterEach(() => {
+    Reflect.set(globalThis, 'fetch', realFetch);
+  });
+
+  function newClient(): EalClient {
+    return createEalClient('https://localhost:4321', { token: 'test-token' });
+  }
+
+  test('the client id rides the wire as client_id', async () => {
+    const bodies: string[] = [];
+    Reflect.set(globalThis, 'fetch', (_url: string, init: RequestInit) => {
+      bodies.push(String(init.body));
+      return Promise.resolve(Response.json({ task: { id: 1 } }));
+    });
+    await newClient().createTask({ title: 'milk', clientId: CLIENT_ID });
+    await newClient().createTask({ title: 'eggs' });
+    expect(JSON.parse(bodies[0] ?? '')).toEqual({ title: 'milk', client_id: CLIENT_ID });
+    expect(JSON.parse(bodies[1] ?? '')).toEqual({ title: 'eggs' });
+  });
+
+  test('a failing status throws ServerRefusedError with the status and the server message', async () => {
+    Reflect.set(globalThis, 'fetch', () =>
+      Promise.resolve(new Response('{"error":"title is required"}', { status: 400 })),
+    );
+    let caught: unknown;
+    try {
+      await newClient().createTask({ title: '' });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ServerRefusedError);
+    if (!(caught instanceof ServerRefusedError)) return;
+    expect(caught.status).toBe(400);
+    expect(caught.message).toBe('title is required');
+  });
+
+  test('no response at all is not a refusal', async () => {
+    Reflect.set(globalThis, 'fetch', () => Promise.reject(new TypeError('fetch failed')));
+    let caught: unknown;
+    try {
+      await newClient().createTask({ title: 'milk', clientId: CLIENT_ID });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(TypeError);
+    expect(caught).not.toBeInstanceOf(ServerRefusedError);
   });
 });

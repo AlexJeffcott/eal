@@ -67,6 +67,13 @@ export interface TaskRow {
    * on the row but deliberately not on the wire shape (`toTask` skips it).
    */
   reminded_at: string | null;
+  /**
+   * The id the capturing device gave this row before the server had one, or
+   * NULL for a row that was not captured through an outbox (the assistant, the
+   * CLI, a clone). Unique per creator, so a create that is sent twice — the
+   * response to the first was lost — finds this row instead of making another.
+   */
+  client_id: string | null;
 }
 
 export interface InsertTaskInput {
@@ -80,6 +87,7 @@ export interface InsertTaskInput {
   assignedTo: number | null;
   position: number;
   sequential: boolean;
+  clientId: string | null;
 }
 
 export interface UpdateTaskInput {
@@ -139,6 +147,8 @@ export interface ListFilter {
 export interface TasksRepo {
   insert(input: InsertTaskInput): TaskRow;
   findById(id: number, opts?: { includeDeleted?: boolean }): TaskRow | null;
+  /** The row this creator captured under `clientId`, in the trash or not. */
+  findByClientId(createdBy: number, clientId: string): TaskRow | null;
   list(filter: ListFilter): TaskRow[];
   /** Recursive descendants (excludes the root), ordered by depth ASC then position ASC. */
   descendants(id: number, opts?: { includeDeleted?: boolean }): TaskRow[];
@@ -162,12 +172,12 @@ export interface TasksRepo {
 }
 
 const COLS =
-  'id, parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, created_at, updated_at, completed_at, deleted_at, position, sequential, reminded_at';
+  'id, parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, created_at, updated_at, completed_at, deleted_at, position, sequential, reminded_at, client_id';
 
 // Same list, prefixed with the `tasks.` alias for queries that join recursive
 // CTEs (which themselves expose a column named `id`).
 const T_COLS =
-  'tasks.id, tasks.parent_id, tasks.title, tasks.notes, tasks.status, tasks.kind, tasks.defer_until, tasks.due_at, tasks.created_by, tasks.assigned_to, tasks.updated_by, tasks.created_at, tasks.updated_at, tasks.completed_at, tasks.deleted_at, tasks.position, tasks.sequential, tasks.reminded_at';
+  'tasks.id, tasks.parent_id, tasks.title, tasks.notes, tasks.status, tasks.kind, tasks.defer_until, tasks.due_at, tasks.created_by, tasks.assigned_to, tasks.updated_by, tasks.created_at, tasks.updated_at, tasks.completed_at, tasks.deleted_at, tasks.position, tasks.sequential, tasks.reminded_at, tasks.client_id';
 
 export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock): TasksRepo {
   const insertStmt = db.prepare<
@@ -184,14 +194,21 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
       number,
       number,
       number,
+      string | null,
       string,
       string,
     ]
   >(
     `INSERT INTO tasks
-       (parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, position, sequential, created_at, updated_at)
-       VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (parent_id, title, notes, status, kind, defer_until, due_at, created_by, assigned_to, updated_by, position, sequential, client_id, created_at, updated_at)
+       VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        RETURNING ${COLS}`,
+  );
+
+  // Trash included: a capture that was binned before its retry arrived is
+  // still that capture, and the retry must find it rather than make a twin.
+  const findByClientIdStmt = db.prepare<TaskRow, [number, string]>(
+    `SELECT ${COLS} FROM tasks WHERE created_by = ? AND client_id = ?`,
   );
 
   const findByIdStmt = db.prepare<TaskRow, [number]>(`SELECT ${COLS} FROM tasks WHERE id = ?`);
@@ -292,11 +309,16 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
         input.createdBy, // updated_by mirrors created_by at insert time
         input.position,
         input.sequential ? 1 : 0,
+        input.clientId,
         ts, // created_at
         ts, // updated_at
       );
       if (!row) throw new Error('tasks.insert: RETURNING gave no row');
       return row;
+    },
+
+    findByClientId(createdBy, clientId): TaskRow | null {
+      return findByClientIdStmt.get(createdBy, clientId) ?? null;
     },
 
     findById(id, opts): TaskRow | null {
@@ -535,6 +557,7 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
           input.createdBy,
           root.position,
           root.sequential,
+          null, // client_id: a clone is a new row, never the capture it copies
           ts,
           ts,
         );
@@ -582,6 +605,7 @@ export function createTasksRepo(db: DatabaseClient, clock: Clock = systemClock):
             input.createdBy,
             child.position,
             child.sequential,
+            null, // client_id — see the root above
             ts,
             ts,
           );

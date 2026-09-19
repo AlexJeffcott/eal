@@ -57,6 +57,13 @@ export interface Task {
    * `next_actions` tool.
    */
   sequential: boolean;
+  /**
+   * The id the capturing device gave this task before the server had one, or
+   * null. It is on the wire so the device can match a row that comes back by
+   * broadcast or by seed to the outbox entry still waiting for it — the case
+   * where the create landed and its response did not.
+   */
+  clientId: string | null;
 }
 
 export interface CreateTaskInput {
@@ -68,6 +75,8 @@ export interface CreateTaskInput {
   deferUntil?: string | null;
   dueAt?: string | null;
   sequential?: boolean;
+  /** A UUID minted by the device. Sent twice, it still makes one task. */
+  clientId?: string;
 }
 
 export interface UpdateTaskInput {

@@ -49,6 +49,25 @@ import type {
 const TOKEN_STORAGE_KEY = 'eal-token';
 const USER_STORAGE_KEY = 'eal-user';
 
+/**
+ * The server answered a POST, and the answer was a failing status.
+ *
+ * The message is the server's own, exactly as before this class existed, so
+ * the SPA's friendly mappers still match on it. What the class adds is the
+ * distinction the capture outbox turns on: `fetch` rejecting with a TypeError
+ * means nothing came back and the write may be sent again, while this means
+ * the server read it and said no.
+ */
+export class ServerRefusedError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ServerRefusedError';
+  }
+}
+
 /** The WebSocket never opened: no network, or no server. Not an auth failure. */
 class WsUnreachableError extends Error {
   constructor() {
@@ -508,7 +527,7 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
     });
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(extractServerError(text));
+      throw new ServerRefusedError(response.status, extractServerError(text));
     }
     return response.json() as Promise<T>;
   }
@@ -588,6 +607,7 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
     if (input.deferUntil !== undefined) body['defer_until'] = input.deferUntil;
     if (input.dueAt !== undefined) body['due_at'] = input.dueAt;
     if (input.sequential !== undefined) body['sequential'] = input.sequential;
+    if (input.clientId !== undefined) body['client_id'] = input.clientId;
     return body;
   }
 

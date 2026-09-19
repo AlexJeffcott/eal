@@ -224,6 +224,7 @@ describe('Tasks UI (browser)', () => {
         deletedAt: null,
         position: 50,
         sequential: false,
+        clientId: null,
       };
       stores.$tasksById.value = new Map([...stores.$tasksById.value, [mineId, mine]]);
       // Assigned tasks aren't in the Inbox view — switch to All.
@@ -321,6 +322,7 @@ describe('Tasks UI (browser)', () => {
         deletedAt: null,
         position: 0,
         sequential: false,
+        clientId: null,
       };
       stores.$tasksById.value = new Map([[seeded.id, seeded]]);
       await waitFor(() => rowIds().length === 1);

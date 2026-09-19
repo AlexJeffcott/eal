@@ -85,6 +85,7 @@ function setup(): SetupContext {
         assignedTo: input.assignedTo ?? null,
         position: 0,
         sequential: false,
+        clientId: null,
       });
     },
   };

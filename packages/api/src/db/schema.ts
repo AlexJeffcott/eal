@@ -196,6 +196,24 @@ export function applySchema(db: DatabaseClient): void {
     `CREATE INDEX IF NOT EXISTS idx_tasks_due_reminder ON tasks (due_at)
        WHERE reminded_at IS NULL AND deleted_at IS NULL AND due_at IS NOT NULL`,
   );
+  // Tasks stage 5: the id a device gives a capture before the server has one.
+  // The SPA's outbox (web/src/apps/tasks/outbox.ts) sends a create again
+  // whenever it cannot tell whether the last one arrived, and this is what
+  // makes the second one find the first: handlers/tasks.shared.ts:createTaskOnce.
+  // NULL for every row that existed before the column, and for every row not
+  // captured through an outbox.
+  //
+  // **This ensureColumn must stay AFTER rebuildTasksStatusIfLegacy**, for the
+  // same reason `sequential` and `reminded_at` above must.
+  // scripts/e2e-offline-capture.ts drives it over a real pre-migration file.
+  ensureColumn(db, 'tasks', 'client_id', 'TEXT');
+  // Unique per creator, not globally: the id is minted on a device, and one
+  // member must not be able to make another member's create fail by guessing
+  // or replaying an id. Partial, because every other row holds NULL.
+  db.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_client_id ON tasks (created_by, client_id)
+       WHERE client_id IS NOT NULL`,
+  );
   promoteGrandfatheredContainers(db);
   // Phase 7D: the single user-less device row voicemails land in when
   // no household member was specifically being called. Idempotent —

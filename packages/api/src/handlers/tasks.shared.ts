@@ -40,6 +40,13 @@ export interface Task {
    * packages/client/src/task-availability.ts:availableTaskIds.
    */
   sequential: boolean;
+  /**
+   * The id the capturing device gave this task before the server had one, or
+   * null. It is on the wire so the device can match a row that comes back by
+   * broadcast or by seed to the outbox entry still waiting for it — the case
+   * where the create landed and its response did not.
+   */
+  clientId: string | null;
 }
 
 export function toTask(row: TaskRow): Task {
@@ -63,6 +70,7 @@ export function toTask(row: TaskRow): Task {
     // The column is an INTEGER 0/1 (SQLite has no boolean); this is the one
     // place it becomes the boolean the wire and the SPA carry.
     sequential: row.sequential === 1,
+    clientId: row.client_id,
   };
 }
 
@@ -75,6 +83,8 @@ export interface CreateTaskInput {
   deferUntil?: string | null | undefined;
   dueAt?: string | null | undefined;
   sequential?: boolean | undefined;
+  /** See `Task.clientId`. A UUID; anything else is refused. */
+  clientId?: string | undefined;
 }
 
 export interface UpdateTaskInput {
@@ -203,9 +213,61 @@ function defaultTodayCutoff(now: Date): string {
   return eod.toISOString();
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function validateClientId(raw: string | undefined): string | null {
+  if (raw === undefined) return null;
+  if (!UUID_PATTERN.test(raw)) throw new AuthError(400, 'client_id must be a UUID');
+  // One spelling per id: the unique index compares bytes.
+  return raw.toLowerCase();
+}
+
 export function createTaskCore(
   db: DatabaseClient,
   input: CreateTaskInput,
+  principal: Principal,
+): Task {
+  return createTaskOnce(db, input, principal).task;
+}
+
+/**
+ * Create a task, at most once per `clientId`.
+ *
+ * A device that captures offline sends its create again whenever it cannot
+ * tell whether the last one arrived — the response was lost, the tab was
+ * closed, the phone went into a tunnel. The second send must be a success that
+ * returns the first row, not a second row and not an error: the device treats
+ * any answer with a failing status as "drop the entry and tell the user".
+ *
+ * `created` is false for that replay. The route broadcasts only on true — every
+ * device already heard `task:created` the first time.
+ *
+ * The lookup runs BEFORE the parent and level checks. A parent binned between
+ * the two sends would otherwise turn the replay into a 404 for a row that
+ * exists. And it answers with the row as it is NOW, not as it was captured:
+ * what the device needs is the truth to show, and the row may have been edited,
+ * or binned, since.
+ *
+ * specs/tla/tasks-convergence/TasksConvergence.tla: AtMostOneRowPerClientId.
+ */
+export function createTaskOnce(
+  db: DatabaseClient,
+  input: CreateTaskInput,
+  principal: Principal,
+): { task: Task; created: boolean } {
+  const tasks = createTasksRepo(db);
+  const clientId = validateClientId(input.clientId);
+  if (clientId !== null) {
+    const existing = tasks.findByClientId(principal.userId, clientId);
+    if (existing !== null) return { task: toTask(existing), created: false };
+  }
+  return { task: insertTask(db, input, clientId, principal), created: true };
+}
+
+function insertTask(
+  db: DatabaseClient,
+  input: CreateTaskInput,
+  clientId: string | null,
   principal: Principal,
 ): Task {
   const tasks = createTasksRepo(db);
@@ -241,6 +303,7 @@ export function createTaskCore(
     // default the column carries and the same "changes nothing" promise the
     // migration makes.
     sequential: input.sequential ?? false,
+    clientId,
   });
   return toTask(row);
 }

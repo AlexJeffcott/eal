@@ -101,6 +101,7 @@ function buildTree(specs: readonly NodeSpec[]): Task[] {
       deletedAt: spec.trashed ? '2026-09-05T10:00:00Z' : null,
       position,
       sequential: spec.sequential,
+      clientId: null,
     });
   });
   return tasks;

@@ -9,7 +9,7 @@ const POLLY_ANCHOR = process.env['POLLY_VERIFY'] === '1';
 import {
   cloneTaskCore,
   completeTaskCore,
-  createTaskCore,
+  createTaskOnce,
   deleteTaskCore,
   getTaskCore,
   listTasksCore,
@@ -142,7 +142,7 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
         const principal = requirePrincipal(ctx, request);
         // Snake_case on the wire (REST convention), camelCase in TS. Explicit
         // mapping keeps this honest under refactor — no spread, no cast.
-        const task = createTaskCore(
+        const { task, created } = createTaskOnce(
           ctx.db,
           {
             title: body.title,
@@ -153,10 +153,14 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
             deferUntil: body.defer_until,
             dueAt: body.due_at,
             sequential: body.sequential,
+            clientId: body.client_id,
           },
           principal,
         );
-        ctx.broadcastTask({ type: 'task:created', topic: 'tasks', payload: task });
+        // A replayed create found its first row. Every device heard
+        // `task:created` then; saying it again would be a second event for one
+        // fact.
+        if (created) ctx.broadcastTask({ type: 'task:created', topic: 'tasks', payload: task });
         return { task };
       },
       {
@@ -172,6 +176,9 @@ export function tasksHttpRoutes(ctx: TasksRoutesContext) {
           // SQLite's business (db/repos/tasks.ts converts), and a JSON api that
           // made callers send 1 would leak storage into the contract.
           sequential: t.Optional(t.Boolean()),
+          // A UUID the device minted; the shape is checked in createTaskOnce
+          // so a bad one gets the api's own `{ error }` envelope.
+          client_id: t.Optional(t.String()),
         }),
       },
     )
