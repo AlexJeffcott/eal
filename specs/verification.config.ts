@@ -37,9 +37,12 @@ import { defineVerification } from '@fairfox/polly/verify';
  * Not modelled (deliberate): cross-machine coupling like "WS connect requires
  * auth.phase=authenticated". The runtime enforces it; the model treats the
  * machines as independent so the state space stays small enough for `maxInFlight=1`.
- * Multi-device task convergence is also out of scope — it needs a richer model
- * than the single-instance status machine here. See scripts/e2e-tasks-multi.ts
- * for the runtime evidence that broadcasts converge across browsers.
+ * Multi-device task convergence is not in THIS file — it needs sets, sequences
+ * and a second device, none of which polly's generator has. It is the
+ * hand-written specs/tla/tasks-convergence/TasksConvergence.tla, which
+ * `bun devctl verify` runs through TLC after the subsystems below
+ * (packages/devctl/commands/verify.ts). Its TypeScript twin is
+ * packages/api/src/specs/tasks-convergence-machine.ts.
  */
 export default defineVerification({
   state: {
