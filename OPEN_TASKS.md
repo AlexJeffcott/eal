@@ -12,15 +12,18 @@ rather than a commit belongs in `~/projects/TODO.md`.
 failure. The pre-push hook runs `devctl check` and then that command; the
 pre-commit hook runs `devctl check` and the unit tier only.
 
-| Command | Passing count, 2026-09-09 | Runs in the pre-push sweep |
+| Command | Passing count, 2026-09-19 | Runs in the pre-push sweep |
 |---|---|---|
 | `bun devctl check` | tsc + 7 lint scripts | yes |
-| `bun devctl test unit` | 1316 tests, 106 files; coverage ok, 138 files, 28 exempt | yes |
+| `bun devctl test unit` | 1319 tests, 106 files; coverage ok, 138 files, 28 exempt | yes |
 | `bun devctl test browser` | 103 tests | yes |
 | `bun devctl test e2e` | 52 Playwright tests, 2 projects | yes |
 | `bun devctl test multi` | 27 `scripts/e2e-*.ts`, each exiting 0 | yes |
 | `bun devctl test mutation` | see below — not part of `all` | no |
-| `bun devctl verify` | TLC: `tasks` ✓ 6.7s, `pairing` ✓ 2.5s, `auth` ✓ 4.5s — compositional PASS | no |
+| `bun devctl verify` | TLC: `tasks` ✓ 2.7s, `pairing` ✓ 1.2s, `auth` ✓ 2.3s — compositional PASS | yes |
+
+The browser, e2e and multi counts are the 2026-09-09 readings. All three tiers
+passed again in the 2026-09-19 sweep; their counts were not read that day.
 
 The multi tier now includes `e2e-registration-closed.ts` (the registration
 gate), `e2e-tasks-reconnect.ts` (the WS drop and resync),
@@ -184,9 +187,10 @@ user-facing feature works.
       and are not checked, which is the documented partition, not a regression.
       `sequential` needed no model change: it is an attribute and a derived
       query, not a state transition, so `tasks-status-machine.ts` is correct as
-      it stands. Getting the two verdicts means dropping the `auth` block below
-      for the run — with it in place, `auth` runs first and nothing after it is
-      reached.
+      it stands. Getting the two verdicts meant dropping the `auth` block for
+      that run: `auth` ran first then, and nothing after it was reached. Since
+      `c0a7d11` the subsystems are declared cheap-first and `auth` terminates,
+      so all three report in one run.
 
       Re-run again 2026-09-06 after stage 4, same two verdicts (`tasks` ✓ 7.4s,
       `pairing` ✓ 1.7s), and `git diff specs/verification.config.ts` empty
@@ -203,18 +207,22 @@ user-facing feature works.
       is instead held by the `reminded_at IS NULL` guard on `markReminded`
       (unit-tested), and by `scripts/e2e-task-reminder.ts` watching three
       consecutive scans over a still-overdue task.
-- [!] **The `auth` subsystem does not finish.** Two runs, 2245s and 1580s of
-      TLC wall time, neither reaching a verdict; both were killed, and the
-      `✗ auth` line in the report is that kill, not a violated invariant. It
-      models nine handlers over two co-modelled fields (`authMachine.phase` ×
-      `sessionsMachine.outstanding`) at `maxInFlight: 2`, and 2 messages in
-      flight across 9 handlers is where the blow-up is. Java gets roughly a
-      quarter of a core inside the container and TLC runs `-workers 1`.
-      Nothing about it is specific to the tasks work — the `auth` block of
-      `specs/verification.config.ts` is untouched since before `0c34d83`.
-      Fix by dropping `auth` to `maxInFlight: 1`, splitting it in two, or
-      raising the worker count. **Until then `devctl verify` exits non-zero on
-      `auth` alone and cannot join any sweep.**
+- [x] **The `auth` subsystem finishes.** It used to be killed for memory at
+      about 5 minutes: 9 handlers over two co-modelled fields
+      (`authMachine.phase` × `sessionsMachine.outstanding`) at
+      `maxInFlight: 2` reached 9,622,903 distinct states with 8,009,447 still
+      queued at depth 6. `c0a7d11` (2026-09-08) made two measured cuts, both in
+      the `auth` block of `specs/verification.config.ts`: `POST /cli-pair/start`
+      and `POST /cli-pair/poll` are dropped, because each generated
+      `UNCHANGED contextStates` with no precondition, and `maxInFlight` drops to
+      1, which removes the squared term in the `42 × handlerCount` send
+      branching factor. `verification.workers` is 6.
+
+      Measured 2026-09-19 inside the pre-push sweep: `tasks` ✓ 7 handlers,
+      5 ensures, 116,032 states, 2.7s; `pairing` ✓ 2 handlers, 2 ensures,
+      29,248 states, 1.2s; `auth` ✓ 7 handlers, 7 ensures, 97,600 states,
+      2.3s. Non-interference verified, compositional PASS. `devctl verify` is
+      the third stage of the pre-push hook and it passed there.
 - [ ] **Commit `scripts/e2e-pstn-live.ts`.** Every other user-facing path has a
       committed verification artefact that runs in one command. The live Twilio
       trunk does not — see Phase 7E below.
