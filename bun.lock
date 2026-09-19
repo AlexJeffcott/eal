@@ -51,6 +51,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@eal/api": "workspace:*",
+        "@eal/shared": "workspace:*",
         "@elysiajs/eden": "1.4.9",
         "@simplewebauthn/browser": "14.0.0",
       },
@@ -63,6 +64,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@eal/client": "workspace:*",
+        "@eal/shared": "workspace:*",
       },
     },
     "packages/devctl": {

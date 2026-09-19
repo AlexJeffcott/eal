@@ -867,6 +867,71 @@ test.describe('tasks at the 350px floor', () => {
     await expect(page.locator('[data-tasks-error]')).toHaveCount(0);
   });
 
+  test('a recurring task fits — seven day toggles, the longest badge, and the next one after a tick', async ({
+    page,
+  }) => {
+    // Plan 05 at the floor, against the real api. The two things that could
+    // overflow are the row of seven weekday toggles and a badge holding a whole
+    // sentence; both are pushed to their widest here.
+    // Unique per run: both Playwright projects share one server and every
+    // member sees every task, so a fixed title finds the other project's rows.
+    const title = `Put the bins and the recycling out ${Date.now()}`;
+    await page.locator('#tasks-quick-add').fill(title);
+    await page.locator('[data-action="tasks:quick-add"]').click();
+    const row = page.locator('[data-task-row]', {
+      has: page.locator('[data-task-title]', { hasText: title }),
+    });
+    const taskId = await row.first().getAttribute('data-task-id');
+    await page.locator(`[data-action="tasks:expand"][data-action-task-id="${taskId}"]`).click();
+    const editor = row.locator('[data-task-recurrence-editor]');
+    await expect(editor).toBeVisible();
+
+    const repeats = editor.locator('[data-task-repeats-picker]');
+    await repeats.getByRole('button').click();
+    await repeats.getByRole('option', { name: 'Weekly, on days' }).click();
+    const toggles = editor.locator('[data-action="tasks:toggle-recurrence-day"]');
+    await expect(toggles).toHaveCount(7);
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+
+    // Every toggle is a thumb target, and every one is inside the screen.
+    for (let i = 0; i < 7; i++) {
+      const box = await toggles.nth(i).boundingBox();
+      expect(box, `day toggle ${i} has no box`).not.toBeNull();
+      if (box === null) continue;
+      expect(box.width, `day toggle ${i} width`).toBeGreaterThanOrEqual(44);
+      expect(box.height, `day toggle ${i} height`).toBeGreaterThanOrEqual(44);
+      expect(box.x + box.width, `day toggle ${i} right edge`).toBeLessThanOrEqual(350);
+    }
+
+    // Turn on days until six are on — the longest sentence the badge can hold
+    // short of "Every day" — and count from completion, which adds two words.
+    const on = editor.locator('[data-recurrence-day-on="true"]');
+    for (const day of ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']) {
+      if ((await on.count()) >= 6) break;
+      const wrapper = editor.locator(`[data-recurrence-day="${day}"]`);
+      if ((await wrapper.getAttribute('data-recurrence-day-on')) === 'true') continue;
+      const before = await on.count();
+      await wrapper.getByRole('button').tap({ force: true }).catch(() => wrapper.getByRole('button').click());
+      await expect(on).toHaveCount(before + 1);
+    }
+    const basis = editor.locator('[data-task-recurrence-basis]');
+    await basis.getByRole('button').click();
+    await basis.getByRole('option', { name: 'Counted from when it is done' }).click();
+    await expect(row.locator('[data-task-recurrence]')).toContainText('after done');
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    await page.screenshot({
+      path: test.info().outputPath('tasks-350-recurrence.png'),
+      fullPage: true,
+    });
+
+    // Tick it: the next occurrence arrives, carries the badge, and still fits.
+    await page.locator(`[data-action="tasks:toggle"][data-action-task-id="${taskId}"]`).click();
+    await expect(row).toHaveCount(2);
+    await expect(row.locator('[data-task-recurrence]')).toHaveCount(1);
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    await expect(page.locator('[data-tasks-error]')).toHaveCount(0);
+  });
+
   test('the assistant sheet fits over the tasks panel', async ({ page }) => {
     await page.locator('[data-action="chat:toggle"]').click();
     await expect(page.locator('[data-chat-panel]')).toBeVisible();

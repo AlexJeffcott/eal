@@ -15,8 +15,10 @@ export type {
   Task,
   TaskDetail,
   TaskEvent,
+  Recurrence,
   TaskKind,
   TaskStatus,
+  TaskStatusChange,
   UpdateTaskInput,
 } from './task-types.ts';
 export {

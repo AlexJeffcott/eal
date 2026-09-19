@@ -102,6 +102,7 @@ function buildTree(specs: readonly NodeSpec[]): Task[] {
       position,
       sequential: spec.sequential,
       clientId: null,
+      recurrence: null,
     });
   });
   return tasks;

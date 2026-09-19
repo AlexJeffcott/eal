@@ -5,8 +5,10 @@ import type {
   Task,
   TaskKind,
   TaskStatus,
+  TaskStatusChange,
   UpdateTaskInput,
 } from '@eal/client';
+import { describeRecurrence, parseRecurrence, type Recurrence } from '@eal/shared';
 import type { CliMcpApp, EalMcpTool } from './types.ts';
 
 /**
@@ -66,6 +68,36 @@ function optionalBoolean(args: Record<string, unknown>, key: string): boolean | 
   return value;
 }
 
+/**
+ * A recurrence argument, when present. `null` is a value here, not an absence:
+ * it ends the series. The rule is checked with the server's own parser before
+ * it is sent, so a rule the api would refuse is refused here with the same
+ * words, and never half-applied.
+ */
+function optionalRecurrence(
+  args: Record<string, unknown>,
+  key: string,
+): Recurrence | null | undefined {
+  const value = args[key];
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  return parseRecurrence(value);
+}
+
+/**
+ * The calendar date on this machine. The assistant runs at home, so its date
+ * is the household's; the api's own is UTC's, a day behind late in a European
+ * evening. Sent with a completion so a recurring task comes round on the right
+ * day. Same function as web/src/platform/local-date.ts, which the CLI cannot
+ * import.
+ */
+function localDateToday(now: Date = new Date()): string {
+  const year = String(now.getFullYear()).padStart(4, '0');
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function requireNumber(args: Record<string, unknown>, key: string): number {
   const value = args[key];
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -85,7 +117,30 @@ function formatTask(task: Task): string {
   // printing it on every container would be a word on every line meaning
   // "nothing unusual" — and it would crowd out the ones that do mean something.
   const order = task.kind !== 'task' && task.sequential ? ' (sequential)' : '';
-  return `#${task.id} [${task.kind}/${task.status}]${order} ${task.title}${due}${defer}`;
+  // In words, because the assistant repeats this line to a person.
+  const repeats = task.recurrence !== null ? ` (repeats: ${describeRecurrence(task.recurrence)})` : '';
+  return `#${task.id} [${task.kind}/${task.status}]${order} ${task.title}${due}${defer}${repeats}`;
+}
+
+/**
+ * What a status move did, as the assistant should say it. A recurring task's
+ * completion is two facts — this one is done, the next one exists — and the
+ * assistant that reports only the first will be asked "did it delete my
+ * reminder?".
+ */
+function formatStatusChange(verb: string, change: TaskStatusChange): string {
+  const lines = [`${verb} ${formatTask(change.task)}`];
+  const [next, ...rest] = change.spawned;
+  if (next !== undefined) {
+    const inside = rest.length === 0 ? '' : ` (with ${rest.length} item${rest.length === 1 ? '' : 's'} inside, all reset to todo)`;
+    lines.push(`It repeats. Next occurrence: ${formatTask(next)}${inside}`);
+  }
+  if (change.removed.length > 0) {
+    lines.push(
+      `The next occurrence it had spawned was untouched, so it was removed (#${change.removed.join(', #')}) and this task repeats again.`,
+    );
+  }
+  return lines.join('\n');
 }
 
 /** Shared prose so all three schemas describe the levels the same way. */
@@ -115,6 +170,49 @@ const STATUS_PROPERTY = {
   type: 'string',
   enum: ['todo', 'doing', 'blocked', 'done'],
   description: STATUS_DESCRIPTION,
+};
+
+/**
+ * The recurrence argument. The schema is the four rules of `@eal/shared`
+ * recurrence.ts, and the description is written against the two sentences a
+ * person actually says — "every Tuesday" and "every 5 days after I do it" —
+ * because the hard part for an assistant is not the rule's shape, it is
+ * `basis`, which no one ever says out loud.
+ */
+const RECURRENCE_DESCRIPTION =
+  'Make the task repeat. When it is completed, the next occurrence is created ' +
+  'automatically with the next due date. One of four rules, chosen by `every`:\n' +
+  '- {"every":"days","interval":N,"basis":…} — every N days (N from 1 to 365).\n' +
+  '- {"every":"weekdays","basis":…} — Monday to Friday.\n' +
+  '- {"every":"week","days":["tue"],"basis":…} — weekly on the named days; ' +
+  'days are "mon","tue","wed","thu","fri","sat","sun", at least one.\n' +
+  '- {"every":"month","day":N,"basis":…} — monthly on day N (1 to 31; in a ' +
+  'shorter month it falls on the last day).\n' +
+  '`basis` is required and says where the count starts. Use "due" for a fixed ' +
+  'schedule that does not slip when the task is done late: "every Tuesday", ' +
+  '"on the 1st of each month", "put the bins out weekly" → ' +
+  '{"every":"week","days":["tue"],"basis":"due"}. Use "completed" when the gap ' +
+  'is what matters and it should be counted from the day it was actually done: ' +
+  '"every 5 days after I do it", "water the plants every 5 days", "change the ' +
+  'filter 3 months after the last time" → {"every":"days","interval":5,"basis":"completed"}. ' +
+  'Send no other fields. A recurring task should normally also have a `due_at` ' +
+  'for its first occurrence.';
+
+const RECURRENCE_PROPERTY = {
+  type: 'object',
+  description: RECURRENCE_DESCRIPTION,
+  properties: {
+    every: { type: 'string', enum: ['days', 'weekdays', 'week', 'month'] },
+    interval: { type: 'number', description: 'Only with every="days": 1 to 365.' },
+    days: {
+      type: 'array',
+      items: { type: 'string', enum: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] },
+      description: 'Only with every="week": at least one.',
+    },
+    day: { type: 'number', description: 'Only with every="month": 1 to 31.' },
+    basis: { type: 'string', enum: ['due', 'completed'] },
+  },
+  required: ['every', 'basis'],
 };
 
 /**
@@ -202,6 +300,7 @@ const TOOLS: EalMcpTool[] = [
         due_at: { type: 'string', description: 'ISO date/time the task is due' },
         defer_until: { type: 'string', description: 'ISO date/time before which the task is hidden' },
         sequential: SEQUENTIAL_PROPERTY,
+        recurrence: RECURRENCE_PROPERTY,
       },
       required: ['title'],
     },
@@ -218,6 +317,8 @@ const TOOLS: EalMcpTool[] = [
       if (deferUntil !== undefined) input.deferUntil = deferUntil;
       const sequential = optionalBoolean(args, 'sequential');
       if (sequential !== undefined) input.sequential = sequential;
+      const recurrence = optionalRecurrence(args, 'recurrence');
+      if (recurrence !== undefined) input.recurrence = recurrence;
       return `Created ${formatTask(await client.createTask(input))}`;
     },
   },
@@ -237,6 +338,11 @@ const TOOLS: EalMcpTool[] = [
         due_at: { type: 'string', description: 'ISO date/time, or empty string to clear' },
         defer_until: { type: 'string', description: 'ISO date/time, or empty string to clear' },
         sequential: SEQUENTIAL_PROPERTY,
+        recurrence: {
+          ...RECURRENCE_PROPERTY,
+          type: ['object', 'null'],
+          description: `${RECURRENCE_DESCRIPTION} Send null to stop the task repeating.`,
+        },
       },
       required: ['id'],
     },
@@ -255,31 +361,42 @@ const TOOLS: EalMcpTool[] = [
       if (deferUntil !== undefined) input.deferUntil = deferUntil.length === 0 ? null : deferUntil;
       const sequential = optionalBoolean(args, 'sequential');
       if (sequential !== undefined) input.sequential = sequential;
+      const recurrence = optionalRecurrence(args, 'recurrence');
+      if (recurrence !== undefined) input.recurrence = recurrence;
       return `Updated ${formatTask(await client.updateTask(id, input))}`;
     },
   },
   {
     name: 'complete_task',
-    description: 'Mark a task as done. Works at any level — a project too.',
+    description:
+      'Mark a task as done. Works at any level — a project too. If the task ' +
+      'repeats, its next occurrence is created and reported in the reply.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'number', description: 'The task id' } },
       required: ['id'],
     },
     run: async (client, args) => {
-      return `Completed ${formatTask(await client.completeTask(requireNumber(args, 'id')))}`;
+      const change = await client.completeTask(requireNumber(args, 'id'), {
+        today: localDateToday(),
+      });
+      return formatStatusChange('Completed', change);
     },
   },
   {
     name: 'reopen_task',
-    description: 'Reopen a completed task (set it back to todo). Works at any level.',
+    description:
+      'Reopen a completed task (set it back to todo). Works at any level. If ' +
+      'completing it had spawned a next occurrence that nobody has touched ' +
+      'since, that occurrence is removed and this task repeats again — so ' +
+      'reopening undoes a completion made by mistake.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'number', description: 'The task id' } },
       required: ['id'],
     },
     run: async (client, args) => {
-      return `Reopened ${formatTask(await client.reopenTask(requireNumber(args, 'id')))}`;
+      return formatStatusChange('Reopened', await client.reopenTask(requireNumber(args, 'id')));
     },
   },
   {
@@ -299,7 +416,10 @@ const TOOLS: EalMcpTool[] = [
     run: async (client, args) => {
       const id = requireNumber(args, 'id');
       const status = requireStatus(args, 'status');
-      return `Moved ${formatTask(await client.setTaskStatus(id, status))}`;
+      return formatStatusChange(
+        'Moved',
+        await client.setTaskStatus(id, status, { today: localDateToday() }),
+      );
     },
   },
   {

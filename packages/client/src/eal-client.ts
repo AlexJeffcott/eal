@@ -18,6 +18,7 @@ import type {
   TaskDetail,
   TaskEvent,
   TaskStatus,
+  TaskStatusChange,
   UpdateTaskInput,
 } from './task-types.ts';
 import type { PushSubscriptionInput } from './types.ts';
@@ -211,6 +212,12 @@ function isCloneShape(value: unknown): value is CloneTaskResult {
   return value.tasks.every(isTaskShape);
 }
 
+function isRemovedShape(value: unknown): value is { ids: number[] } {
+  if (typeof value !== 'object' || value === null) return false;
+  if (!('ids' in value) || !Array.isArray(value.ids)) return false;
+  return value.ids.every((id) => typeof id === 'number');
+}
+
 function parseTaskEvent(msg: IncomingWsMessage): TaskEvent | null {
   if (msg.type === 'task:created' && isTaskShape(msg.payload)) {
     return { type: 'task:created', topic: 'tasks', payload: msg.payload };
@@ -223,6 +230,9 @@ function parseTaskEvent(msg: IncomingWsMessage): TaskEvent | null {
   }
   if (msg.type === 'task:tree-cloned' && isCloneShape(msg.payload)) {
     return { type: 'task:tree-cloned', topic: 'tasks', payload: msg.payload };
+  }
+  if (msg.type === 'task:removed' && isRemovedShape(msg.payload)) {
+    return { type: 'task:removed', topic: 'tasks', payload: msg.payload };
   }
   return null;
 }
@@ -301,10 +311,16 @@ export interface EalClient {
   listTasks(input?: ListTasksInput): Promise<Task[]>;
   getTask(id: number): Promise<TaskDetail>;
   updateTask(id: number, input: UpdateTaskInput): Promise<Task>;
-  completeTask(id: number): Promise<Task>;
-  reopenTask(id: number): Promise<Task>;
+  /**
+   * `today` is the calendar date where the person is standing, `YYYY-MM-DD`.
+   * It decides when a recurring task comes round next, and the server's own
+   * date is UTC's — a day behind a European evening's. A browser sends it; the
+   * CLI and the assistant may leave it out.
+   */
+  completeTask(id: number, opts?: { today?: string }): Promise<TaskStatusChange>;
+  reopenTask(id: number): Promise<TaskStatusChange>;
   /** Move a task along the workflow axis — what a board lane change is. */
-  setTaskStatus(id: number, status: TaskStatus): Promise<Task>;
+  setTaskStatus(id: number, status: TaskStatus, opts?: { today?: string }): Promise<TaskStatusChange>;
   deleteTask(id: number): Promise<Task>;
   restoreTask(id: number): Promise<Task>;
   cloneTask(id: number): Promise<CloneTaskResult>;
@@ -608,6 +624,7 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
     if (input.dueAt !== undefined) body['due_at'] = input.dueAt;
     if (input.sequential !== undefined) body['sequential'] = input.sequential;
     if (input.clientId !== undefined) body['client_id'] = input.clientId;
+    if (input.recurrence !== undefined) body['recurrence'] = input.recurrence;
     return body;
   }
 
@@ -622,6 +639,7 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
     if (input.dueAt !== undefined) body['due_at'] = input.dueAt;
     if (input.position !== undefined) body['position'] = input.position;
     if (input.sequential !== undefined) body['sequential'] = input.sequential;
+    if (input.recurrence !== undefined) body['recurrence'] = input.recurrence;
     return body;
   }
 
@@ -997,19 +1015,22 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
       return task;
     },
 
-    async completeTask(id): Promise<Task> {
-      const { task } = await postJson<{ task: Task }>(`/api/v1/tasks/${id}/complete`, {});
-      return task;
+    async completeTask(id, opts): Promise<TaskStatusChange> {
+      return postJson<TaskStatusChange>(
+        `/api/v1/tasks/${id}/complete`,
+        opts?.today === undefined ? {} : { today: opts.today },
+      );
     },
 
-    async reopenTask(id): Promise<Task> {
-      const { task } = await postJson<{ task: Task }>(`/api/v1/tasks/${id}/reopen`, {});
-      return task;
+    async reopenTask(id): Promise<TaskStatusChange> {
+      return postJson<TaskStatusChange>(`/api/v1/tasks/${id}/reopen`, {});
     },
 
-    async setTaskStatus(id, status): Promise<Task> {
-      const { task } = await postJson<{ task: Task }>(`/api/v1/tasks/${id}/status`, { status });
-      return task;
+    async setTaskStatus(id, status, opts): Promise<TaskStatusChange> {
+      return postJson<TaskStatusChange>(
+        `/api/v1/tasks/${id}/status`,
+        opts?.today === undefined ? { status } : { status, today: opts.today },
+      );
     },
 
     async subscribeUserPush(input): Promise<{ endpoint: string }> {

@@ -8,6 +8,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@eal/client": "workspace:*"
+    "@eal/client": "workspace:*",
+    "@eal/shared": "workspace:*"
   }
 }

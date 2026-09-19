@@ -20,6 +20,7 @@ function task(overrides: Partial<Task> & { id: number; title: string }): Task {
     position: 0,
     sequential: false,
     clientId: null,
+    recurrence: null,
     ...overrides,
   };
 }

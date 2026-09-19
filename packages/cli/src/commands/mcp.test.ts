@@ -181,6 +181,89 @@ describe('eal mcp tools', () => {
     );
   });
 
+  // The two sentences a person actually says, as the rule each should become.
+  test('create_task takes "every Tuesday" and "every 5 days after I do it"', async () => {
+    const bins = await tool('create_task').run(client, {
+      title: 'Put the bins out',
+      due_at: '2026-09-22',
+      recurrence: { every: 'week', days: ['tue'], basis: 'due' },
+    });
+    expect(bins).toBe('Created #1 [task/todo] Put the bins out (due 2026-09-22) (repeats: Every Tuesday)');
+    const plants = await tool('create_task').run(client, {
+      title: 'Water the plants',
+      recurrence: { every: 'days', interval: 5, basis: 'completed' },
+    });
+    expect(plants).toContain('(repeats: Every 5 days after done)');
+    expect(client.peekTasks().map((t) => t.recurrence)).toEqual([
+      { every: 'week', days: ['tue'], basis: 'due' },
+      { every: 'days', interval: 5, basis: 'completed' },
+    ]);
+  });
+
+  test('a rule the api would refuse is refused before it is sent, in the same words', async () => {
+    await expect(
+      tool('create_task').run(client, { title: 'x', recurrence: { every: 'week', days: ['tuesday'], basis: 'due' } }),
+    ).rejects.toThrow('recurrence.days must hold only mon, tue, wed, thu, fri, sat, sun');
+    await expect(
+      tool('create_task').run(client, { title: 'x', recurrence: { every: 'days', interval: 5 } }),
+    ).rejects.toThrow('recurrence.basis must be "due" or "completed"');
+    expect(client.peekTasks()).toEqual([]);
+  });
+
+  test('update_task sets a rule, and null ends the series', async () => {
+    const created = await client.createTask({ title: 'Bins' });
+    const set = await tool('update_task').run(client, {
+      id: created.id,
+      recurrence: { every: 'month', day: 31, basis: 'due' },
+    });
+    expect(set).toContain('(repeats: Monthly on the 31st)');
+    const ended = await tool('update_task').run(client, { id: created.id, recurrence: null });
+    expect(ended).not.toContain('repeats');
+    expect(client.peekTasks()[0]?.recurrence).toBeNull();
+  });
+
+  test('complete_task on a recurring task reports both facts: done, and the next one', async () => {
+    const created = await client.createTask({
+      title: 'Bins',
+      dueAt: '2026-09-22',
+      recurrence: { every: 'days', interval: 7, basis: 'due' },
+    });
+    const out = await tool('complete_task').run(client, { id: created.id });
+    const [first, second] = out.split('\n');
+    expect(first).toBe(`Completed #${created.id} [task/done] Bins (due 2026-09-22)`);
+    expect(second).toMatch(/^It repeats\. Next occurrence: #2 \[task\/todo\] Bins \(due \d{4}-\d{2}-\d{2}\) \(repeats: Every 7 days\)$/);
+  });
+
+  test('reopen_task says when it took an untouched next occurrence back', async () => {
+    const created = await client.createTask({
+      title: 'Bins',
+      dueAt: '2026-09-22',
+      recurrence: { every: 'days', interval: 7, basis: 'due' },
+    });
+    await tool('complete_task').run(client, { id: created.id });
+    const out = await tool('reopen_task').run(client, { id: created.id });
+    expect(out).toContain('was untouched, so it was removed (#2) and this task repeats again');
+    expect(client.peekTasks().map((t) => t.id)).toEqual([created.id]);
+  });
+
+  test('set_task_status into done reports the next occurrence too', async () => {
+    const created = await client.createTask({
+      title: 'Bins',
+      recurrence: { every: 'weekdays', basis: 'completed' },
+    });
+    const out = await tool('set_task_status').run(client, { id: created.id, status: 'done' });
+    expect(out).toContain('It repeats. Next occurrence: #2');
+  });
+
+  test('the recurrence schema tells an assistant which basis a sentence means', () => {
+    const schema = JSON.stringify(tool('create_task').inputSchema);
+    // Not a style check: `basis` is the one field nobody says out loud, and an
+    // assistant given no example guesses "due" for the plants.
+    expect(schema).toContain('every Tuesday');
+    expect(schema).toContain('every 5 days after I do it');
+    expect(schema).toContain('\\"basis\\":\\"completed\\"');
+  });
+
   test('numeric-id tools reject a missing id', async () => {
     await expect(tool('complete_task').run(client, {})).rejects.toThrow(/id must be a number/);
     await expect(tool('get_task').run(client, { id: 'seven' })).rejects.toThrow(/id must be a number/);

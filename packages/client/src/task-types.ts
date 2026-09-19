@@ -1,3 +1,7 @@
+import type { Recurrence } from '@eal/shared';
+
+export type { Recurrence };
+
 /**
  * The three fixed levels a task can sit at: project → epic → task. The epic
  * level is optional — a project may hold tasks directly. Which kind may sit
@@ -64,6 +68,12 @@ export interface Task {
    * where the create landed and its response did not.
    */
   clientId: string | null;
+  /**
+   * The rule this task repeats by, or null — `@eal/shared` recurrence.ts. It
+   * sits on the one live row of a series: completing that row makes the next
+   * occurrence and moves the rule onto it.
+   */
+  recurrence: Recurrence | null;
 }
 
 export interface CreateTaskInput {
@@ -77,6 +87,7 @@ export interface CreateTaskInput {
   sequential?: boolean;
   /** A UUID minted by the device. Sent twice, it still makes one task. */
   clientId?: string;
+  recurrence?: Recurrence | null;
 }
 
 export interface UpdateTaskInput {
@@ -89,6 +100,24 @@ export interface UpdateTaskInput {
   dueAt?: string | null;
   position?: number;
   sequential?: boolean;
+  /** A rule to set, or `null` to end the series. */
+  recurrence?: Recurrence | null;
+}
+
+/**
+ * What a move along the status axis did — `completeTask`, `reopenTask` and
+ * `setTaskStatus` all answer with it.
+ *
+ * `task` is the row that was asked about. `spawned` is the next occurrence a
+ * completion made, root first (more than one row when the task was a
+ * container). `removed` is the ids of an untouched successor that a reopen
+ * took back: those rows are gone, not binned. Both are empty for a task that
+ * does not recur.
+ */
+export interface TaskStatusChange {
+  task: Task;
+  spawned: Task[];
+  removed: number[];
 }
 
 export interface ListTasksInput {
@@ -120,4 +149,6 @@ export type TaskEvent =
   | { type: 'task:created'; topic: 'tasks'; payload: Task }
   | { type: 'task:updated'; topic: 'tasks'; payload: Task }
   | { type: 'task:deleted'; topic: 'tasks'; payload: Task }
-  | { type: 'task:tree-cloned'; topic: 'tasks'; payload: CloneTaskResult };
+  | { type: 'task:tree-cloned'; topic: 'tasks'; payload: CloneTaskResult }
+  /** Rows that no longer exist — an untouched successor, taken back by a reopen. */
+  | { type: 'task:removed'; topic: 'tasks'; payload: { ids: number[] } };

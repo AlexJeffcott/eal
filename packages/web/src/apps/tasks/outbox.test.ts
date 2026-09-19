@@ -7,6 +7,7 @@ import {
   type OutboxSignals,
   type OutboxStorage,
   type TaskOutbox,
+  withKnownRecurrence,
 } from './outbox.ts';
 
 /**
@@ -18,6 +19,11 @@ import {
 
 const ALEX: CurrentUser = { userId: 1, displayName: 'alex' };
 const ELISA: CurrentUser = { userId: 2, displayName: 'elisa' };
+
+/** What outbox-idb.ts checks before it hands a stored row over: not the rule. */
+function isStoredTask(value: unknown): value is Task {
+  return typeof value === 'object' && value !== null && 'id' in value && 'clientId' in value;
+}
 
 function task(id: number, title: string, clientId: string | null): Task {
   return {
@@ -39,6 +45,7 @@ function task(id: number, title: string, clientId: string | null): Task {
     position: 0,
     sequential: false,
     clientId,
+    recurrence: null,
   };
 }
 
@@ -476,6 +483,36 @@ describe('the list copy', () => {
 
     r.signals.$currentUser.value = null;
     expect(await r.outbox.restoreSnapshot()).toBe(false);
+  });
+});
+
+describe('withKnownRecurrence — a list copy older than the code reading it', () => {
+  test('a row written before the field existed reads as "does not repeat"', () => {
+    expect(withKnownRecurrence(task(1, 'Bins', null)).recurrence).toBeNull();
+    // The shape a v46 phone really holds: no key at all.
+    const withoutKey: Record<string, unknown> = { ...task(1, 'Bins', null) };
+    delete withoutKey['recurrence'];
+    const stored: unknown = JSON.parse(JSON.stringify(withoutKey));
+    if (!isStoredTask(stored)) throw new Error('fixture is not a task');
+    expect(withKnownRecurrence(stored).recurrence).toBeNull();
+  });
+
+  test('a rule this build knows survives, canonical', () => {
+    const row = { ...task(1, 'Bins', null), recurrence: { every: 'week', days: ['thu', 'mon'], basis: 'due' } };
+    const stored: unknown = JSON.parse(JSON.stringify(row));
+    if (!isStoredTask(stored)) throw new Error('fixture is not a task');
+    expect(withKnownRecurrence(stored).recurrence).toEqual({
+      every: 'week',
+      days: ['mon', 'thu'],
+      basis: 'due',
+    });
+  });
+
+  test('a rule this build cannot parse reads as "does not repeat", not as a crash', () => {
+    const row = { ...task(1, 'Bins', null), recurrence: { every: 'fortnight', basis: 'due' } };
+    const stored: unknown = JSON.parse(JSON.stringify(row));
+    if (!isStoredTask(stored)) throw new Error('fixture is not a task');
+    expect(withKnownRecurrence(stored).recurrence).toBeNull();
   });
 });
 

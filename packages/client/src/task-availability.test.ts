@@ -30,6 +30,7 @@ function task(overrides: Partial<Task> & { id: number }): Task {
     position: seq,
     sequential: false,
     clientId: null,
+    recurrence: null,
     ...overrides,
   };
 }

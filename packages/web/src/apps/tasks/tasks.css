@@ -257,3 +257,36 @@
   min-inline-size: 44px;
   min-block-size: 44px;
 }
+
+/*
+ * The recurrence editor's weekday toggles. Seven of them, each the same 44px
+ * thumb target as every other control here; the Cluster they sit in wraps, so
+ * at the 350px floor they take two lines rather than widening the editor.
+ */
+[data-action='tasks:toggle-recurrence-day'] {
+  min-block-size: 44px;
+  min-inline-size: 44px;
+}
+
+/*
+ * The recurrence badge holds a sentence ("Every Monday, Tuesday, Wednesday,
+ * Thursday, Friday and Saturday after done"), which is wider than a 350px row.
+ * Measured there before this rule: the document overflowed by 211px.
+ *
+ * polly's Badge sets `white-space: nowrap` on its own element, so the wrap has
+ * to be allowed on that element, not only on the wrapper here. polly's rule
+ * sits in `@layer polly-components` and this one is unlayered, so it wins
+ * without a specificity fight. The sentence wraps rather than truncates: it is
+ * the whole of what the badge has to say, and "Every Monday, Tue…" says less
+ * than nothing.
+ */
+.tasks-recurrence {
+  display: inline-block;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+.tasks-recurrence > * {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  border-radius: var(--polly-radius-md);
+}

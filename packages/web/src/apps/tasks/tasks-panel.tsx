@@ -10,6 +10,7 @@ import {
   TextInput,
 } from '@fairfox/polly/ui';
 import type { HouseholdMember, Task, TaskKind, TaskStatus } from '@eal/client';
+import { describeRecurrence, type Recurrence, type Weekday, WEEKDAYS } from '@eal/shared';
 import { $currentUser } from '../../shell/stores.ts';
 import {
   $boardLane,
@@ -83,6 +84,38 @@ const ORDER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'sequential', label: 'Sequential' },
 ];
 
+/**
+ * The Repeats picker. The four rules of `@eal/shared` recurrence.ts, and the
+ * way out. "Does not repeat" is an option rather than a separate button so
+ * that ending a series is the same gesture as starting one.
+ */
+const REPEAT_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'none', label: 'Does not repeat' },
+  { value: 'days', label: 'Every few days' },
+  { value: 'weekdays', label: 'Every weekday' },
+  { value: 'week', label: 'Weekly, on days' },
+  { value: 'month', label: 'Monthly, on a day' },
+];
+
+/**
+ * Where the count starts. Said as what happens, not as `due`/`completed`: the
+ * difference only shows when a task is done late, so that is how it is named.
+ */
+const BASIS_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'due', label: 'On schedule, even if done late' },
+  { value: 'completed', label: 'Counted from when it is done' },
+];
+
+const DAY_LABELS: Readonly<Record<Weekday, { short: string; long: string }>> = {
+  mon: { short: 'Mo', long: 'Monday' },
+  tue: { short: 'Tu', long: 'Tuesday' },
+  wed: { short: 'We', long: 'Wednesday' },
+  thu: { short: 'Th', long: 'Thursday' },
+  fri: { short: 'Fr', long: 'Friday' },
+  sat: { short: 'Sa', long: 'Saturday' },
+  sun: { short: 'Su', long: 'Sunday' },
+};
+
 /** The lane picker's options — the same four lanes, in the same order. */
 const STATUS_PICKER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = BOARD_LANES.map(
   (lane) => ({ value: lane.status, label: lane.label }),
@@ -130,6 +163,92 @@ function dateValue(iso: string | null): string {
 
 function memberName(users: readonly HouseholdMember[], id: number): string {
   return users.find((u) => u.id === id)?.displayName ?? `user ${id}`;
+}
+
+/**
+ * The recurrence editor. The picker is always there; what follows it is the
+ * one part of the chosen rule that needs saying — how many days, which days,
+ * which day of the month — and then where the count starts. Every control
+ * commits the whole rule the moment it changes, like every other field here.
+ *
+ * Not offered on a finished task: a done row carries no rule (completing it
+ * handed the rule to its successor), and setting one there would start a
+ * second series beside the first.
+ */
+function RecurrenceEditor({ task }: { task: Task }) {
+  const taskId = String(task.id);
+  const rule: Recurrence | null = task.recurrence;
+  return (
+    <div data-task-recurrence-editor>
+      <Layout gap="var(--polly-space-md)">
+        <FilterField label="Repeats">
+          <span data-task-repeats-picker>
+            <ActionSelect
+              value={rule === null ? 'none' : rule.every}
+              options={[...REPEAT_OPTIONS]}
+              action="tasks:set-recurrence-kind"
+              actionData={{ taskId }}
+            />
+          </span>
+        </FilterField>
+        {rule !== null && (rule.every === 'days' || rule.every === 'month') ? (
+          <FilterField label={rule.every === 'days' ? 'Every how many days' : 'Day of the month'}>
+            <span data-task-recurrence-number>
+              <ActionInput
+                inputType="number"
+                saveOn="blur"
+                value={String(rule.every === 'days' ? rule.interval : rule.day)}
+                action="tasks:set-recurrence-number"
+                actionData={{ taskId }}
+                ariaLabel={rule.every === 'days' ? 'Number of days' : 'Day of the month'}
+              />
+            </span>
+          </FilterField>
+        ) : null}
+        {rule !== null && rule.every === 'week' ? (
+          <FilterField label="On">
+            {/* A Cluster, so seven thumb-sized days wrap onto a second line at
+              * 350px instead of pushing the editor wider than the screen. */}
+            <Cluster gap="var(--polly-space-xs)">
+              {WEEKDAYS.map((day) => {
+                const on = rule.days.includes(day);
+                // polly's Button forwards `data-action-*`, `aria-label` and
+                // `title` and nothing else, so an `aria-pressed` here would be
+                // dropped without a word. The state goes in the name instead,
+                // where a screen reader reads it, and on the wrapper, where a
+                // test does.
+                return (
+                  <span key={day} data-recurrence-day={day} data-recurrence-day-on={String(on)}>
+                    <Button
+                      tier={on ? 'primary' : 'tertiary'}
+                      size="small"
+                      data-action="tasks:toggle-recurrence-day"
+                      data-action-task-id={taskId}
+                      data-action-day={day}
+                      aria-label={`${DAY_LABELS[day].long}, ${on ? 'on' : 'off'}`}
+                      label={DAY_LABELS[day].short}
+                    />
+                  </span>
+                );
+              })}
+            </Cluster>
+          </FilterField>
+        ) : null}
+        {rule === null ? null : (
+          <FilterField label="When it comes round">
+            <span data-task-recurrence-basis>
+              <ActionSelect
+                value={rule.basis}
+                options={[...BASIS_OPTIONS]}
+                action="tasks:set-recurrence-basis"
+                actionData={{ taskId }}
+              />
+            </span>
+          </FilterField>
+        )}
+      </Layout>
+    </div>
+  );
 }
 
 interface TaskRowProps {
@@ -208,6 +327,7 @@ function TaskDetail({ task, users }: TaskDetailProps) {
               />
             </FilterField>
           </Layout>
+          {task.status === 'done' ? null : <RecurrenceEditor task={task} />}
           <FilterField label="Assignee">
             <span data-task-assignee-picker>
               <ActionSelect
@@ -280,6 +400,7 @@ function TaskRow({ task, tasksById, index, expandedIds, users }: TaskRowProps) {
     parent !== undefined ||
     progress.total > 0 ||
     task.assignedTo !== null ||
+    task.recurrence !== null ||
     due !== null;
   let titleClass = 'tasks-title';
   if (done) titleClass += ' tasks-title--done';
@@ -391,6 +512,14 @@ function TaskRow({ task, tasksById, index, expandedIds, users }: TaskRowProps) {
               {due !== null ? (
                 <span data-task-due>
                   <Badge variant="default">{due}</Badge>
+                </span>
+              ) : null}
+              {/* Beside the date it explains: "2026-09-22" and "Every Tuesday"
+                * read as one fact. Without it a recurring task is
+                * indistinguishable from a one-off until it comes back. */}
+              {task.recurrence !== null ? (
+                <span data-task-recurrence class="tasks-recurrence">
+                  <Badge variant="info">{`↻ ${describeRecurrence(task.recurrence)}`}</Badge>
                 </span>
               ) : null}
             </Cluster>

@@ -1,5 +1,14 @@
 import type { ActionRegistry } from '@fairfox/polly/actions';
-import type { Task, TaskKind, UpdateTaskInput } from '@eal/client';
+import type { Task, TaskKind, TaskStatusChange, UpdateTaskInput } from '@eal/client';
+import {
+  defaultRecurrence,
+  MAX_INTERVAL_DAYS,
+  type Recurrence,
+  type RecurrenceKind,
+  type Weekday,
+  WEEKDAYS,
+} from '@eal/shared';
+import { localDateToday } from '../../platform/local-date.ts';
 import type { AppStores } from '../../stores.ts';
 import {
   dropPushSubscription,
@@ -50,6 +59,34 @@ function patchTasks(stores: AppStores, mutate: (map: Map<number, Task>) => void)
   const next = new Map(stores.$tasksById.value);
   mutate(next);
   stores.$tasksById.value = next;
+}
+
+/**
+ * Splice what a status move did into the store: the row itself, the next
+ * occurrence a completion spawned, and minus the successor a reopen took back.
+ * The WS says the same three things a moment later, with identical rows.
+ */
+function applyStatusChange(stores: AppStores, change: TaskStatusChange): void {
+  patchTasks(stores, (m) => {
+    m.set(change.task.id, change.task);
+    for (const row of change.spawned) m.set(row.id, row);
+    for (const id of change.removed) m.delete(id);
+  });
+}
+
+function isRecurrenceKind(value: string): value is RecurrenceKind {
+  return value === 'days' || value === 'weekdays' || value === 'week' || value === 'month';
+}
+
+function isWeekday(value: string): value is Weekday {
+  return WEEKDAYS.some((d) => d === value);
+}
+
+/** A whole number in range from a number field, or null for anything else. */
+function wholeNumber(raw: string, min: number, max: number): number | null {
+  if (!/^\d+$/.test(raw.trim())) return null;
+  const n = Number(raw.trim());
+  return n >= min && n <= max ? n : null;
 }
 
 /** Parse the `data-action-task-id` carried on a task control. */
@@ -260,10 +297,12 @@ export const TASKS_ACTIONS: ActionRegistry<AppStores> = {
     // card to Doing before you may finish it would be a tax on the fast path.
     const completing = current.status !== 'done';
     try {
-      const task = completing
-        ? await stores.client.completeTask(id)
+      // A recurring task comes round again "after today", and today is the
+      // date on this device, not the server's UTC one.
+      const change = completing
+        ? await stores.client.completeTask(id, { today: localDateToday() })
         : await stores.client.reopenTask(id);
-      patchTasks(stores, (m) => m.set(task.id, task));
+      applyStatusChange(stores, change);
       // Linger: a task you just completed stays visible (with a strike-through)
       // until you navigate, instead of vanishing under a status=open / today
       // filter. Reopening removes the linger mark — it's open again.
@@ -370,6 +409,83 @@ export const TASKS_ACTIONS: ActionRegistry<AppStores> = {
     void commitTaskField(stores, id, { sequential: value === 'sequential' });
   },
 
+  // The recurrence editor. Four controls, one rule: each reads the rule the
+  // row has now, changes its one part, and commits the whole rule — the server
+  // takes a rule or null, never a fragment.
+  'tasks:set-recurrence-kind': ({ data, stores }) => {
+    const id = taskIdFromData(data);
+    const value = data['value'];
+    if (id === null || typeof value !== 'string') return;
+    const task = stores.$tasksById.value.get(id);
+    if (!task) return;
+    if (value === 'none') {
+      void commitTaskField(stores, id, { recurrence: null });
+      return;
+    }
+    if (!isRecurrenceKind(value) || task.recurrence?.every === value) return;
+    // Picking "weekly" on a task due on a Tuesday means Tuesdays. The basis is
+    // the one part of the old rule that still makes sense under a new kind.
+    const next = defaultRecurrence(value, task.dueAt ?? localDateToday());
+    void commitTaskField(stores, id, {
+      recurrence: task.recurrence === null ? next : { ...next, basis: task.recurrence.basis },
+    });
+  },
+
+  'tasks:set-recurrence-basis': ({ data, stores }) => {
+    const id = taskIdFromData(data);
+    const value = data['value'];
+    if (id === null || (value !== 'due' && value !== 'completed')) return;
+    const rule = stores.$tasksById.value.get(id)?.recurrence;
+    if (rule === null || rule === undefined) return;
+    void commitTaskField(stores, id, { recurrence: { ...rule, basis: value } });
+  },
+
+  'tasks:set-recurrence-number': ({ data, stores }) => {
+    // "Every N days" and "monthly on day N" share a field and an action: which
+    // one N is, the rule already says.
+    const id = taskIdFromData(data);
+    const value = data['value'];
+    if (id === null || typeof value !== 'string') return;
+    const rule = stores.$tasksById.value.get(id)?.recurrence;
+    if (rule === null || rule === undefined) return;
+    let next: Recurrence | null = null;
+    if (rule.every === 'days') {
+      const interval = wholeNumber(value, 1, MAX_INTERVAL_DAYS);
+      if (interval !== null) next = { ...rule, interval };
+    } else if (rule.every === 'month') {
+      const day = wholeNumber(value, 1, 31);
+      if (day !== null) next = { ...rule, day };
+    }
+    if (next === null) {
+      stores.$tasksError.value =
+        rule.every === 'month'
+          ? 'Pick a day of the month from 1 to 31.'
+          : `Pick a number of days from 1 to ${MAX_INTERVAL_DAYS}.`;
+      return;
+    }
+    void commitTaskField(stores, id, { recurrence: next });
+  },
+
+  'tasks:toggle-recurrence-day': ({ data, stores }) => {
+    const id = taskIdFromData(data);
+    const day = data['day'];
+    if (id === null || typeof day !== 'string' || !isWeekday(day)) return;
+    const rule = stores.$tasksById.value.get(id)?.recurrence;
+    if (rule === null || rule === undefined || rule.every !== 'week') return;
+    const days = rule.days.includes(day)
+      ? rule.days.filter((d) => d !== day)
+      : WEEKDAYS.filter((d) => d === day || rule.days.includes(d));
+    // A weekly rule with no day is not a rule. Unticking the last one is
+    // refused rather than read as "stop repeating" — the Repeats picker says
+    // that, and says it on purpose.
+    if (days.length === 0) {
+      stores.$tasksError.value = 'A weekly task needs at least one day. Set Repeats to "Does not repeat" to stop it.';
+      return;
+    }
+    stores.$tasksError.value = null;
+    void commitTaskField(stores, id, { recurrence: { ...rule, days } });
+  },
+
   'tasks:set-status': async ({ data, stores }) => {
     // The lane picker on a board card, and the Status field in the detail
     // editor — one action, because moving a card and choosing a state from the
@@ -379,8 +495,8 @@ export const TASKS_ACTIONS: ActionRegistry<AppStores> = {
     if (id === null || typeof value !== 'string' || !isTaskStatus(value)) return;
     stores.$tasksError.value = null;
     try {
-      const task = await stores.client.setTaskStatus(id, value);
-      patchTasks(stores, (m) => m.set(task.id, task));
+      const change = await stores.client.setTaskStatus(id, value, { today: localDateToday() });
+      applyStatusChange(stores, change);
       // Same linger rule the checkbox follows: a card moved into Done stays
       // visible under a status filter until the next navigation, and one moved
       // back out loses the mark.

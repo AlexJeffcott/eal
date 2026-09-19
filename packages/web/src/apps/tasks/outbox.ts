@@ -32,6 +32,26 @@
  * a killed server and a reload, is scripts/e2e-offline-capture.ts.
  */
 import { ServerRefusedError, type CurrentUser, type EalClient, type Task } from '@eal/client';
+import { parseRecurrence } from '@eal/shared';
+
+/**
+ * Bring a row read from the list copy up to the shape this build expects.
+ *
+ * A copy outlives the code that wrote it: a phone that last synced under a
+ * build with no `recurrence` field holds rows without one, and the panel reads
+ * `task.recurrence !== null` as "this task repeats". So a missing rule, or one
+ * this build cannot parse, reads as "does not repeat" — wrong for at most the
+ * length of the outage, where a crash would be wrong for all of it.
+ */
+export function withKnownRecurrence(task: Task): Task {
+  const stored: unknown = Reflect.get(task, 'recurrence');
+  if (stored === undefined || stored === null) return { ...task, recurrence: null };
+  try {
+    return { ...task, recurrence: parseRecurrence(stored) };
+  } catch {
+    return { ...task, recurrence: null };
+  }
+}
 
 export interface OutboxEntry {
   /** The UUID the server deduplicates on. */

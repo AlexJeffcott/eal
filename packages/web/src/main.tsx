@@ -44,10 +44,20 @@ function applyTaskEvent(event: TaskEvent): void {
   const next = new Map($tasksById.value);
   if (event.type === 'task:tree-cloned') {
     for (const t of event.payload.tasks) next.set(t.id, t);
+  } else if (event.type === 'task:removed') {
+    // Gone, not binned: an untouched successor taken back by a reopen.
+    for (const id of event.payload.ids) next.delete(id);
   } else {
     next.set(event.payload.id, event.payload);
   }
   $tasksById.value = next;
+}
+
+/** The rows an event carries — what the outbox matches its waiting captures against. */
+function rowsOf(event: TaskEvent): readonly Task[] {
+  if (event.type === 'task:tree-cloned') return event.payload.tasks;
+  if (event.type === 'task:removed') return [];
+  return [event.payload];
 }
 
 function seedTasks(tasks: readonly Task[]): void {
@@ -316,9 +326,7 @@ async function bootstrap(): Promise<void> {
     // The broadcast of a capture this device is still holding as pending: its
     // response was lost, or has simply not arrived yet. Either way the row is
     // here now, and the entry has done its job.
-    stores.outbox.reconcile(
-      event.type === 'task:tree-cloned' ? event.payload.tasks : [event.payload],
-    );
+    stores.outbox.reconcile(rowsOf(event));
   });
   // Keep the offline copy of the list current. A no-op until a seed has
   // succeeded, so an empty boot cannot overwrite a good copy.

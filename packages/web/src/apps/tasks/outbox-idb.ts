@@ -20,6 +20,7 @@ import {
   type OutboxSignals,
   type OutboxStorage,
   type TaskOutbox,
+  withKnownRecurrence,
 } from './outbox.ts';
 
 const DB_NAME = 'eal-tasks-offline';
@@ -125,7 +126,7 @@ export const idbOutboxStorage: OutboxStorage = {
       tx.objectStore(SNAPSHOT).get(userId),
     );
     if (!Array.isArray(stored)) return null;
-    return stored.filter(isTask);
+    return stored.filter(isTask).map(withKnownRecurrence);
   },
 
   async clear(): Promise<void> {

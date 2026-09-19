@@ -23,11 +23,14 @@ import type {
   Task,
   TaskDetail,
   TaskEvent,
+  TaskStatus,
+  TaskStatusChange,
   UpdatePstnContactInput,
   UpsertAgentRuleInput,
   VoiceMessage,
   WsConnectionState,
 } from '@eal/client';
+import { dayNumber, nextOccurrence, parseRecurrence, shiftDate, utcDateOf } from '@eal/shared';
 
 export interface MockEalClient extends EalClient {
   /**
@@ -105,6 +108,11 @@ export interface MockEalClient extends EalClient {
 interface MockStore {
   byId: Map<number, Task>;
   nextId: number;
+  /**
+   * Completed row → the successor it spawned, for as long as nobody has touched
+   * that successor. The server keeps this as the `spawn_group` column.
+   */
+  untouchedSuccessor: Map<number, number>;
 }
 
 function isoNow(): string {
@@ -139,6 +147,12 @@ function newTaskRow(input: CreateTaskInput, id: number, principalId: number): Ta
     // someone says otherwise.
     sequential: input.sequential ?? false,
     clientId: input.clientId ?? null,
+    // The same parser the server runs, so a browser-tier test cannot store a
+    // rule the api would have refused.
+    recurrence:
+      input.recurrence === undefined || input.recurrence === null
+        ? null
+        : parseRecurrence(input.recurrence),
   };
 }
 
@@ -219,7 +233,7 @@ export function createMockEalClient(): MockEalClient {
   let nextSignInError: Error | null = null;
   let nextRegisterError: Error | null = null;
   let nextTaskError: Error | null = null;
-  let store: MockStore = { byId: new Map(), nextId: 1 };
+  let store: MockStore = { byId: new Map(), nextId: 1, untouchedSuccessor: new Map() };
   let sentChats: string[] = [];
   let chatReplies: ChatAgentReply[] = [];
   let seededMessages: Message[] = [];
@@ -242,6 +256,93 @@ export function createMockEalClient(): MockEalClient {
 
   function emit(event: TaskEvent): void {
     for (const h of taskEventSubscribers) h(event);
+  }
+
+  /** Any write to a successor makes it a touched one — see `moveStatus`. */
+  function touch(id: number): void {
+    for (const [completedId, successorId] of store.untouchedSuccessor) {
+      if (successorId === id) store.untouchedSuccessor.delete(completedId);
+    }
+  }
+
+  /**
+   * Recurrence, as far as the mock copies it: a completed recurring row spawns
+   * its next occurrence and hands it the rule, and reopening takes an untouched
+   * successor back. The date is the server's own function (`@eal/shared`
+   * nextOccurrence), so the two cannot disagree about when Tuesday is.
+   *
+   * What it does NOT copy: a recurring container's subtree. The successor here
+   * is always the one row. The browser tier renders what it is given, and the
+   * tree is the api's to prove (scripts/e2e-tasks-recurrence.ts).
+   */
+  function moveStatus(
+    id: number,
+    status: TaskStatus,
+    userId: number,
+    today: string | undefined,
+  ): TaskStatusChange {
+    const task = store.byId.get(id);
+    if (!task || task.deletedAt !== null) throw new Error(`task ${id} not found or in trash`);
+    if (task.status === status) return { task: snapshot(task), spawned: [], removed: [] };
+    touch(id);
+    const now = isoNow();
+    let updated: Task = {
+      ...task,
+      status,
+      // The storage CHECK ties the two together server-side; the mock keeps
+      // the same tie so a browser-tier test cannot see a shape the api
+      // would never send.
+      completedAt: status === 'done' ? now : null,
+      updatedBy: userId,
+      updatedAt: now,
+    };
+    const spawned: Task[] = [];
+    const removed: number[] = [];
+
+    if (status === 'done' && task.recurrence !== null) {
+      const day = today ?? utcDateOf(new Date());
+      const timeOfDay = task.dueAt === null ? '' : task.dueAt.slice(10);
+      const anchor =
+        task.recurrence.basis === 'due' && task.dueAt !== null ? task.dueAt : day + timeOfDay;
+      const dueAt = nextOccurrence(task.recurrence, anchor, day);
+      const shiftDays =
+        dayNumber(dueAt.slice(0, 10)) - dayNumber(task.dueAt === null ? day : task.dueAt.slice(0, 10));
+      const successorId = store.nextId++;
+      const successor: Task = {
+        ...task,
+        id: successorId,
+        status: 'todo',
+        completedAt: null,
+        dueAt,
+        deferUntil: task.deferUntil === null ? null : shiftDate(task.deferUntil, shiftDays),
+        clientId: null,
+        updatedBy: userId,
+        createdAt: now,
+        updatedAt: now,
+      };
+      store.byId.set(successorId, successor);
+      store.untouchedSuccessor.set(id, successorId);
+      updated = { ...updated, recurrence: null };
+      spawned.push(snapshot(successor));
+    }
+
+    if (task.status === 'done') {
+      const successorId = store.untouchedSuccessor.get(id);
+      const successor = successorId === undefined ? undefined : store.byId.get(successorId);
+      if (successorId !== undefined && successor !== undefined) {
+        store.byId.delete(successorId);
+        store.untouchedSuccessor.delete(id);
+        if (updated.recurrence === null) updated = { ...updated, recurrence: successor.recurrence };
+        removed.push(successorId);
+      }
+    }
+
+    store.byId.set(id, updated);
+    const out = snapshot(updated);
+    emit({ type: 'task:updated', topic: 'tasks', payload: out });
+    for (const row of spawned) emit({ type: 'task:created', topic: 'tasks', payload: row });
+    if (removed.length > 0) emit({ type: 'task:removed', topic: 'tasks', payload: { ids: removed } });
+    return { task: out, spawned, removed };
   }
 
   function snapshot(task: Task): Task {
@@ -636,6 +737,7 @@ export function createMockEalClient(): MockEalClient {
       const user = requireSignedIn();
       const task = store.byId.get(id);
       if (!task || task.deletedAt !== null) throw new Error(`task ${id} not found or in trash`);
+      touch(id);
       const updated: Task = {
         ...task,
         ...(input.title !== undefined ? { title: input.title.trim() } : {}),
@@ -647,6 +749,9 @@ export function createMockEalClient(): MockEalClient {
         ...(input.dueAt !== undefined ? { dueAt: input.dueAt } : {}),
         ...(input.position !== undefined ? { position: input.position } : {}),
         ...(input.sequential !== undefined ? { sequential: input.sequential } : {}),
+        ...(input.recurrence !== undefined
+          ? { recurrence: input.recurrence === null ? null : parseRecurrence(input.recurrence) }
+          : {}),
         updatedBy: user.userId,
         updatedAt: isoNow(),
       };
@@ -656,42 +761,19 @@ export function createMockEalClient(): MockEalClient {
       return out;
     },
 
-    async completeTask(id): Promise<Task> {
+    async completeTask(id, opts): Promise<TaskStatusChange> {
       consumeTaskError();
       const user = requireSignedIn();
-      const task = store.byId.get(id);
-      if (!task || task.deletedAt !== null) throw new Error(`task ${id} not found or in trash`);
-      if (task.status === 'done') return snapshot(task);
-      const updated: Task = {
-        ...task,
-        status: 'done',
-        completedAt: isoNow(),
-        updatedBy: user.userId,
-        updatedAt: isoNow(),
-      };
-      store.byId.set(id, updated);
-      const out = snapshot(updated);
-      emit({ type: 'task:updated', topic: 'tasks', payload: out });
-      return out;
+      return moveStatus(id, 'done', user.userId, opts?.today);
     },
 
-    async reopenTask(id): Promise<Task> {
+    async reopenTask(id): Promise<TaskStatusChange> {
       consumeTaskError();
       const user = requireSignedIn();
       const task = store.byId.get(id);
       if (!task || task.deletedAt !== null) throw new Error(`task ${id} not found or in trash`);
-      if (task.status !== 'done') return snapshot(task);
-      const updated: Task = {
-        ...task,
-        status: 'todo',
-        completedAt: null,
-        updatedBy: user.userId,
-        updatedAt: isoNow(),
-      };
-      store.byId.set(id, updated);
-      const out = snapshot(updated);
-      emit({ type: 'task:updated', topic: 'tasks', payload: out });
-      return out;
+      if (task.status !== 'done') return { task: snapshot(task), spawned: [], removed: [] };
+      return moveStatus(id, 'todo', user.userId, undefined);
     },
 
     async subscribeUserPush(input): Promise<{ endpoint: string }> {
@@ -709,26 +791,10 @@ export function createMockEalClient(): MockEalClient {
       return { removed: pushSubscriptions.length < before };
     },
 
-    async setTaskStatus(id, status): Promise<Task> {
+    async setTaskStatus(id, status, opts): Promise<TaskStatusChange> {
       consumeTaskError();
       const user = requireSignedIn();
-      const task = store.byId.get(id);
-      if (!task || task.deletedAt !== null) throw new Error(`task ${id} not found or in trash`);
-      if (task.status === status) return snapshot(task);
-      const updated: Task = {
-        ...task,
-        status,
-        // The storage CHECK ties the two together server-side; the mock keeps
-        // the same tie so a browser-tier test cannot see a shape the api
-        // would never send.
-        completedAt: status === 'done' ? isoNow() : null,
-        updatedBy: user.userId,
-        updatedAt: isoNow(),
-      };
-      store.byId.set(id, updated);
-      const out = snapshot(updated);
-      emit({ type: 'task:updated', topic: 'tasks', payload: out });
-      return out;
+      return moveStatus(id, status, user.userId, opts?.today);
     },
 
     async deleteTask(id): Promise<Task> {
@@ -736,6 +802,7 @@ export function createMockEalClient(): MockEalClient {
       const user = requireSignedIn();
       const task = store.byId.get(id);
       if (!task) throw new Error(`task ${id} not found`);
+      touch(id);
       const updated: Task = {
         ...task,
         deletedAt: task.deletedAt ?? isoNow(),
@@ -926,7 +993,7 @@ export function createMockEalClient(): MockEalClient {
       nextSignInError = null;
       nextRegisterError = null;
       nextTaskError = null;
-      store = { byId: new Map(), nextId: 1 };
+      store = { byId: new Map(), nextId: 1, untouchedSuccessor: new Map() };
       sentChats = [];
       chatReplies = [];
       seededMessages = [];

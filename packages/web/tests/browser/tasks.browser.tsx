@@ -45,6 +45,8 @@ function signedIn() {
     const next = new Map(stores.$tasksById.value);
     if (event.type === 'task:tree-cloned') {
       for (const t of event.payload.tasks) next.set(t.id, t);
+    } else if (event.type === 'task:removed') {
+      for (const id of event.payload.ids) next.delete(id);
     } else {
       next.set(event.payload.id, event.payload);
     }
@@ -273,6 +275,7 @@ describe('Tasks UI (browser)', () => {
         position: 50,
         sequential: false,
         clientId: null,
+        recurrence: null,
       };
       stores.$tasksById.value = new Map([...stores.$tasksById.value, [mineId, mine]]);
       // Assigned tasks aren't in the Inbox view — switch to All.
@@ -371,6 +374,7 @@ describe('Tasks UI (browser)', () => {
         position: 0,
         sequential: false,
         clientId: null,
+        recurrence: null,
       };
       stores.$tasksById.value = new Map([[seeded.id, seeded]]);
       await waitFor(() => rowIds().length === 1);
@@ -1065,6 +1069,151 @@ describe('the reminder control', () => {
     await waitFor(() => $reminderState.value !== 'working');
     expect(['off', 'denied', 'unsupported']).toContain($reminderState.value);
     expect(mock.peekPushSubscriptions()).toHaveLength(0);
+  });
+});
+
+describe('recurring tasks', () => {
+  async function openEditor(title: string): Promise<number> {
+    signedIn();
+    const id = await addTask(title);
+    clickAction('tasks:expand', { 'task-id': String(id) });
+    await waitFor(() => document.querySelector('[data-task-recurrence-editor]') !== null);
+    return id;
+  }
+
+  const rule = (id: number) => stores.$tasksById.value.get(id)?.recurrence ?? null;
+  const badge = (id: number): string | null =>
+    document.querySelector(`[data-task-id="${id}"] [data-task-recurrence]`)?.textContent ?? null;
+
+  test('a task that does not repeat shows the picker and nothing else', async () => {
+    const id = await openEditor('Post the letter');
+    expect(document.querySelector('[data-task-repeats-picker]')).not.toBeNull();
+    expect(document.querySelector('[data-task-recurrence-number]')).toBeNull();
+    expect(document.querySelector('[data-task-recurrence-basis]')).toBeNull();
+    expect(document.querySelectorAll('[data-recurrence-day]')).toHaveLength(0);
+    expect(badge(id)).toBeNull();
+  });
+
+  test('choosing weekly on a task due on a Tuesday means Tuesdays, and the row says so', async () => {
+    const id = await openEditor('Put the bins out');
+    commit('tasks:edit-due', { taskId: String(id), value: '2026-09-22' });
+    await waitFor(() => stores.$tasksById.value.get(id)?.dueAt === '2026-09-22');
+
+    commit('tasks:set-recurrence-kind', { taskId: String(id), value: 'week' });
+    await waitFor(() => rule(id) !== null);
+    expect(rule(id)).toEqual({ every: 'week', days: ['tue'], basis: 'due' });
+    await waitFor(() => badge(id) !== null);
+    expect(badge(id)).toContain('Every Tuesday');
+
+    // Seven day toggles, one pressed.
+    await waitFor(() => document.querySelectorAll('[data-recurrence-day]').length === 7);
+    const days = Array.from(document.querySelectorAll<HTMLElement>('[data-recurrence-day]'));
+    expect(
+      days
+        .filter((d) => d.getAttribute('data-recurrence-day-on') === 'true')
+        .map((d) => d.getAttribute('data-recurrence-day')),
+    ).toEqual(['tue']);
+    // The state is in the accessible name: the Button forwards no aria-pressed.
+    expect(days.map((d) => d.querySelector('button')?.getAttribute('aria-label'))).toContain('Tuesday, on');
+    expect(days.map((d) => d.querySelector('button')?.getAttribute('aria-label'))).toContain('Monday, off');
+  });
+
+  test('toggling days adds and removes them in week order; the last one cannot be removed', async () => {
+    const id = await openEditor('Gym');
+    commit('tasks:edit-due', { taskId: String(id), value: '2026-09-24' });
+    await waitFor(() => stores.$tasksById.value.get(id)?.dueAt === '2026-09-24');
+    commit('tasks:set-recurrence-kind', { taskId: String(id), value: 'week' });
+    await waitFor(() => rule(id) !== null);
+
+    clickAction('tasks:toggle-recurrence-day', { 'task-id': String(id), day: 'mon' });
+    await waitFor(() => badge(id)?.includes('Monday and Thursday') === true);
+    expect(rule(id)).toEqual({ every: 'week', days: ['mon', 'thu'], basis: 'due' });
+
+    clickAction('tasks:toggle-recurrence-day', { 'task-id': String(id), day: 'thu' });
+    await waitFor(() => badge(id)?.includes('Every Monday') === true);
+
+    clickAction('tasks:toggle-recurrence-day', { 'task-id': String(id), day: 'mon' });
+    await waitFor(() => stores.$tasksError.value !== null);
+    expect(stores.$tasksError.value).toContain('needs at least one day');
+    expect(rule(id)).toEqual({ every: 'week', days: ['mon'], basis: 'due' });
+  });
+
+  test('every few days: the number and the basis each commit the whole rule', async () => {
+    const id = await openEditor('Water the plants');
+    commit('tasks:set-recurrence-kind', { taskId: String(id), value: 'days' });
+    await waitFor(() => rule(id) !== null);
+    await waitFor(() => document.querySelector('[data-task-recurrence-number]') !== null);
+
+    commit('tasks:set-recurrence-number', { taskId: String(id), value: '5' });
+    await waitFor(() => badge(id)?.includes('Every 5 days') === true);
+    commit('tasks:set-recurrence-basis', { taskId: String(id), value: 'completed' });
+    await waitFor(() => badge(id)?.includes('after done') === true);
+    expect(rule(id)).toEqual({ every: 'days', interval: 5, basis: 'completed' });
+
+    // Changing the kind keeps the one part that still makes sense: the basis.
+    commit('tasks:set-recurrence-kind', { taskId: String(id), value: 'weekdays' });
+    await waitFor(() => rule(id)?.every === 'weekdays');
+    expect(rule(id)).toEqual({ every: 'weekdays', basis: 'completed' });
+  });
+
+  test('a number out of range is refused in words and changes nothing', async () => {
+    const id = await openEditor('Rent');
+    commit('tasks:set-recurrence-kind', { taskId: String(id), value: 'month' });
+    await waitFor(() => rule(id) !== null);
+    const before = rule(id);
+
+    for (const value of ['0', '32', '1.5', 'first', '']) {
+      stores.$tasksError.value = null;
+      commit('tasks:set-recurrence-number', { taskId: String(id), value });
+      await waitFor(() => stores.$tasksError.value !== null);
+      const said: string | null = stores.$tasksError.peek();
+      expect(said).toBe('Pick a day of the month from 1 to 31.');
+    }
+    expect(rule(id)).toEqual(before);
+
+    commit('tasks:set-recurrence-number', { taskId: String(id), value: '31' });
+    await waitFor(() => badge(id)?.includes('Monthly on the 31st') === true);
+  });
+
+  test('"Does not repeat" ends the series and the badge goes', async () => {
+    const id = await openEditor('Bins');
+    commit('tasks:set-recurrence-kind', { taskId: String(id), value: 'weekdays' });
+    await waitFor(() => badge(id) !== null);
+    commit('tasks:set-recurrence-kind', { taskId: String(id), value: 'none' });
+    await waitFor(() => rule(id) === null);
+    await waitFor(() => badge(id) === null);
+  });
+
+  test('ticking a recurring task shows the next one at once; unticking takes it back', async () => {
+    const id = await openEditor('Bins');
+    commit('tasks:set-recurrence-kind', { taskId: String(id), value: 'days' });
+    await waitFor(() => rule(id) !== null);
+
+    clickAction('tasks:toggle', { 'task-id': String(id) });
+    await waitFor(() => rowIds().length === 2);
+    const successorId = rowIds().find((r) => r !== id) ?? -1;
+    expect(stores.$tasksById.value.get(successorId)?.status).toBe('todo');
+    // The rule moved on: the badge is on the new row and off the finished one.
+    await waitFor(() => badge(successorId) !== null);
+    expect(badge(id)).toBeNull();
+    // …and a finished row offers no recurrence editor to start a second series.
+    expect(document.querySelector(`[data-task-id="${id}"] [data-task-recurrence-editor]`)).toBeNull();
+
+    clickAction('tasks:toggle', { 'task-id': String(id) });
+    await waitFor(() => rowIds().length === 1);
+    expect(stores.$tasksById.value.has(successorId)).toBe(false);
+    await waitFor(() => badge(id) !== null);
+  });
+
+  test('a capture still waiting to send offers no recurrence control', async () => {
+    signedIn();
+    mock.mockTaskError(new TypeError('Failed to fetch'));
+    $quickAddTitle.value = 'Written in the tunnel';
+    clickAction('tasks:quick-add');
+    await waitFor(() => document.querySelector('[data-task-pending]') !== null);
+    const pending = document.querySelector('[data-task-pending]');
+    expect(pending?.querySelector('[data-task-recurrence-editor]')).toBeNull();
+    expect(pending?.querySelector('[data-action]')).toBeNull();
   });
 });
 
