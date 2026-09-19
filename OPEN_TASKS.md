@@ -152,8 +152,11 @@ what remains there is a machine to install it on.
       Doing it properly needs either a second position column scoped to the
       lane, or fractional indexing.
 
-- [>] **05 — Recurring tasks.** **Built on branch `recurring-tasks`,
-      2026-09-19. Not merged, not deployed.** Four rules (every N days,
+- [>] **05 — Recurring tasks.** **Live, release v47, 2026-09-19T19:22Z.**
+      Read from the deployment: the bundle carries the recurrence editor, the
+      machine passes its check, and the boot log shows no migration error. No
+      signed-in request has been made against it; the first recurring task made
+      on the phone is that reading. Four rules (every N days,
       weekdays, weekly on days, monthly on day N), each counted from the due
       date or from completion, as calendar-date arithmetic in `@eal/shared`.
       Completing a recurring row — by the tick box, the board or the assistant
@@ -217,13 +220,14 @@ user-facing feature works.
 Found 2026-09-19 when the owner could not sign in on the laptop PWA: the
 session had run its fixed 30 days, and the installed PWA window offered only
 the platform's phone QR code, because the password manager holding the passkey
-does not run there.
+does not run there. Both fixes below are live in release v47: the deployed
+bundle carries `auth:link-start`, and `POST /public/auth/cli-pair/start`
+answers with a code. Neither has been used on a real device yet.
 
-- [x] **A session ends 30 days after its last use, not after sign-in.** Built
-      on branch `signin-recovery`. `verify()` moves `expires_at` to one lifetime
+- [x] **A session ends 30 days after its last use, not after sign-in.** `verify()` moves `expires_at` to one lifetime
       from the use, at most once a day; `sessions.ttl_ms` carries the lifetime,
       and a row from before the column takes it from its own two dates.
-- [x] **"Link this browser".** Built on the same branch. The sign-in page shows
+- [x] **"Link this browser".** The sign-in page shows
       a code; a signed-in device claims it under Menu → "Pair a device"; the
       poll hands the new browser a session. It is the device-code flow
       `eal auth pair` already used, and the server is unchanged. Proved by
