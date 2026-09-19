@@ -264,12 +264,38 @@ committed; none of it has met a real trunk. See `docs/family-phone.md`.
       see the measured entry below. On country: the DID's main job is the
       outbound caller ID, because inbound over PSTN is rare (friends and
       family reach the handsets over the VoIP path, which needs no number).
-      So it must not be Italian — AGCOM, below. Undecided, and the figure
-      that decides it: Twilio's outbound CSV prices a call to an Italian
-      mobile at $0.3473/min but $0.0445/min **from EEA**, 7.8× apart. If
-      that split keys on the `From` number's country, Estonia Mobile
-      ($3.00/mo, any worldwide address, ID only) wins; if not, US Local
-      ($1.15/mo, no regulatory bundle at all) does. The UK is not EEA.
+      So it must not be Italian — AGCOM, below. **Settled 2026-09-19: buy
+      Estonia Local.** The rate does key on the `From` number's country, so
+      the first branch applies — but the figure that framed the choice was
+      misread, and the choice is not close.
+
+      Measured against the live Pricing API, destination `+393331234567`
+      (`GET pricing.twilio.com/v2/Voice/Numbers/{dest}?OriginationNumber=`).
+      `base_price` equals `current_price` in every row, so these are list
+      prices, not an account rate:
+
+      | Origin prefix of `From` | $/min to an Italian mobile |
+      |---|---|
+      | 30–49 EU block, and **44 — the UK is in this tier** | 0.0445 |
+      | 1 — US/CA mainland | 0.0476 |
+      | `ROW`, and the NANP Caribbean prefixes (1242, 1246, …) | 0.3473 |
+
+      The 7.8× gap is EEA against **rest-of-world**, not EEA against US. A
+      US caller ID costs 7% more than an EEA one, not 780% more. `$0.3473`
+      is what a caller ID from neither tier pays. The old line also said the
+      UK is not EEA: true, and irrelevant here — Twilio puts `44` in the
+      cheap tier regardless.
+
+      Origin-based pricing applies to the mobile destination only. An
+      Italian *landline* destination is `0.0168/min` from origin `ALL`.
+
+      Estonia **Local**, not Mobile: `$1.00/mo` against US Local's `$1.15`.
+      Voice-enabled stock is in hand, `address_requirements: any`, and the
+      regulatory bundle asks for `first_name`, `last_name` and one name
+      document — no Estonian address, same terms the old line credited to
+      Estonia Mobile at three times the price. It is therefore cheaper per
+      month *and* cheaper per minute than US Local, so no break-even minute
+      count decides it. An Estonian CLI is not Italian, so AGCOM passes.
 - [ ] Point the Twilio console webhook at
       `https://eal.fly.dev/api/family-phone/twilio/voice`. `EAL_ORIGIN`
       (`fly.toml:22`) must equal that URL's origin exactly — the api rebuilds
