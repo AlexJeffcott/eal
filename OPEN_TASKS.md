@@ -327,24 +327,25 @@ full script path, so they work either way.
       they pin their own trunk config. Either set the real number when it is
       bought, or set `TWILIO_ENABLED=false` until then.
 - [ ] **Rotate the Twilio auth token and account SID in `.env`.** Both were
-      printed into an assistant session transcript on 2026-08-24. **Read this
-      alongside the push-protection item above**: if the SID in those five June
-      test files is the same string as the one in `.env`, allowing the push
-      publishes it, and rotating first is the cheaper order. Nobody has
-      compared the two values.
-- [!] **Nothing has ever been pushed, and the first attempt was refused.**
-      `git ls-remote --heads upstream` still returns no refs, so
-      `https://github.com/AlexJeffcott/eal.git` is empty. This disk and the
-      deployed image are the only copies of every commit.
-      `git push upstream main` on 2026-09-06 was rejected by **GitHub push
-      protection, GH013**: it reads a Twilio Account String Identifier in five
+      printed into an assistant session transcript on 2026-08-24. The git side
+      of this is now measured, 2026-09-19: the SID in those five June test
+      files starts `AC0123` and ends `cdef`, a fixture, and `.env` holds a
+      different string; a search of every branch for the real SID and for the
+      real auth token returns 0 commits each; `.env` is untracked and ignored
+      at `.gitignore:37`. The push published no real credential. The transcript
+      leak stands on its own, and rotation is still the answer to it.
+- [x] **Pushed 2026-09-09, and the repository is public.** `upstream/main` is
+      `b5a6bf5`, the same commit as this disk, pushed at 16:38 UTC. The branch
+      `polly-control-geometry` is there too, at `c0a7d11`. This disk and the
+      deployed image are no longer the only copies.
+      `git push upstream main` on 2026-09-06 had been rejected by **GitHub push
+      protection, GH013**: it read a Twilio Account String Identifier in five
       commits from 1–2 June — `cf03d26`, `abe4467`, `bb642ce` (all
       `twilio/config.test.ts:10` or `family-phone-twilio.http.test.ts:7`),
-      `3d0717c` and `682db29`. All five are test files and predate the task
-      work; the owner's reading is that they are fixtures, and the unblock URL
-      GitHub issued has to be opened before a retry will land. **See the
-      rotation item below before deciding — the real account SID is separately
-      recorded as leaked.**
+      `3d0717c` and `682db29`. All five are test files, and all five carry the
+      fixture SID rather than the real one — the rotation item above now holds
+      that comparison. By what route the block was cleared is not recorded
+      here; only that the push landed.
 - [ ] **`EAL_INVITE_CODE` on Fly has no copy in the repo, by design.** It is
       the one string a new device needs, and `fly secrets list` shows only a
       digest. Keep it in a password manager.
