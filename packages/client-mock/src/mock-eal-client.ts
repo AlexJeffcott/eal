@@ -416,6 +416,10 @@ export function createMockEalClient(): MockEalClient {
       return currentUser;
     },
 
+    adoptPairedSession(): void {
+      // The mock holds no token; the web layer sets `$currentUser` itself.
+    },
+
     async signOut(): Promise<void> {
       currentUser = null;
     },

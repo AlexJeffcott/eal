@@ -24,7 +24,7 @@ function Heading({ subtitle }: { subtitle: string }) {
   return (
     <Surface variant="raised" padding="var(--polly-space-xl)">
       <Layout gap="var(--polly-space-xs)">
-        <h1 data-cli-pair-page>Pair a CLI device</h1>
+        <h1 data-cli-pair-page>Pair a device</h1>
         <Text as="p" tone="muted">{subtitle}</Text>
       </Layout>
     </Surface>
@@ -50,12 +50,12 @@ export function CliPair() {
       <PageShell>
         <Surface variant="raised" padding="var(--polly-space-xl)">
           <Layout gap="var(--polly-space-md)">
-            <h1 data-cli-pair-page>Pair a CLI device</h1>
+            <h1 data-cli-pair-page>Pair a device</h1>
             <span data-cli-pair-success>
               <Badge variant="success">Device paired</Badge>
             </span>
             <Text as="p" tone="muted">
-              You can close this tab and return to your terminal — the CLI has its token.
+              The other device has its session. A browser signs in by itself; a terminal returns to its prompt.
             </Text>
           </Layout>
         </Surface>
@@ -65,7 +65,7 @@ export function CliPair() {
 
   return (
     <PageShell>
-      <Heading subtitle="Enter the code your terminal printed and a label for this device." />
+      <Heading subtitle="Enter the code the other device shows, and a label for it." />
       <Surface
         variant="callout"
         padding="var(--polly-space-lg)"
@@ -75,7 +75,8 @@ export function CliPair() {
             Don't have a code yet?
           </Text>
           <Text as="p" tone="muted">
-            In a terminal on the device you want to pair, run:
+            In a browser, open eal on the device you want to pair and press "Link this browser"
+            on its sign-in page. In a terminal, run:
           </Text>
           <Code block>eal auth pair --label "this device"</Code>
           <Text as="p" tone="muted">

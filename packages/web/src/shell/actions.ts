@@ -1,4 +1,5 @@
 import type { ActionRegistry } from '@fairfox/polly/actions';
+import { delay } from '@eal/shared';
 import type { AppStores } from '../stores.ts';
 import { navigate } from './router.ts';
 
@@ -70,6 +71,13 @@ async function connectAndTrack(stores: AppStores): Promise<void> {
   }
 }
 
+/**
+ * Which browser link is live. `auth:link-cancel`, a second `auth:link-start`
+ * and a finished link all move it on, and a poll loop that finds the number
+ * changed stops without touching a store.
+ */
+let linkGeneration = 0;
+
 /** Shell-global actions: navigation, identity, CLI pairing, the assistant chat. */
 export const SHELL_ACTIONS: ActionRegistry<AppStores> = {
   'shell:navigate': ({ event, data, stores }) => {
@@ -112,6 +120,52 @@ export const SHELL_ACTIONS: ActionRegistry<AppStores> = {
     } catch (err) {
       stores.$signInError.value = friendlySignInError(err);
     }
+  },
+
+  // Sign in with no passkey in reach of this window — an installed PWA whose
+  // password manager does not run there, or a browser the passkey was never
+  // synced to. The same device-code flow `eal auth pair` uses: this browser
+  // shows a code, a signed-in device claims it on the pairing page, and the
+  // poll hands over a session.
+  'auth:link-start': async ({ stores }) => {
+    stores.$signInError.value = null;
+    linkGeneration += 1;
+    const generation = linkGeneration;
+    try {
+      const start = await stores.client.startCliPair();
+      if (generation !== linkGeneration) return;
+      stores.$browserLink.value = {
+        userCode: start.userCode,
+        verificationUrl: start.verificationUrl,
+      };
+      for (;;) {
+        await delay(start.pollIntervalMs);
+        if (generation !== linkGeneration) return;
+        const result = await stores.client.pollCliPair({ deviceCode: start.deviceCode });
+        if (generation !== linkGeneration) return;
+        if (result.status === 'pending') continue;
+        linkGeneration += 1;
+        stores.$browserLink.value = null;
+        if (result.status === 'expired') {
+          stores.$signInError.value = 'That code ran out before it was used. Start again for a new one.';
+          return;
+        }
+        stores.client.adoptPairedSession({ token: result.token, user: result.user });
+        await connectAndTrack(stores);
+        stores.$currentUser.value = result.user;
+        return;
+      }
+    } catch (err) {
+      if (generation !== linkGeneration) return;
+      linkGeneration += 1;
+      stores.$browserLink.value = null;
+      stores.$signInError.value = describeError(err);
+    }
+  },
+
+  'auth:link-cancel': ({ stores }) => {
+    linkGeneration += 1;
+    stores.$browserLink.value = null;
   },
 
   'auth:sign-out': async ({ stores }) => {

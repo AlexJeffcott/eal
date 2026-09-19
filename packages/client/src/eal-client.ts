@@ -306,6 +306,12 @@ export interface EalClient {
   startCliPair(): Promise<CliPairStartResult>;
   pollCliPair(input: { deviceCode: string }): Promise<CliPairPollResult>;
   claimCliPair(input: CliPairClaimInput): Promise<{ ok: true }>;
+  /**
+   * Take the session a pairing poll handed over as THIS client's session. The
+   * CLI keeps its token in its own store; a browser that signs in by pairing
+   * (no passkey reachable in this window) has nowhere else to put it.
+   */
+  adoptPairedSession(input: { token: string; user: CurrentUser }): void;
 
   createTask(input: CreateTaskInput): Promise<Task>;
   listTasks(input?: ListTasksInput): Promise<Task[]>;
@@ -992,6 +998,11 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
         label: input.label,
       });
       return { ok: true };
+    },
+
+    adoptPairedSession(input): void {
+      setToken(input.token);
+      saveUserToStorage(input.user);
     },
 
     async createTask(input): Promise<Task> {

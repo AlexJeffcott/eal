@@ -374,6 +374,19 @@ describe('getCurrentUser with no network', () => {
     expect(stored.has('eal-user')).toBe(false);
   });
 
+  test('a paired session is kept like a signed-in one: token and user both', async () => {
+    const client = createEalClient('https://localhost:4321');
+    client.adoptPairedSession({ token: 'eal_v1_paired', user: { userId: 7, displayName: 'alex' } });
+    expect(stored.get('eal-token')).toBe('eal_v1_paired');
+
+    // The next boot of this browser, with no network, opens as that user.
+    answerWith(unreachable);
+    expect(await createEalClient('https://localhost:4321').getCurrentUser()).toEqual({
+      userId: 7,
+      displayName: 'alex',
+    });
+  });
+
   test('a malformed saved user is ignored', async () => {
     stored.set('eal-user', '{"userId":"7"}');
     answerWith(unreachable);

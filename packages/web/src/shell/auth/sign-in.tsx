@@ -1,8 +1,9 @@
 import { Badge, Button, Layout, Surface, Text, TextInput } from '@fairfox/polly/ui';
-import { $signInDisplayName, $signInError, $signInInviteCode } from '../stores.ts';
+import { $browserLink, $signInDisplayName, $signInError, $signInInviteCode } from '../stores.ts';
 
 export function SignIn() {
   const error = $signInError.value;
+  const link = $browserLink.value;
   return (
     <Surface
       variant="raised"
@@ -61,6 +62,39 @@ export function SignIn() {
               data-action="auth:sign-in"
               label="Sign in with passkey"
             />
+          </Layout>
+
+          <Layout gap="var(--polly-space-xs)" data-browser-link>
+            <Text as="strong" size="sm" weight="bold">
+              No passkey in reach of this window?
+            </Text>
+            {link === null ? (
+              <>
+                <Text as="p" tone="muted">
+                  Sign this browser in from a device that is already signed in.
+                </Text>
+                <Layout columns="auto" justifyContent="start">
+                  <Button
+                    tier="tertiary"
+                    data-action="auth:link-start"
+                    label="Link this browser"
+                  />
+                </Layout>
+              </>
+            ) : (
+              <>
+                <Text as="p" tone="muted">
+                  On a signed-in device, open Menu, then "Pair a device", and enter this code.
+                  This page signs in by itself when you do.
+                </Text>
+                <span className="sign-in-link-code" data-browser-link-code>
+                  {link.userCode}
+                </span>
+                <Layout columns="auto" justifyContent="start">
+                  <Button tier="tertiary" data-action="auth:link-cancel" label="Cancel" />
+                </Layout>
+              </>
+            )}
           </Layout>
         </Layout>
       </Surface>

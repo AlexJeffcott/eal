@@ -22,6 +22,15 @@ export const $signInInviteCode = $state<string>('');
 export const $signInError = $state<string | null>(null);
 export const $wsState = $state<WsConnectionState>('idle');
 export const $wsError = $state<string | null>(null);
+/**
+ * Signing in by pairing: this browser shows a code, a signed-in device claims
+ * it, and the poll hands this browser a session. Null when no link is open.
+ */
+export interface BrowserLink {
+  readonly userCode: string;
+  readonly verificationUrl: string;
+}
+export const $browserLink = $state<BrowserLink | null>(null);
 export const $cliPairCode = $state<string>('');
 export const $cliPairLabel = $state<string>('');
 export const $cliPairStatus = $state<CliPairStatus>('idle');
@@ -51,6 +60,7 @@ export const $agentOnline = $state<boolean>(true);
 
 export interface ShellStores {
   $currentUser: typeof $currentUser;
+  $browserLink: typeof $browserLink;
   $signInDisplayName: typeof $signInDisplayName;
   $signInInviteCode: typeof $signInInviteCode;
   $signInError: typeof $signInError;
@@ -73,6 +83,7 @@ export interface ShellStores {
 export function createShellStores(): ShellStores {
   return {
     $currentUser,
+    $browserLink,
     $signInDisplayName,
     $signInInviteCode,
     $signInError,
@@ -95,6 +106,7 @@ export function createShellStores(): ShellStores {
 
 export function resetShellStores(): void {
   $currentUser.value = null;
+  $browserLink.value = null;
   $signInDisplayName.value = '';
   $signInInviteCode.value = '';
   $signInError.value = null;

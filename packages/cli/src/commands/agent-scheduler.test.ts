@@ -62,6 +62,7 @@ function makeFakeClient(state: FakeClientState): EalClient {
     startCliPair: notImplemented('startCliPair'),
     pollCliPair: notImplemented('pollCliPair'),
     claimCliPair: notImplemented('claimCliPair'),
+    adoptPairedSession: notImplemented('adoptPairedSession'),
     createTask: notImplemented('createTask'),
     listTasks: notImplemented('listTasks'),
     getTask: notImplemented('getTask'),

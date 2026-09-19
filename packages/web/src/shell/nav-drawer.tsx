@@ -59,7 +59,7 @@ export function NavDrawer() {
                 tier="tertiary"
                 data-action="shell:navigate"
                 data-action-path={CLI_PAIR_PATH}
-                label="Pair a CLI device"
+                label="Pair a device"
               />
               <SignOut />
             </Layout>

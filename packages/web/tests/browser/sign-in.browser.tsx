@@ -172,6 +172,78 @@ describe('SignIn (browser)', () => {
     await waitFor(() => stores.$currentUser.value !== null);
     expect(stores.$currentUser.value?.displayName).toBe('Elisa');
   });
+
+  // Signing in by pairing — the way in for a window no passkey can reach (an
+  // installed PWA whose password manager does not run there).
+  const LINK_START = {
+    userCode: 'WXYZ-1234',
+    deviceCode: 'device-code',
+    verificationUrl: 'https://localhost/public/auth/cli-pair',
+    pollIntervalMs: 10,
+    expiresAt: '2999-01-01T00:00:00.000Z',
+  };
+
+  test('"Link this browser" shows the code, then signs in when a signed-in device claims it', async () => {
+    resetStoresForTest();
+    mock.mockCliPair({
+      start: LINK_START,
+      polls: [
+        { status: 'pending' },
+        { status: 'pending' },
+        { status: 'authorized', token: 'eal_v1_paired', user: { userId: 9, displayName: 'Alex' } },
+      ],
+    });
+    render(<App />, root);
+
+    document.querySelector<HTMLButtonElement>('[data-action="auth:link-start"]')?.click();
+    await waitFor(() => document.querySelector('[data-browser-link-code]') !== null);
+    expect(document.querySelector('[data-browser-link-code]')?.textContent).toBe('WXYZ-1234');
+
+    await waitFor(() => stores.$currentUser.value !== null);
+    expect(stores.$currentUser.value).toEqual({ userId: 9, displayName: 'Alex' });
+    expect(stores.$browserLink.value).toBeNull();
+    expect(document.querySelector('[data-sign-in]')).toBeNull();
+  });
+
+  test('a code that runs out says so, and leaves the sign-in surface usable', async () => {
+    resetStoresForTest();
+    mock.mockCliPair({ start: LINK_START, polls: [{ status: 'expired' }] });
+    render(<App />, root);
+
+    document.querySelector<HTMLButtonElement>('[data-action="auth:link-start"]')?.click();
+    await waitFor(() => stores.$signInError.value !== null);
+    expect(stores.$signInError.value).toBe(
+      'That code ran out before it was used. Start again for a new one.',
+    );
+    expect(stores.$currentUser.value).toBeNull();
+    expect(document.querySelector('[data-browser-link-code]')).toBeNull();
+    expect(document.querySelector('[data-action="auth:link-start"]')).not.toBeNull();
+  });
+
+  test('Cancel stops the link: a claim that lands afterwards signs nobody in', async () => {
+    resetStoresForTest();
+    const polls: Array<{ status: 'pending' } | { status: 'authorized'; token: string; user: { userId: number; displayName: string } }> = [
+      { status: 'pending' },
+    ];
+    mock.mockCliPair({ start: LINK_START, polls });
+    render(<App />, root);
+
+    document.querySelector<HTMLButtonElement>('[data-action="auth:link-start"]')?.click();
+    await waitFor(() => document.querySelector('[data-browser-link-code]') !== null);
+    document.querySelector<HTMLButtonElement>('[data-action="auth:link-cancel"]')?.click();
+    await waitFor(() => document.querySelector('[data-browser-link-code]') === null);
+
+    // The claim arrives late. A second link, started and cancelled at once,
+    // gives the first loop every chance to wake and read the new result.
+    mock.mockCliPair({
+      start: LINK_START,
+      polls: [{ status: 'authorized', token: 'eal_v1_late', user: { userId: 9, displayName: 'Alex' } }],
+    });
+    document.querySelector<HTMLButtonElement>('[data-action="auth:link-start"]')?.click();
+    document.querySelector<HTMLButtonElement>('[data-action="auth:link-cancel"]')?.click();
+    await waitFor(() => stores.$browserLink.value === null);
+    expect(stores.$currentUser.value).toBeNull();
+  });
 });
 
 done();

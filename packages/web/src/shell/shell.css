@@ -150,3 +150,15 @@
   min-block-size: 0;
   padding: 0 var(--polly-space-lg);
 }
+
+/* The code a signed-in device types to let this browser in. Large and spaced:
+   it is read off one screen and typed into another. Wraps before it clips —
+   the floor is 350px. */
+.sign-in-link-code {
+  font-family: var(--polly-font-mono);
+  font-size: var(--polly-text-2xl);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
