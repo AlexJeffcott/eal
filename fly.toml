@@ -20,6 +20,12 @@ primary_region = "cdg"  # closest Fly region to Italy
   SKIP_TLS = "1"
   LITESTREAM_CONFIG = "deploy/litestream.yml"
   EAL_ORIGIN = "https://eal.fly.dev"
+  # Mounts the four Twilio webhook routes and the media WS. The three
+  # TWILIO_* secrets must already be set or the api refuses to boot — see
+  # twilio/config.ts, which validates shape only and calls nothing at boot.
+  # Set them with `fly secrets import --stage` first, so one deploy carries
+  # both halves and the machine restarts once.
+  TWILIO_ENABLED = "true"
 
 [http_service]
   internal_port = 8080

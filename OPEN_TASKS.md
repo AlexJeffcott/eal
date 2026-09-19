@@ -259,11 +259,27 @@ user-facing feature works.
 7A–7D are built and verified against a mocked Twilio. The code for 7E is
 committed; none of it has met a real trunk. See `docs/family-phone.md`.
 
-- [ ] Buy the Twilio number and set the four `TWILIO_*` values as Fly secrets
-      (`docs/deploy.md` carries the table).
-- [ ] Point the Twilio console webhook at the public URL, and set `EAL_ORIGIN`
-      to exactly that URL. Twilio signs the URL it was configured with; the api
-      rebuilds it from `EAL_ORIGIN` to verify the signature.
+- [ ] Buy the Twilio number and replace the four `TWILIO_*` values on Fly
+      (`docs/deploy.md` carries the table). Three are currently placeholders —
+      see the measured entry below. On country: the DID's main job is the
+      outbound caller ID, because inbound over PSTN is rare (friends and
+      family reach the handsets over the VoIP path, which needs no number).
+      So it must not be Italian — AGCOM, below. Undecided, and the figure
+      that decides it: Twilio's outbound CSV prices a call to an Italian
+      mobile at $0.3473/min but $0.0445/min **from EEA**, 7.8× apart. If
+      that split keys on the `From` number's country, Estonia Mobile
+      ($3.00/mo, any worldwide address, ID only) wins; if not, US Local
+      ($1.15/mo, no regulatory bundle at all) does. The UK is not EEA.
+- [ ] Point the Twilio console webhook at
+      `https://eal.fly.dev/api/family-phone/twilio/voice`. `EAL_ORIGIN`
+      (`fly.toml:22`) must equal that URL's origin exactly — the api rebuilds
+      the signed URL from it. Proved to work end to end below.
+- [!] **A trial account cannot carry audio.** Twilio strips `<Stream>` from
+      TwiML on trial and substitutes a `<Say>`. The whole 7B/7C path is Media
+      Streams, so any real audio test needs the upgrade: a card and a $20
+      minimum deposit. Media Streams then bills $0.0044/min on top of call
+      minutes. A trial account can still fire the webhook, from a verified
+      number only.
 - [x] **The `Host` header is not the risk. Corrected 2026-09-19.** This line
       used to say a real inbound call was the only way to learn whether the
       proxy forwards the original `Host`. The api never reads that header:
@@ -274,12 +290,33 @@ committed; none of it has met a real trunk. See `docs/family-phone.md`.
       deployment. What it does require is that `EAL_ORIGIN` equals the webhook
       URL's origin exactly — `fly.toml:22` reads `https://eal.fly.dev`, and
       the Twilio console must be pointed at that same host.
-- [ ] **Run `e2e-pstn-live.ts --target https://eal.fly.dev`.** Needs the three
-      `TWILIO_*` secrets on Fly, `TWILIO_ENABLED = "true"` in `fly.toml`
-      `[env]`, and a redeploy. The secrets may be invented for this — the SID
-      only has to match `/^AC[0-9a-f]{32}$/i` and the number E.164, and
-      nothing calls Twilio at boot. A real number is not needed to answer the
-      signature question.
+- [x] **The live deployment verifies the signature. Measured 2026-09-19.**
+      `bun scripts/e2e-pstn-live.ts --target https://eal.fly.dev` exits 0:
+      a signature computed over `https://eal.fly.dev` is accepted by the
+      deployed api and reaches the field check (400), and an unsigned webhook
+      is refused (403). **Fly's proxy does not break `X-Twilio-Signature`.**
+      That was the one failure the mocks were said not to catch, and it is
+      now a reading rather than a worry.
+
+      | Gauge | Before | After |
+      |---|---|---|
+      | Machine | 44, 2026-09-09 | 45, 2026-09-19T14:40:15Z |
+      | `/voice` unsigned | 404 — not mounted | 403 — mounted, verifying |
+      | `/voice` signed over the public origin | unknown | 400 — verified |
+
+      **The three `TWILIO_*` secrets on Fly are random placeholders, not a
+      real account.** The SID is `AC` + 16 random bytes, the token 32 random
+      bytes, the number `+10000000000`. `twilio/config.ts` validates shape
+      only and nothing calls Twilio at boot, so placeholders answer the
+      signature question without an account. The token is random rather than
+      a fixed string because the four webhook routes are now publicly
+      mounted, and a guessable token would let anyone forge a signed request
+      at `/voice`. **Replace all three when the real number is bought** —
+      outbound (`twilio/rest.ts`) will fail against these until then.
+
+      The probe sends no `CallSid`, `From` or `To`, so a verified signature
+      stops at the field check before the rate limiter and the IVR. It writes
+      no row to the production database, and can be re-run at any time.
 - [ ] **Watch a real inbound call.** What a real call still proves, and the
       script cannot: Twilio's own `CallSid`/`From`/`To` fields, the
       `wss://` media WebSocket opening against the public origin, and audio
