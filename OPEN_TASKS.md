@@ -15,18 +15,19 @@ pre-commit hook runs `devctl check` and the unit tier only.
 | Command | Passing count, 2026-09-19 | Runs in the pre-push sweep |
 |---|---|---|
 | `bun devctl check` | tsc + 7 lint scripts | yes |
-| `bun devctl test unit` | 1390 tests, 109 files; coverage ok, 143 files, 29 exempt | yes |
-| `bun devctl test browser` | 105 tests | yes |
-| `bun devctl test e2e` | 52 Playwright tests, 2 projects | yes |
-| `bun devctl test multi` | 30 `scripts/e2e-*.ts`, each exiting 0 | yes |
+| `bun devctl test unit` | 1519 tests, 114 files; coverage ok, 145 files, 29 exempt | yes |
+| `bun devctl test browser` | 113 tests | yes |
+| `bun devctl test e2e` | 54 Playwright tests, 2 projects | yes |
+| `bun devctl test multi` | 31 `scripts/e2e-*.ts`, each exiting 0 | yes |
 | `bun devctl test mutation` | see below — not part of `all` | no |
-| `bun devctl verify` | TLC: `tasks` ✓ 2.4s, `pairing` ✓ 1.3s, `auth` ✓ 2.3s — compositional PASS; then the hand-written `TasksConvergence` ✓ 5,991 distinct states, 0 on queue, 1.0s | yes |
+| `bun devctl verify` | TLC: `tasks` ✓ 2.5s, `pairing` ✓ 1.3s, `auth` ✓ 2.2s — compositional PASS; then the hand-written `TasksConvergence` ✓ 5,991 distinct states, 0 on queue, 1.1s | yes |
 
 All five rows above the mutation row were read in one `bun devctl test all`
-sweep on 2026-09-19, on branch `offline-shell-capture`. The multi tier gained
-`e2e-offline-shell.ts` (the offline shell and the worker kill switch) and
-`e2e-offline-capture.ts` (the capture outbox, over a pre-`client_id` database
-file).
+sweep on 2026-09-19, on branch `recurring-tasks`, followed by `bun devctl
+verify`. The multi tier gained `e2e-offline-shell.ts` (the offline shell and the
+worker kill switch), `e2e-offline-capture.ts` (the capture outbox, over a
+pre-`client_id` database file) and `e2e-tasks-recurrence.ts` (recurring tasks
+across two browsers, over a database file in release v46's shape).
 
 The multi tier now includes `e2e-registration-closed.ts` (the registration
 gate), `e2e-tasks-reconnect.ts` (the WS drop and resync),
@@ -151,10 +152,30 @@ what remains there is a machine to install it on.
       Doing it properly needs either a second position column scoped to the
       lane, or fractional indexing.
 
-- [ ] **05 — Recurring tasks.** No recurrence column, route field or control.
-      Deferred deliberately at v1 (`docs/tasks-v1.md`). A small fixed rule set
-      with a `basis: 'due' | 'completed'` anchor, not RFC 5545. →
-      `docs/plans/05-recurring-tasks.md` · ~2–4 days
+- [>] **05 — Recurring tasks.** **Built on branch `recurring-tasks`,
+      2026-09-19. Not merged, not deployed.** Four rules (every N days,
+      weekdays, weekly on days, monthly on day N), each counted from the due
+      date or from completion, as calendar-date arithmetic in `@eal/shared`.
+      Completing a recurring row — by the tick box, the board or the assistant
+      — spawns one successor dated strictly after the device's `today`, and
+      hands it the rule. Unticking removes an untouched successor and returns
+      the rule; a touched one stays. A recurring project spawns its subtree
+      reset to `todo`. Set from the detail editor or by the assistant
+      ("every Tuesday"). Proved by `scripts/e2e-tasks-recurrence.ts` — two
+      browsers, a v46-shaped database file migrated on boot, counts read from
+      the database — falsified two ways. The plan lists what it got wrong and
+      seven defects found on the way.
+      **Still open:** merge and deploy — the deploy carries a migration (three
+      nullable columns, two partial indexes, NULL on every existing row).
+      Complete still needs the server, so a recurring task cannot be ticked
+      offline. **Also open, not a code task: tick a recurring task on the
+      owner's phone** late in the evening, and read the successor's date.
+      → `docs/plans/05-recurring-tasks.md`
+- [ ] **The Today view's day ends at UTC midnight** unless the caller sends a
+      cutoff (`tasks.shared.ts`, `defaultTodayCutoff`; the client's
+      `endOfDayIso`). In Italy that is 01:00 or 02:00 local. Same class of
+      defect plan 05 fixed for recurrence with a device-supplied `today`; not
+      changed there.
 - [>] **06 — Offline shell and capture.** **Both parts are live, release v46,
       2026-09-19T16:23Z.** Read from the deployment: `/sw.js` line 1 is
       `eal-sw-v2-shell`, `/public/sw-kill` answers `0` with `no-store`, the
