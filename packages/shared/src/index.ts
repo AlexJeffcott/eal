@@ -7,3 +7,25 @@ export {
   type StoppableDelay,
 } from './timers.ts';
 export { assertNever } from './assert-never.ts';
+export {
+  dateOfDayNumber,
+  dayNumber,
+  defaultRecurrence,
+  describeRecurrence,
+  deserialiseRecurrence,
+  isRealDate,
+  MAX_INTERVAL_DAYS,
+  nextOccurrence,
+  parseRecurrence,
+  RecurrenceError,
+  serialiseRecurrence,
+  shiftDate,
+  utcDateOf,
+  validateToday,
+  WEEKDAYS,
+  weekdayOf,
+  type Recurrence,
+  type RecurrenceBasis,
+  type RecurrenceKind,
+  type Weekday,
+} from './recurrence.ts';
