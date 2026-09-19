@@ -119,6 +119,10 @@ export const SHELL_ACTIONS: ActionRegistry<AppStores> = {
     stores.$wsState.value = 'idle';
     stores.$wsError.value = null;
     await stores.client.signOut();
+    // The offline stores hold one member's tasks and unsent captures. The next
+    // person to sign in on this device must find neither.
+    const discarded = await stores.outbox.clear();
+    if (discarded > 0) console.warn(`[outbox] sign-out discarded ${discarded} unsent capture(s)`);
     stores.$currentUser.value = null;
     // Sign-out is only reachable from inside the drawer, and the drawer does
     // not close itself. Left open it covers the sign-in surface with an

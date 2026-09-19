@@ -74,6 +74,10 @@ export const config: CoverageConfig = {
       reason: 'tasks action dispatchers run in the polly browser tier',
       claimedBy: 'packages/web/tests/browser/tasks.browser.tsx',
     },
+    'packages/web/src/apps/tasks/outbox-idb.ts': {
+      reason: 'the browser half of the capture outbox — IndexedDB, Web Locks, crypto.randomUUID. No IndexedDB exists in the unit tier and no shim is a dependency, so a unit test here would exercise its own fake; the logic it serves is outbox.ts, unit-tested against an injected storage. scripts/e2e-offline-capture.ts drives this file in a real Chrome across a killed server and a reload, and is falsified by making putEntry a no-op',
+      claimedBy: 'scripts/e2e-offline-capture.ts',
+    },
     'packages/web/src/platform/push.ts': {
       reason: 'Web Push browser adapter — ServiceWorkerRegistration, PushManager.subscribe and Notification.requestPermission only exist, and only behave, in a real browser; a unit test here would exercise its own stubs. The reminder control drives pushPermission/requestPushPermission/dropPushSubscription in a real Chrome in the browser tier, and scripts/e2e-task-reminder.ts proves the server half of the same path end to end',
       claimedBy: 'packages/web/tests/browser/tasks.browser.tsx',

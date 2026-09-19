@@ -146,6 +146,54 @@ describe('Tasks UI (browser)', () => {
     expect($quickAddTitle.value).toBe('retry me');
   });
 
+  test('a capture the server never answered shows as pending, with no controls, then settles', async () => {
+    signedIn();
+    // `fetch` rejects with a TypeError when no response arrives at all — the
+    // one failure the outbox treats as "send it again" (apps/tasks/outbox.ts).
+    mock.mockTaskError(new TypeError('Failed to fetch'));
+    $quickAddTitle.value = 'written in the tunnel';
+    clickAction('tasks:quick-add');
+    await waitFor(() => document.querySelector('[data-task-pending]') !== null);
+
+    const pending = document.querySelector<HTMLElement>('[data-task-pending]');
+    expect(pending?.querySelector('[data-task-title]')?.textContent).toBe('written in the tunnel');
+    // Nothing to tick, open, move or delete: every one of those acts on a
+    // server id, and this has none yet.
+    expect(pending?.querySelectorAll('[data-action]').length).toBe(0);
+    expect(rowTitles()).toEqual([]);
+    // Not an error, and not "nothing here" either.
+    expect(document.querySelector('[data-tasks-error]')).toBeNull();
+    expect(document.querySelector('[data-tasks-empty]')).toBeNull();
+    expect($quickAddTitle.value).toBe('');
+    expect(mock.peekTasks()).toHaveLength(0);
+
+    await stores.outbox.flush();
+    await waitFor(() => rowTitles().length === 1);
+    expect(rowTitles()).toEqual(['written in the tunnel']);
+    expect(document.querySelector('[data-task-pending]')).toBeNull();
+    expect(mock.peekTasks()).toHaveLength(1);
+  });
+
+  test('a pending capture is not shown in the Trash, nor inside a container it was not captured in', async () => {
+    signedIn();
+    const projectId = await addTask('Kitchen');
+    commit('tasks:set-kind', { taskId: String(projectId), value: 'project' });
+    await waitFor(() => stores.$tasksById.value.get(projectId)?.kind === 'project');
+
+    mock.mockTaskError(new TypeError('Failed to fetch'));
+    $quickAddTitle.value = 'captured at the top';
+    clickAction('tasks:quick-add');
+    await waitFor(() => document.querySelector('[data-task-pending]') !== null);
+
+    commit('tasks:enter-scope', { taskId: String(projectId) });
+    await waitFor(() => document.querySelector('[data-task-pending]') === null);
+    commit('tasks:set-view', { view: 'trash' });
+    await flushMicrotasks();
+    expect(document.querySelector('[data-task-pending]')).toBeNull();
+
+    await stores.outbox.flush();
+  });
+
   test('toggle flips status; the row keeps its data-task-status in sync', async () => {
     signedIn();
     const id = await addTask('walk dog');

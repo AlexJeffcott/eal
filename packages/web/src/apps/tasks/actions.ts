@@ -241,19 +241,11 @@ export const TASKS_ACTIONS: ActionRegistry<AppStores> = {
     // container. A scope naming something that cannot hold a task is rejected
     // by the server and surfaces below, rather than being quietly re-filed.
     const { scope } = stores.$taskFilter.value;
-    try {
-      const task = await stores.client.createTask(
-        scope === null ? { title } : { title, parentId: scope },
-      );
-      // The optimistic insertion: server already returned the canonical row,
-      // so we splice it straight into the store. WS broadcast will arrive
-      // and overwrite with byte-identical data.
-      patchTasks(stores, (m) => m.set(task.id, task));
-    } catch (err) {
-      stores.$tasksError.value = friendlyTaskError(err);
-      // Restore the input so the user can retry without retyping.
-      stores.$quickAddTitle.value = title;
-    }
+    // Through the outbox, online or not: the entry is stored before it is sent,
+    // shows as pending until the server's row comes back, and is sent again for
+    // as long as no answer arrives. A refusal lands in `$tasksError` and hands
+    // the title back to the input — see outbox.ts.
+    await stores.outbox.capture({ title, parentId: scope });
   },
 
   'tasks:toggle': async ({ data, stores }) => {

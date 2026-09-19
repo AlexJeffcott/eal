@@ -15,6 +15,7 @@ import {
   $boardLane,
   $expandedTaskIds,
   $householdUsers,
+  $outbox,
   $quickAddTitle,
   $recentlyCompleted,
   $reminderState,
@@ -23,6 +24,7 @@ import {
   $taskFilter,
   type ReminderState,
 } from './stores.ts';
+import type { OutboxEntry } from './outbox.ts';
 import {
   type Condition,
   type ConditionField,
@@ -416,6 +418,34 @@ function TaskRow({ task, tasksById, index, expandedIds, users }: TaskRowProps) {
  * two to a screen. What survives is the title, where it is filed, when it is
  * due, and the control that moves it — which is the whole point of the board.
  */
+/**
+ * A capture the server has not confirmed — see outbox.ts.
+ *
+ * It has no controls, on purpose. Complete, expand, move and delete all act on
+ * a server id, and this has none yet: the row it becomes will have them. The
+ * leading glyph sits where the tick box will, so the title does not jump
+ * sideways when the entry settles.
+ */
+function PendingRow({ entry }: { entry: OutboxEntry }) {
+  return (
+    <div data-task-pending data-task-client-id={entry.clientId} class="tasks-pending">
+      <Layout columns="auto minmax(0, 1fr)" gap="var(--polly-space-sm)" alignItems="start">
+        <span class="tasks-pending-mark" aria-hidden>
+          ◌
+        </span>
+        <Layout gap="var(--polly-space-xs)">
+          <span data-task-title class="tasks-title">
+            {entry.title}
+          </span>
+          <Cluster gap="var(--polly-space-xs)">
+            <Badge variant="default">Waiting to send</Badge>
+          </Cluster>
+        </Layout>
+      </Layout>
+    </div>
+  );
+}
+
 function BoardCard({
   task,
   tasksById,
@@ -814,6 +844,13 @@ export function TasksPanel() {
   const boardLane = $boardLane.value;
   const users = $householdUsers.value;
   const reminders = $reminderState.value;
+  // Pending captures show where they will land: all of them from the top
+  // level, and inside a container only the ones captured there. Never in the
+  // Trash, where quick-add is hidden too.
+  const pending =
+    filter.view === 'trash'
+      ? []
+      : $outbox.value.filter((entry) => filter.scope === null || entry.parentId === filter.scope);
 
   const now = new Date();
   const index = indexChildren(tasks);
@@ -946,6 +983,16 @@ export function TasksPanel() {
           </span>
         ) : null}
 
+        {pending.length === 0 ? null : (
+          <div data-tasks-pending-list>
+            <Layout gap="var(--polly-space-xs)">
+              {pending.map((entry) => (
+                <PendingRow key={entry.clientId} entry={entry} />
+              ))}
+            </Layout>
+          </div>
+        )}
+
         {/* The board renders its four lanes even when every one is empty: the
           * lanes are the answer to "what is blocked", and an empty Blocked lane
           * says "nothing" where a missing one would say "not a thing here". The
@@ -953,9 +1000,12 @@ export function TasksPanel() {
         {filter.layout === 'board' ? (
           <TaskBoard visible={visible} tasksById={tasks} lane={boardLane} />
         ) : visible.length === 0 ? (
+          // "Nothing here" directly under a pending capture would be false.
+          pending.length > 0 ? null : (
           <p data-tasks-empty>
             <Text tone="muted">{emptyCopy(filter.view, refined, filter.scope !== null)}</Text>
           </p>
+          )
         ) : (
           <div data-tasks-list>
             <Layout gap="var(--polly-space-xs)">

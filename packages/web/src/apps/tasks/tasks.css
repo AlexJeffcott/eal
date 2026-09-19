@@ -240,3 +240,20 @@
 [data-tasks-reminders] {
   overflow-wrap: anywhere;
 }
+
+/* A capture the server has not confirmed yet (outbox.ts). Muted, so it reads as
+ * "not quite a task", and dashed at the leading edge so it is told apart from a
+ * done row, which is muted too. The mark holds the 44px column the tick box
+ * will occupy once the entry settles, so the title does not shift — and at
+ * 350px the title column is `minmax(0, 1fr)` and wraps like any other row. */
+.tasks-pending {
+  color: var(--polly-text-muted);
+  border-inline-start: var(--polly-border-width-default) dashed var(--polly-border);
+}
+.tasks-pending-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: 44px;
+  min-block-size: 44px;
+}

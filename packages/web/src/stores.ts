@@ -32,6 +32,9 @@ import {
  * at the composition root, because it spans the shell and the apps; the signals
  * themselves are owned by `shell/stores.ts` and each app's `stores.ts`.
  */
+import type { TaskOutbox } from './apps/tasks/outbox.ts';
+import { createBrowserTaskOutbox } from './apps/tasks/outbox-idb.ts';
+
 export interface AppStores
   extends ShellStores,
     TasksStores,
@@ -40,13 +43,18 @@ export interface AppStores
     AgentRulesStores,
     PstnContactsStores {
   client: EalClient;
+  /** The capture outbox and the offline list copy — apps/tasks/outbox.ts. */
+  outbox: TaskOutbox;
 }
 
 export function createStores(client: EalClient): AppStores {
+  const shell = createShellStores();
+  const tasks = createTasksStores();
   return {
     client,
-    ...createShellStores(),
-    ...createTasksStores(),
+    outbox: createBrowserTaskOutbox(client, { ...tasks, $currentUser: shell.$currentUser }),
+    ...shell,
+    ...tasks,
     ...createDevicesStores(),
     ...createFamilyPhoneStores(),
     ...createAgentRulesStores(),

@@ -138,9 +138,20 @@ let seedAttempted = false;
 async function seedSessionData(stores: AppStores): Promise<void> {
   seedAttempted = true;
   try {
-    seedTasks(await stores.client.listTasks());
+    const tasks = await stores.client.listTasks();
+    seedTasks(tasks);
+    // A row in the list may be a capture whose response never arrived.
+    stores.outbox.reconcile(tasks);
+    // Only now is the list the server's, and worth copying for the next outage.
+    stores.outbox.armSnapshot();
+    void stores.outbox.saveSnapshot();
   } catch (err) {
-    stores.$tasksError.value = err instanceof Error ? err.message : String(err);
+    // No response at all, into an empty list: an offline cold boot. The copy
+    // from the last session stands in until the server answers, and the
+    // reconnecting banner already says why. Any other failure — or a list
+    // that already has rows — keeps its error and keeps its rows.
+    const restored = err instanceof TypeError && (await stores.outbox.restoreSnapshot());
+    if (!restored) stores.$tasksError.value = err instanceof Error ? err.message : String(err);
   }
   try {
     stores.$chatMessages.value = await stores.client.listMessages();
@@ -230,6 +241,9 @@ function installSessionSeeding(stores: AppStores): void {
     if (user.userId === seededUserId) return;
     seededUserId = user.userId;
     void seedSessionData(stores);
+    // What the last session captured and could not send. Shown as pending at
+    // once, and sent if the server is there.
+    void stores.outbox.load().then(() => stores.outbox.flush());
   });
 }
 
@@ -254,6 +268,9 @@ function installWsResync(stores: AppStores): void {
   stores.client.subscribeConnectionState((state) => {
     stores.$wsState.value = state;
     if (state !== 'connected') return;
+    // Every `connected` is a server that was not there a moment ago, or a
+    // session that has just begun: send what is waiting.
+    void stores.outbox.flush();
     if (!seedAttempted) return;
     stores.$wsError.value = null;
     stores.$tasksError.value = null;
@@ -264,6 +281,9 @@ function installWsResync(stores: AppStores): void {
   // backoff timer only resumes when the tab does. Coming back to the app must
   // not then wait out a 30-second delay before the list is true again.
   const wakeUp = (): void => {
+    // The outbox goes over HTTP, which does not need the socket: try it
+    // whether or not the socket is already back.
+    void stores.outbox.flush();
     if (stores.client.connectionState() === 'connected') return;
     stores.client.reconnectNow();
   };
@@ -291,7 +311,18 @@ async function bootstrap(): Promise<void> {
     void handler({ ...dispatch, stores });
   });
 
-  client.subscribeTaskEvents(applyTaskEvent);
+  client.subscribeTaskEvents((event) => {
+    applyTaskEvent(event);
+    // The broadcast of a capture this device is still holding as pending: its
+    // response was lost, or has simply not arrived yet. Either way the row is
+    // here now, and the entry has done its job.
+    stores.outbox.reconcile(
+      event.type === 'task:tree-cloned' ? event.payload.tasks : [event.payload],
+    );
+  });
+  // Keep the offline copy of the list current. A no-op until a seed has
+  // succeeded, so an empty boot cannot overwrite a good copy.
+  $tasksById.subscribe(() => void stores.outbox.saveSnapshot());
   client.subscribeChatEvents(applyChatEvent);
   client.subscribeAgentStatus((online) => {
     stores.$agentOnline.value = online;

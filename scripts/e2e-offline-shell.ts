@@ -17,8 +17,8 @@
  *      shell is cached only if the install precache works.
  *   2. The server dies. A reload must still render the shell, signed in, on a
  *      deep link, and must say it is reconnecting.
- *   3. The server returns. The task made in step 1 must appear WITHOUT a
- *      reload, and the banner must clear.
+ *   3. The server returns. A row written into the database while it was dead
+ *      must appear WITHOUT a reload, and the banner must clear.
  *   4. The server restarts with `EAL_SW_KILL=1`. One visit must leave no
  *      registration and no cache.
  *   5. The server dies again. A reload must now FAIL — the proof that step 4
@@ -30,6 +30,7 @@
  * the server, so network-first would answer from the network and the cache
  * fallback would never run.
  */
+import { Database } from 'bun:sqlite';
 import puppeteer, { type Browser, type Page } from 'puppeteer';
 import { rm, mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -43,11 +44,23 @@ const PROFILE = resolve(ARTIFACTS, 'profile');
 const DB_PATH = resolve(ARTIFACTS, 'offline-shell.sqlite');
 const FIXED_PORT = '4118';
 const TASK_TITLE = 'Written down before the tunnel';
+const UNSEEN_TITLE = 'Added while the phone was in the tunnel';
 /** The reconnect backoff caps at 30s, and no `online` event fires here. */
 const RECONNECT_TIMEOUT_MS = 60_000;
 
 function boot(env: Record<string, string> = {}): Promise<BootedApi> {
   return bootApi({ port: FIXED_PORT, database: DB_PATH, hostname: 'localhost', env });
+}
+
+function addRowBehindTheServersBack(userId: number): void {
+  const db = new Database(DB_PATH);
+  try {
+    db.query(
+      "INSERT INTO tasks (title, status, kind, position, created_by, updated_by) VALUES (?, 'todo', 'task', 9, ?, ?)",
+    ).run(UNSEEN_TITLE, userId, userId);
+  } finally {
+    db.close();
+  }
 }
 
 async function workerState(page: Page): Promise<{ registrations: number; caches: string[] }> {
@@ -108,15 +121,21 @@ async function main(): Promise<number> {
     console.log('e2e-offline-shell: with no server, /tasks renders the app, signed in');
     await page.waitForSelector('[data-ws-reconnecting]', { timeout: NAV_TIMEOUT_MS });
     console.log('e2e-offline-shell: and it reports "reconnecting"');
-    if (await rowExists(page, TASK_TITLE)) {
-      throw new Error('the task row rendered with no server — something cached the list; step 3 proves nothing');
+    // Part B keeps a copy of the list in IndexedDB, so the row made in step 1 is
+    // on the screen here and cannot show that a seed ran. This one can: it is
+    // written straight into the database file while the server is dead, so no
+    // broadcast ever carries it and no copy holds it. Only a fetch of the list
+    // after the server returns puts it on the screen.
+    addRowBehindTheServersBack(user.userId);
+    if (await rowExists(page, UNSEEN_TITLE)) {
+      throw new Error('a row no server ever sent is on the screen — step 3 proves nothing');
     }
 
     // ─── 3. The server returns. No reload anywhere in this step ─────────────
     api = await boot();
-    await waitFor(() => rowExists(page, TASK_TITLE), {
+    await waitFor(() => rowExists(page, UNSEEN_TITLE), {
       timeoutMs: RECONNECT_TIMEOUT_MS,
-      description: 'the task row after the server returned, with no reload',
+      description: 'the row added while the server was dead, with no reload',
     });
     await page.waitForFunction(
       () => document.querySelector('[data-ws-reconnecting]') === null,

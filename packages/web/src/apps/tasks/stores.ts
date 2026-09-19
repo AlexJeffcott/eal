@@ -1,6 +1,7 @@
 import { $state } from '@fairfox/polly/state';
 import type { HouseholdMember, Task, TaskStatus } from '@eal/client';
 import { freshFilter, type TaskFilter } from './filter.ts';
+import type { OutboxEntry } from './outbox.ts';
 
 /** Reactive state owned by the tasks app. */
 
@@ -11,6 +12,12 @@ import { freshFilter, type TaskFilter } from './filter.ts';
  */
 export const $tasksById = $state<Map<number, Task>>(new Map());
 export const $tasksError = $state<string | null>(null);
+/**
+ * Captures the server has not confirmed yet, oldest first — see outbox.ts.
+ * Deliberately NOT in `$tasksById`: an entry has no server id, so nothing that
+ * acts on a task by id (toggle, edit, delete, move) can be pointed at one.
+ */
+export const $outbox = $state<OutboxEntry[]>([]);
 /** Drives the quick-add input at the top of every view. */
 export const $quickAddTitle = $state<string>('');
 
@@ -54,6 +61,7 @@ export const $reminderState = $state<ReminderState>('off');
 export interface TasksStores {
   $tasksById: typeof $tasksById;
   $tasksError: typeof $tasksError;
+  $outbox: typeof $outbox;
   $quickAddTitle: typeof $quickAddTitle;
   $taskFilter: typeof $taskFilter;
   $recentlyCompleted: typeof $recentlyCompleted;
@@ -67,6 +75,7 @@ export function createTasksStores(): TasksStores {
   return {
     $tasksById,
     $tasksError,
+    $outbox,
     $quickAddTitle,
     $taskFilter,
     $recentlyCompleted,
@@ -80,6 +89,7 @@ export function createTasksStores(): TasksStores {
 export function resetTasksStores(): void {
   $tasksById.value = new Map();
   $tasksError.value = null;
+  $outbox.value = [];
   $quickAddTitle.value = '';
   $taskFilter.value = freshFilter();
   $recentlyCompleted.value = new Set();
