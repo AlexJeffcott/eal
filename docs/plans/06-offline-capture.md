@@ -1,7 +1,50 @@
 # Plan 06 — Offline shell and capture
 
-Status: not started. Do this after Plan 02 — an outbox on top of a socket that
-never reconnects hides the wrong bug.
+Status: part A built on branch `offline-shell-capture`, 2026-09-19, not
+deployed. Part B not started. Plan 02 is done, which this plan required — an
+outbox on top of a socket that never reconnects hides the wrong bug.
+
+## Part A as built
+
+Proved by `scripts/e2e-offline-shell.ts`: a real browser, a cold profile, and a
+server process that is killed and restarted. Falsified two ways — with the
+saved user removed it fails at step 2, and with the resync rule reverted it
+fails at step 3.
+
+The plan below named one defect. An offline cold boot reached three more:
+
+| Defect | Fix |
+|---|---|
+| `GET /auth/me` was the only source of the user, so the cached shell opened on the sign-in screen | The client keeps the last confirmed user beside the token (`eal-user` in localStorage) and returns it only when no response arrived at all. A 401 and a sign-out both clear it. |
+| The first WS connect never retried, so the app stayed deaf when the network returned | A socket that never opened now joins the reconnect loop and reads `reconnecting`. A refused token still reads `error` and does not retry. |
+| The first `connected` skipped the seed, so the list stayed empty until the next drop | `installWsResync` skips only a `connected` that arrives before any seed has started. |
+
+Differences from the decision below:
+
+- The kill switch is `EAL_SW_KILL`, read on install, on activate and after
+  every navigation — not on activate only. A worker activates once per
+  version, so an activate-only check never runs again on the device that
+  needs it.
+- The page reads the switch too, before it registers. `register()` on a scope
+  revives a registration that `unregister()` has only marked for removal, and
+  the page registers on every boot. Measured: without the page-side check the
+  registration count stayed at 1 under `EAL_SW_KILL=1`.
+- The worker serves the cached entry when the network has not answered in 4
+  seconds, and when it answers with a failing status. A late answer still
+  replaces the entry. No signal on a phone is more often a request that hangs
+  than one that fails.
+- `/manifest.json` is cached as well as the four paths named below.
+
+Known and not fixed in part A:
+
+- **The task list is empty offline.** Nothing caches it. Part B has to keep a
+  copy of the list in IndexedDB beside the outbox, or an offline capture lands
+  in a list that looks deleted.
+- The HTML, the bundle and the stylesheet are cached one entry each. A
+  connection that dies between them leaves entries from two deploys. Each
+  online load fetches all three, so the window is one page load wide.
+- A token revoked while the device is offline: the WS retry loop then runs
+  with no end, as it already did for a token revoked during a drop.
 
 ## The reading
 

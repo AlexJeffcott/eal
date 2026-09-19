@@ -49,6 +49,25 @@ Every value is required — the server has no fallbacks and fails loud at boot.
 The replica config (`deploy/litestream.yml`) is plain S3 driven by these env
 vars — Fly's **Tigris** is the natural fit, but any S3-compatible store works.
 
+### The service-worker kill switch
+
+The worker caches the app shell so the app opens with no signal
+(`packages/api/src/spa.ts`, the `serviceWorker` source). It is network-first,
+so a bad bundle is replaced on the first request the network answers. The kill
+switch is for the failure that does not fit that: a worker that itself
+misbehaves.
+
+| Variable | Secret? | Values | Notes |
+|---|---|---|---|
+| `EAL_SW_KILL` | no | unset, `0`, `1` | `1` makes `GET /public/sw-kill` answer `1`. Every page then removes the worker and every cache before it would register one, and every worker removes itself on its next navigation. Any other value refuses to boot. |
+
+To use it: `fly secrets set EAL_SW_KILL=1`, which restarts the machine with no
+image build. Each device recovers on its next online visit. While the switch
+is on there is no offline shell and no Web Push, because both need the worker.
+Set it back to `0` after a deploy carries the fixed worker.
+
+Measured by `scripts/e2e-offline-shell.ts`, steps 4 and 5.
+
 ### Web Push (due-date reminders)
 
 Due-date reminders are **off by default**. The 60-second scan that fires them

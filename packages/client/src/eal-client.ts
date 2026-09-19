@@ -47,6 +47,15 @@ import type {
 } from './family-phone-types.ts';
 
 const TOKEN_STORAGE_KEY = 'eal-token';
+const USER_STORAGE_KEY = 'eal-user';
+
+/** The WebSocket never opened: no network, or no server. Not an auth failure. */
+class WsUnreachableError extends Error {
+  constructor() {
+    super('ws connect failed');
+    this.name = 'WsUnreachableError';
+  }
+}
 
 function toWsUrl(httpUrl: string): string {
   if (httpUrl.startsWith('https://')) return `wss://${httpUrl.slice('https://'.length)}/ws`;
@@ -70,6 +79,41 @@ function saveTokenToStorage(token: string | null): void {
     else localStorage.setItem(TOKEN_STORAGE_KEY, token);
   } catch {
     // localStorage may be disabled; tokens still work in-memory.
+  }
+}
+
+/**
+ * The signed-in user, kept beside the token.
+ *
+ * `GET /auth/me` is the only source of the user at boot, and it needs the
+ * network. A phone that cold-boots offline holds a token it cannot check, and
+ * without this copy the app would open on the sign-in screen. The copy is an
+ * identity to render under, not an authorization: the server still checks the
+ * token on every request once the network answers.
+ */
+function loadUserFromStorage(): CurrentUser | null {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(USER_STORAGE_KEY);
+    if (raw === null) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const userId: unknown = Reflect.get(parsed, 'userId');
+    const displayName: unknown = Reflect.get(parsed, 'displayName');
+    if (typeof userId !== 'number' || typeof displayName !== 'string') return null;
+    return { userId, displayName };
+  } catch {
+    return null;
+  }
+}
+
+function saveUserToStorage(user: CurrentUser | null): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    if (user === null) localStorage.removeItem(USER_STORAGE_KEY);
+    else localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+  } catch {
+    // localStorage may be disabled; an offline cold boot then opens signed out.
   }
 }
 
@@ -424,6 +468,9 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
   function setToken(token: string | null): void {
     currentToken = token;
     saveTokenToStorage(token);
+    // A user without a token is nobody. The auth paths save the new user
+    // after this call.
+    if (token === null) saveUserToStorage(null);
   }
 
   function handleMessage(raw: string): void {
@@ -609,7 +656,7 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
         return;
       }
       s.addEventListener('open', () => resolveOpen(), { once: true });
-      s.addEventListener('error', () => rejectOpen(new Error('ws connect failed')), { once: true });
+      s.addEventListener('error', () => rejectOpen(new WsUnreachableError()), { once: true });
     });
     await new Promise<void>((resolveAuth, rejectAuth) => {
       const s = socket;
@@ -683,9 +730,18 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
       try {
         await openBrowserWs();
       } catch (err) {
-        // The FIRST connect does not retry: a rejected token or a wrong origin
-        // would otherwise be retried forever, silently. The caller surfaces
-        // this. Drops after a successful connect do retry — see openBrowserWs.
+        // A socket that never opened is the network, not the session: a phone
+        // that cold-boots offline must come back by itself, so that case joins
+        // the reconnect loop and reads `reconnecting`. Anything else on the
+        // FIRST connect does not retry — a rejected token would otherwise be
+        // retried forever, silently. The caller surfaces this. Drops after a
+        // successful connect do retry — see openBrowserWs.
+        if (err instanceof WsUnreachableError) {
+          socket = null;
+          setConnectionState('reconnecting');
+          scheduleReconnect();
+          return;
+        }
         setConnectionState('error');
         throw err;
       }
@@ -797,7 +853,9 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
         { response: attResp },
       );
       setToken(result.token);
-      return { userId: result.user.id, displayName: result.user.displayName };
+      const user = { userId: result.user.id, displayName: result.user.displayName };
+      saveUserToStorage(user);
+      return user;
     },
 
     async signInWithPasskey(): Promise<CurrentUser> {
@@ -811,7 +869,9 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
         { response: asnResp },
       );
       setToken(result.token);
-      return { userId: result.user.id, displayName: result.user.displayName };
+      const user = { userId: result.user.id, displayName: result.user.displayName };
+      saveUserToStorage(user);
+      return user;
     },
 
     async signOut(): Promise<void> {
@@ -822,9 +882,24 @@ export function createEalClient(apiUrl: string, options: EalClientOptions = {}):
     },
 
     async getCurrentUser(): Promise<CurrentUser | null> {
-      const result = await getJson<{ userId: number; displayName: string }>('/api/v1/auth/me');
-      if (!result) return null;
-      return { userId: result.userId, displayName: result.displayName };
+      let result: { userId: number; displayName: string } | null;
+      try {
+        result = await getJson<{ userId: number; displayName: string }>('/api/v1/auth/me');
+      } catch (err) {
+        // `fetch` rejects with a TypeError when no response arrived at all. A
+        // response with a failing status is a different reading and still
+        // throws: a 500 says the server is there and unwell.
+        const saved = currentToken !== null && err instanceof TypeError ? loadUserFromStorage() : null;
+        if (saved !== null) return saved;
+        throw err;
+      }
+      if (!result) {
+        saveUserToStorage(null);
+        return null;
+      }
+      const user = { userId: result.userId, displayName: result.displayName };
+      saveUserToStorage(user);
+      return user;
     },
 
     async listUsers(): Promise<HouseholdMember[]> {

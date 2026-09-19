@@ -15,15 +15,16 @@ pre-commit hook runs `devctl check` and the unit tier only.
 | Command | Passing count, 2026-09-19 | Runs in the pre-push sweep |
 |---|---|---|
 | `bun devctl check` | tsc + 7 lint scripts | yes |
-| `bun devctl test unit` | 1319 tests, 106 files; coverage ok, 138 files, 28 exempt | yes |
+| `bun devctl test unit` | 1331 tests, 107 files; coverage ok, 138 files, 28 exempt | yes |
 | `bun devctl test browser` | 103 tests | yes |
 | `bun devctl test e2e` | 52 Playwright tests, 2 projects | yes |
-| `bun devctl test multi` | 28 `scripts/e2e-*.ts`, each exiting 0 | yes |
+| `bun devctl test multi` | 29 `scripts/e2e-*.ts`, each exiting 0 | yes |
 | `bun devctl test mutation` | see below — not part of `all` | no |
 | `bun devctl verify` | TLC: `tasks` ✓ 2.7s, `pairing` ✓ 1.2s, `auth` ✓ 2.3s — compositional PASS | yes |
 
-The browser, e2e and multi counts are the 2026-09-09 readings. All three tiers
-passed again in the 2026-09-19 sweep; their counts were not read that day.
+All five rows above the mutation row were read in one `bun devctl test all`
+sweep on 2026-09-19, on branch `offline-shell-capture`. The multi tier gained
+`e2e-offline-shell.ts` (the offline shell and the worker kill switch).
 
 The multi tier now includes `e2e-registration-closed.ts` (the registration
 gate), `e2e-tasks-reconnect.ts` (the WS drop and resync),
@@ -152,11 +153,19 @@ what remains there is a machine to install it on.
       Deferred deliberately at v1 (`docs/tasks-v1.md`). A small fixed rule set
       with a `basis: 'due' | 'completed'` anchor, not RFC 5545. →
       `docs/plans/05-recurring-tasks.md` · ~2–4 days
-- [ ] **06 — Offline shell and capture.** The service worker caches nothing by
-      explicit decision (`spa.ts`, `serviceWorker` source), so no signal means a
-      blank page and no capture. Network-first precache with a kill switch,
-      then an IndexedDB outbox. → `docs/plans/06-offline-capture.md` ·
-      ~3–5 days
+- [>] **06 — Offline shell and capture.** **Part A, the shell, is built on
+      branch `offline-shell-capture`, 2026-09-19. Not merged, not deployed.** The
+      worker caches the shell network-first, `EAL_SW_KILL=1` removes it
+      (`docs/deploy.md`), and an offline cold boot opens signed in, reads
+      `reconnecting`, and seeds the list when the server returns. Proved by
+      `scripts/e2e-offline-shell.ts`, which kills and restarts the server
+      process and is falsified two ways. The cold boot reached three defects
+      the plan had not named; the plan now lists them.
+      **Still open: part B, the capture outbox** — and with it a copy of the
+      task list in IndexedDB, because offline the list is empty today.
+      **Also open, not a code task: confirm on the owner's phone.** iOS evicts
+      a home-screen PWA's caches on its own schedule, and that has never been
+      measured. → `docs/plans/06-offline-capture.md`
 - [x] **07 — Prove the tasks surface at 350px.** Done 2026-08-25. The tasks
       panel, the expanded detail, the filter builder and the assistant sheet
       each have a 350px case, and a second Playwright project (`mobile-350`,

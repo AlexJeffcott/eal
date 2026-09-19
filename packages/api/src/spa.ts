@@ -106,34 +106,138 @@ async function buildBundle(): Promise<SpaBundle> {
 <text x="256" y="320" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="200" font-weight="700" fill="#ffffff" text-anchor="middle">eal</text>
 </svg>`;
 
-  // Service worker — notifications only. Fetch is deliberately
-  // pass-through (no precache, no runtime caching) so a buggy SW can
-  // never lock a user into a stale bundle. Push handler decodes the
-  // RFC 8291-decrypted body (web-push performs the encryption on the
-  // server side), calls showNotification, and notificationclick
-  // focuses or opens the eal PWA at the right route.
+  // Service worker — the app shell cache and notifications.
+  //
+  // The shell (the HTML, the bundle, the stylesheet, the icon, the manifest) is
+  // NETWORK-FIRST with a cache fallback, never cache-first. A cache-first
+  // worker that holds a broken bundle survives every redeploy; this one serves
+  // the cache only when the network fails or does not answer inside
+  // NETWORK_TIMEOUT_MS, and a late answer still replaces the cached entry.
+  // Every other request — `/api/*`, the WS upgrade, every non-GET — is not
+  // intercepted at all.
+  //
+  // The kill switch: `GET /public/sw-kill` answers `1` when `EAL_SW_KILL=1`.
+  // The worker reads it on install, on activate and after every navigation. On
+  // `1` it deletes every cache and unregisters itself. It does NOT reload the
+  // page: a reload from here would loop for as long as the switch is on. The
+  // page reads the same switch before it registers
+  // (`web/src/platform/service-worker.ts`), because `register()` on a scope
+  // revives a registration that `unregister()` has only marked for removal.
+  //
+  // Bump SW_VERSION in the same commit as any change to SHELL. The version is
+  // the cache key, and activate deletes every other key.
+  //
+  // The push handler decodes the RFC 8291-decrypted body (web-push performs
+  // the encryption on the server side), calls showNotification, and
+  // notificationclick focuses or opens the eal PWA at the right route.
   //
   // Payload shape (server emits via web-push.sendNotification):
   //   { kind: 'call', title, body, tag, url }
-  const serviceWorker = `const SW_VERSION = 'eal-sw-v1-notifications';
+  const serviceWorker = `const SW_VERSION = 'eal-sw-v2-shell';
+const SHELL = ['/', '/public/static/main.js', '/public/static/main.css', '/icon.svg', '/manifest.json'];
+const KILL_PATH = '/public/sw-kill';
+const NETWORK_TIMEOUT_MS = 4000;
+
+async function isKilled() {
+  try {
+    const response = await fetch(KILL_PATH, { cache: 'no-store' });
+    if (!response.ok) return false;
+    return (await response.text()).trim() === '1';
+  } catch {
+    // No answer is not a kill order: offline is the case the cache exists for.
+    return false;
+  }
+}
+
+// Once true, the fetch handler stops intercepting and nothing writes to a
+// cache: a request still in flight must not rebuild what the kill deleted.
+let killed = false;
+
+async function destroySelfIfKilled() {
+  if (killed) return true;
+  if (!(await isKilled())) return false;
+  killed = true;
+  const keys = await caches.keys();
+  await Promise.all(keys.map((k) => caches.delete(k)));
+  await self.registration.unregister();
+  console.log('[sw] ' + SW_VERSION + ' killed by ' + KILL_PATH);
+  return true;
+}
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(self.skipWaiting());
+  event.waitUntil((async () => {
+    // A first visit is not controlled by the worker it registers, so nothing
+    // that page fetched passes through the fetch handler. Precache here, or
+    // one visit followed by an outage has no shell.
+    try {
+      if (!(await isKilled())) {
+        const cache = await caches.open(SW_VERSION);
+        await cache.addAll(SHELL.map((path) => new Request(path, { cache: 'reload' })));
+      }
+    } catch (err) {
+      // A failed precache must not fail the install: the old worker would
+      // stay in control, and the fetch handler fills the cache anyway.
+      console.warn('[sw] precache failed', err);
+    }
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     try {
       const keys = await caches.keys();
-      await Promise.all(keys.map((k) => caches.delete(k)));
+      await Promise.all(keys.filter((k) => k !== SW_VERSION).map((k) => caches.delete(k)));
     } catch {}
+    if (await destroySelfIfKilled()) return;
     await self.clients.claim();
     console.log('[sw] ' + SW_VERSION + ' active');
   })());
 });
 
+// Every client route is served the same HTML (the '/*' wildcard in spa.ts), so
+// every navigation shares the one cache entry under '/'.
+function shellKeyFor(request) {
+  if (killed) return null;
+  if (request.method !== 'GET') return null;
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return null;
+  if (request.mode === 'navigate') {
+    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/public/')) return null;
+    return '/';
+  }
+  return SHELL.includes(url.pathname) ? url.pathname : null;
+}
+
+async function networkFirst(event, key) {
+  const cache = await caches.open(SW_VERSION);
+  const fromNetwork = fetch(event.request).then(async (response) => {
+    if (response.ok && !killed) await cache.put(key, response.clone());
+    return response;
+  });
+  // A late answer still has to land in the cache after the timeout has
+  // already served the old entry.
+  event.waitUntil(fromNetwork.catch(() => {}));
+  const cached = await cache.match(key);
+  if (!cached) return fromNetwork;
+  // A deadline, not a sleep: whichever of the network and the clock answers
+  // first decides, and a network answer cancels the clock.
+  return new Promise((resolve) => {
+    const deadline = setTimeout(() => resolve(cached), NETWORK_TIMEOUT_MS);
+    fromNetwork.then(
+      // A 502 from the proxy during a deploy is an answer, and a worse one
+      // than the cached shell.
+      (response) => { clearTimeout(deadline); resolve(response.ok ? response : cached); },
+      () => { clearTimeout(deadline); resolve(cached); },
+    );
+  });
+}
+
 self.addEventListener('fetch', (event) => {
-  event.respondWith(fetch(event.request));
+  const key = shellKeyFor(event.request);
+  if (key === null) return;
+  event.respondWith(networkFirst(event, key));
+  if (event.request.mode === 'navigate') event.waitUntil(destroySelfIfKilled());
 });
 
 self.addEventListener('push', (event) => {
@@ -194,6 +298,20 @@ self.addEventListener('notificationclick', (event) => {
 }
 
 /**
+ * The service-worker kill switch, from `EAL_SW_KILL`.
+ *
+ * Same shape as `TWILIO_ENABLED`: unset means off, and any value other than
+ * "0" or "1" refuses to boot. A kill switch that reads a typo as "off" fails
+ * on the one day it is needed.
+ */
+export function resolveSwKill(env: NodeJS.ProcessEnv): boolean {
+  const raw = env['EAL_SW_KILL'];
+  if (raw === undefined || raw === '' || raw === '0') return false;
+  if (raw === '1') return true;
+  throw new Error(`EAL_API: EAL_SW_KILL="${raw}" — expected "0" or "1" (or unset).`);
+}
+
+/**
  * Build the SPA once at server boot.
  *
  * The bundle (`main.js` / `main.css`) is served under `/public/static/*`. The
@@ -202,7 +320,7 @@ self.addEventListener('notificationclick', (event) => {
  * the app instead of a 404. The api's data routes (`/api/*`) are matched ahead
  * of the wildcard; an unmatched `/api/*` path still 404s as JSON, never HTML.
  */
-export async function buildSpa() {
+export async function buildSpa(options: { swKill: boolean }) {
   const bundle = await buildBundle();
   const htmlResponse = (): Response =>
     new Response(bundle.html, { headers: { 'content-type': 'text/html; charset=utf-8' } });
@@ -227,6 +345,11 @@ export async function buildSpa() {
         // refetch the bytes on every check.
         'cache-control': 'no-store',
       },
+    }))
+    // The worker's kill switch — see the `serviceWorker` source above. Under
+    // `/public/` so the auth gate lets an unauthenticated worker read it.
+    .get('/public/sw-kill', () => new Response(options.swKill ? '1' : '0', {
+      headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
     }))
     .get('/', () => htmlResponse())
     .get('/*', ({ request, set }) => {

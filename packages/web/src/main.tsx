@@ -125,11 +125,18 @@ function installChatAutoScroll(): void {
 }
 
 /**
+ * Whether a seed has been started for the current session. `installWsResync`
+ * reads it to tell the two first-`connected` cases apart — see there.
+ */
+let seedAttempted = false;
+
+/**
  * Fetch the signed-in user's server state into the local stores. Each fetch is
  * independent and non-fatal — a failure surfaces in its own panel rather than
  * blocking the others.
  */
 async function seedSessionData(stores: AppStores): Promise<void> {
+  seedAttempted = true;
   try {
     seedTasks(await stores.client.listTasks());
   } catch (err) {
@@ -217,6 +224,7 @@ function installSessionSeeding(stores: AppStores): void {
   stores.$currentUser.subscribe((user) => {
     if (user === null) {
       seededUserId = null;
+      seedAttempted = false;
       return;
     }
     if (user.userId === seededUserId) return;
@@ -235,25 +243,20 @@ function installSessionSeeding(stores: AppStores): void {
  * `connected` the whole time. Re-seeding is cheap at household scale: one
  * `listTasks`, one `listMessages`, one roster, one device list.
  *
- * The first `connected` is skipped: `installSessionSeeding` already seeds on
- * the `$currentUser` transition, and seeding twice at boot is pure waste. A
- * `disconnect()` (sign-out) rearms that, so the next sign-in is a first connect
- * again.
+ * A `connected` that arrives before any seed has started is skipped: that is
+ * the ordinary boot, where `installSessionSeeding` seeds on the `$currentUser`
+ * transition a moment later, and seeding twice is pure waste. An offline cold
+ * boot is the other order — the user comes from the saved copy, the seed runs
+ * and fails with no network, and the first `connected` arrives afterwards. That
+ * one must seed, or the list stays empty until the next drop.
  */
 function installWsResync(stores: AppStores): void {
-  let seenConnected = false;
   stores.client.subscribeConnectionState((state) => {
     stores.$wsState.value = state;
-    if (state === 'idle') {
-      seenConnected = false;
-      return;
-    }
     if (state !== 'connected') return;
-    if (!seenConnected) {
-      seenConnected = true;
-      return;
-    }
+    if (!seedAttempted) return;
     stores.$wsError.value = null;
+    stores.$tasksError.value = null;
     void seedSessionData(stores);
   });
 
@@ -302,8 +305,8 @@ async function bootstrap(): Promise<void> {
   installAgentRulesRouteSync(stores);
   installFamilyPhoneRouteSync(stores);
 
-  // Register the notifications service worker. Best-effort — failures
-  // are logged and notifications stay disabled for the session.
+  // Register the service worker: the offline shell cache and notifications.
+  // Best-effort — failures are logged, and both stay off for the session.
   void installServiceWorker();
 
   // Global Q shortcut: focus the quick-add input from anywhere on the page.
@@ -410,18 +413,6 @@ async function bootstrap(): Promise<void> {
     }
   }
   stores.$currentUser.value = me;
-}
-
-// Register the service worker if the browser supports it. The SW currently
-// only exists to satisfy Chrome's install-criteria heuristic — no caching,
-// no push handling — but living at the root scope means a future offline
-// or push story slots in without re-registering.
-if ('serviceWorker' in navigator) {
-  void navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((err) => {
-    // Service worker registration failures are non-fatal; the app works
-    // without it, just without the Add-to-Home-Screen banner on Android.
-    console.warn('service worker registration failed', err);
-  });
 }
 
 void bootstrap();

@@ -6,7 +6,7 @@ import type { GetPrincipalFn, Principal } from './auth/principals.ts';
 import { authHttpRoutes } from './handlers/auth.http.ts';
 import { loadRegistrationConfig } from './auth/registration.ts';
 import type { RpConfig } from './auth/webauthn.ts';
-import { buildSpa } from './spa.ts';
+import { buildSpa, resolveSwKill } from './spa.ts';
 import type { TaskEvent } from './handlers/tasks.http.ts';
 import { messagesHttpRoutes } from './handlers/messages.http.ts';
 import { loadPushVapidConfig, pushHttpRoutes } from './handlers/push.http.ts';
@@ -126,7 +126,7 @@ export async function createAppInternal(
   options: AppInternalOptions = {},
 ) {
   applySchema(db);
-  const spa = options.spa ?? (await buildSpa());
+  const spa = options.spa ?? (await buildSpa({ swKill: resolveSwKill(options.env ?? process.env) }));
   const rp = options.rp ?? defaultRp();
   // Elysia wraps the raw socket per-callback, so keying by object identity
   // (WeakMap) loses entries between message calls. Key by the stable `ws.id`

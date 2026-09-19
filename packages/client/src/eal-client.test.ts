@@ -84,11 +84,22 @@ class FakeWebSocket {
   readonly sent: string[] = [];
   private readonly listeners = new Map<string, Array<{ handler: (e: unknown) => void; once: boolean }>>();
 
+  /** How many of the next sockets never open — no network, or no server. */
+  static unreachableOpens = 0;
+  /** Whether the next `auth` frame is refused. */
+  static rejectAuth = false;
+
   constructor(readonly url: string) {
     FakeWebSocket.instances.push(this);
     // The client attaches its 'open' listener synchronously after `new`, so a
     // microtask is late enough for it to be heard and early enough to keep the
     // test free of timers.
+    if (FakeWebSocket.unreachableOpens > 0) {
+      FakeWebSocket.unreachableOpens -= 1;
+      this.readyState = FakeWebSocket.CLOSED;
+      queueMicrotask(() => this.dispatch('error', {}));
+      return;
+    }
     queueMicrotask(() => this.dispatch('open', {}));
   }
 
@@ -107,7 +118,10 @@ class FakeWebSocket {
     this.sent.push(raw);
     const parsed: { type?: string } = JSON.parse(raw);
     if (parsed.type === 'auth') {
-      queueMicrotask(() => this.dispatch('message', { data: JSON.stringify({ type: 'auth:ok' }) }));
+      const reply = FakeWebSocket.rejectAuth
+        ? { type: 'error', code: 'unauthenticated', message: 'invalid token' }
+        : { type: 'auth:ok' };
+      queueMicrotask(() => this.dispatch('message', { data: JSON.stringify(reply) }));
     }
   }
 
@@ -141,6 +155,8 @@ describe('browser WS reconnect', () => {
 
   beforeEach(() => {
     FakeWebSocket.instances = [];
+    FakeWebSocket.unreachableOpens = 0;
+    FakeWebSocket.rejectAuth = false;
     Reflect.set(globalThis, 'WebSocket', FakeWebSocket);
   });
 
@@ -233,5 +249,129 @@ describe('browser WS reconnect', () => {
 
     client.reconnectNow();
     expect(FakeWebSocket.instances.length).toBe(1);
+  });
+
+  test('a first connect that cannot reach the server joins the retry loop', async () => {
+    // The offline cold boot: the app opens from the cached shell with no
+    // network. The client must come back by itself when the network does.
+    FakeWebSocket.unreachableOpens = 1;
+    const client = newClient();
+    const seen: string[] = [];
+    client.subscribeConnectionState((state) => seen.push(state));
+
+    await client.connect();
+    expect(client.connectionState()).toBe('reconnecting');
+
+    await pollUntil(() => client.connectionState() === 'connected', {
+      timeoutMs: 3_000,
+      intervalMs: 20,
+      label: 'the retry to connect',
+    });
+    expect(FakeWebSocket.instances.length).toBe(2);
+    expect(framesOfType(FakeWebSocket.instances[1]!, 'subscribe').length).toBe(1);
+    expect(seen).toEqual(['connecting', 'reconnecting', 'connected']);
+    await client.disconnect();
+  });
+
+  test('a first connect with a refused token does not retry', async () => {
+    FakeWebSocket.rejectAuth = true;
+    const client = newClient();
+
+    await expect(client.connect()).rejects.toThrow('ws auth rejected: invalid token');
+    expect(client.connectionState()).toBe('error');
+    // Give the loop every chance to fire: the first backoff is 500ms.
+    await delay(700);
+    expect(FakeWebSocket.instances.length).toBe(1);
+  });
+});
+
+/**
+ * The saved user. `GET /auth/me` needs the network, so an offline cold boot
+ * has a token it cannot check. The client keeps the last user the server
+ * confirmed beside the token, and returns it only when no response arrived.
+ */
+describe('getCurrentUser with no network', () => {
+  const realFetch = globalThis.fetch;
+  const realStorage = Reflect.get(globalThis, 'localStorage');
+  let stored: Map<string, string>;
+
+  function answerWith(respond: () => Promise<Response>): void {
+    Reflect.set(globalThis, 'fetch', respond);
+  }
+  const unreachable = (): Promise<Response> => Promise.reject(new TypeError('fetch failed'));
+  const me = (): Promise<Response> =>
+    Promise.resolve(Response.json({ userId: 7, displayName: 'alex' }));
+
+  beforeEach(() => {
+    stored = new Map();
+    Reflect.set(globalThis, 'localStorage', {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => void stored.set(key, value),
+      removeItem: (key: string) => void stored.delete(key),
+    });
+  });
+
+  afterEach(() => {
+    Reflect.set(globalThis, 'fetch', realFetch);
+    Reflect.set(globalThis, 'localStorage', realStorage);
+  });
+
+  function newClient(): EalClient {
+    return createEalClient('https://localhost:4321', { token: 'test-token' });
+  }
+
+  test('a confirmed user is returned again when the server cannot be reached', async () => {
+    const client = newClient();
+    answerWith(me);
+    expect(await client.getCurrentUser()).toEqual({ userId: 7, displayName: 'alex' });
+
+    answerWith(unreachable);
+    expect(await newClient().getCurrentUser()).toEqual({ userId: 7, displayName: 'alex' });
+  });
+
+  test('with no saved user, an unreachable server still throws', async () => {
+    answerWith(unreachable);
+    await expect(newClient().getCurrentUser()).rejects.toThrow('fetch failed');
+  });
+
+  test('a 401 clears the saved user, so a later outage opens signed out', async () => {
+    answerWith(me);
+    await newClient().getCurrentUser();
+    answerWith(() => Promise.resolve(new Response('', { status: 401 })));
+    expect(await newClient().getCurrentUser()).toBeNull();
+
+    answerWith(unreachable);
+    await expect(newClient().getCurrentUser()).rejects.toThrow('fetch failed');
+  });
+
+  test('a failing status is not an outage: the saved user is not used', async () => {
+    answerWith(me);
+    await newClient().getCurrentUser();
+    answerWith(() => Promise.resolve(new Response('', { status: 500 })));
+    await expect(newClient().getCurrentUser()).rejects.toThrow('GET /api/v1/auth/me failed: 500');
+  });
+
+  test('a saved user is not returned without a token', async () => {
+    answerWith(me);
+    await newClient().getCurrentUser();
+    answerWith(unreachable);
+    const signedOut = createEalClient('https://localhost:4321');
+    await expect(signedOut.getCurrentUser()).rejects.toThrow('fetch failed');
+  });
+
+  test('sign-out removes the saved user', async () => {
+    answerWith(me);
+    const client = newClient();
+    await client.getCurrentUser();
+    expect(stored.has('eal-user')).toBe(true);
+    answerWith(() => Promise.resolve(new Response('{}')));
+    await client.signOut();
+    expect(stored.has('eal-user')).toBe(false);
+  });
+
+  test('a malformed saved user is ignored', async () => {
+    stored.set('eal-user', '{"userId":"7"}');
+    answerWith(unreachable);
+    await expect(newClient().getCurrentUser()).rejects.toThrow('fetch failed');
   });
 });
