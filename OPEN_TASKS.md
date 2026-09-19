@@ -15,10 +15,10 @@ pre-commit hook runs `devctl check` and the unit tier only.
 | Command | Passing count, 2026-09-19 | Runs in the pre-push sweep |
 |---|---|---|
 | `bun devctl check` | tsc + 7 lint scripts | yes |
-| `bun devctl test unit` | 1519 tests, 114 files; coverage ok, 145 files, 29 exempt | yes |
-| `bun devctl test browser` | 113 tests | yes |
+| `bun devctl test unit` | 1527 tests, 114 files; coverage ok, 145 files, 29 exempt | yes |
+| `bun devctl test browser` | 116 tests | yes |
 | `bun devctl test e2e` | 54 Playwright tests, 2 projects | yes |
-| `bun devctl test multi` | 31 `scripts/e2e-*.ts`, each exiting 0 | yes |
+| `bun devctl test multi` | 32 `scripts/e2e-*.ts`, each exiting 0 | yes |
 | `bun devctl test mutation` | see below — not part of `all` | no |
 | `bun devctl verify` | TLC: `tasks` ✓ 2.5s, `pairing` ✓ 1.3s, `auth` ✓ 2.2s — compositional PASS; then the hand-written `TasksConvergence` ✓ 5,991 distinct states, 0 on queue, 1.1s | yes |
 
@@ -211,6 +211,37 @@ what remains there is a machine to install it on.
 Each plan names the verification artefact it must commit under `scripts/`,
 per the rule in `~/projects/CLAUDE.md`: a green test tier is not proof that a
 user-facing feature works.
+
+## Signing in
+
+Found 2026-09-19 when the owner could not sign in on the laptop PWA: the
+session had run its fixed 30 days, and the installed PWA window offered only
+the platform's phone QR code, because the password manager holding the passkey
+does not run there.
+
+- [x] **A session ends 30 days after its last use, not after sign-in.** Built
+      on branch `signin-recovery`. `verify()` moves `expires_at` to one lifetime
+      from the use, at most once a day; `sessions.ttl_ms` carries the lifetime,
+      and a row from before the column takes it from its own two dates.
+- [x] **"Link this browser".** Built on the same branch. The sign-in page shows
+      a code; a signed-in device claims it under Menu → "Pair a device"; the
+      poll hands the new browser a session. It is the device-code flow
+      `eal auth pair` already used, and the server is unchanged. Proved by
+      `scripts/e2e-browser-link.ts` — two real browsers, the cold one with no
+      token and no authenticator — and falsified once. A linked session takes
+      the CLI's 90-day lifetime.
+- [ ] **No way in when every device is signed out and no passkey can be
+      reached.** The link needs one signed-in device. The invite code registers
+      a NEW user; it does not recover an existing one. Decide whether a
+      recovery code, printed once at registration, is wanted.
+- [ ] **A token revoked or expired while the device is offline.** The app opens
+      from the saved user, and the WS retry loop then runs with no end once the
+      network returns, because a refused token on a RE-connect is retried like
+      a dropped network. The client should stop and show the sign-in page on
+      `unauthenticated`.
+- [ ] **Sign out of the browser tab once the PWA is linked.** That session's
+      token was pasted into an assistant transcript on 2026-09-19. Sign-out
+      deletes the row on the server.
 
 ## Testing
 
